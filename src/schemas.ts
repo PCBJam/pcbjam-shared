@@ -1,18 +1,41 @@
 import { z } from "zod";
 
 /** WASM tools that can be selected by the `:tool` URL segment. */
-export const TOOLS = ["pcbnew", "eeschema", "calculator"] as const;
+export const TOOLS = [
+  "pcbnew",
+  "eeschema",
+  "calculator",
+  "pl_editor",
+  "symbol_editor",
+] as const;
 export const toolSchema = z.enum(TOOLS);
 export type Tool = z.infer<typeof toolSchema>;
+
+/** Human-readable labels for tools (UI links, status text). */
+export const TOOL_LABELS: Record<Tool, string> = {
+  pcbnew: "PCB Editor",
+  eeschema: "Schematic Editor",
+  calculator: "PCB Calculator",
+  pl_editor: "Drawing Sheet Editor",
+  symbol_editor: "Symbol Editor",
+};
 
 /** Default file-extension → tool mapping (the explicit URL segment always wins). */
 export const EXTENSION_TOOL: Record<string, Tool> = {
   ".kicad_pcb": "pcbnew",
   ".kicad_sch": "eeschema",
+  ".kicad_wks": "pl_editor",
 };
 
-/** Tools that do not take a file (booted standalone). */
-export const FILELESS_TOOLS: ReadonlySet<Tool> = new Set<Tool>(["calculator"]);
+/**
+ * Tools that do not take a file (booted standalone). The calculator has no file
+ * concept; the symbol editor opens libraries through its own UI (its frame does
+ * not implement OpenProjectFiles), so we boot it standalone rather than auto-open.
+ */
+export const FILELESS_TOOLS: ReadonlySet<Tool> = new Set<Tool>([
+  "calculator",
+  "symbol_editor",
+]);
 
 export const projectSlugSchema = z
   .string()
