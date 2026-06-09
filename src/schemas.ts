@@ -51,9 +51,13 @@ export const projectSlugSchema = z
     "slug must start alphanumeric and contain only lowercase letters, digits, '.', '_', '-'",
   );
 
+/**
+ * A project as seen by the wasm-frontend. This is the minimal shape a backend
+ * must return; ownership / multi-tenancy fields are intentionally NOT part of
+ * the shared contract (they live in the closed application layer).
+ */
 export const projectSchema = z.object({
   id: z.string().uuid(),
-  ownerId: z.string().uuid(),
   slug: z.string(),
   name: z.string(),
   createdAt: z.string(),
@@ -73,23 +77,11 @@ export const projectFileSchema = z.object({
 });
 export type ProjectFile = z.infer<typeof projectFileSchema>;
 
-export const createProjectBody = z.object({
-  name: z.string().min(1).max(200),
-  slug: projectSlugSchema.optional(),
-});
-export type CreateProjectBody = z.infer<typeof createProjectBody>;
-
 export const projectWithFiles = z.object({
   project: projectSchema,
   files: z.array(projectFileSchema),
 });
 export type ProjectWithFiles = z.infer<typeof projectWithFiles>;
-
-/** Shared response shape for the (raw-Fastify) upload endpoints. */
-export const uploadResponse = z.object({
-  files: z.array(projectFileSchema),
-});
-export type UploadResponse = z.infer<typeof uploadResponse>;
 
 export const errorBody = z.object({ message: z.string() });
 export type ErrorBody = z.infer<typeof errorBody>;

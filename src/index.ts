@@ -1,7 +1,6 @@
 import { initContract } from "@ts-rest/core";
 import { z } from "zod";
 import {
-  createProjectBody,
   errorBody,
   projectFileSchema,
   projectSchema,
@@ -13,13 +12,19 @@ export * from "./schemas.js";
 const c = initContract();
 
 /**
- * JSON API surface shared by the Fastify server and the React client.
+ * The contract between the wasm-frontend (the GPL standalone editor) and ANY
+ * backend that wants to serve projects to it. This is the *minimum* read/load
+ * surface a backend must implement for the editor to enumerate projects, read a
+ * project's file tree, and stream file bytes into the WASM tools.
  *
- * NOTE: binary upload (`POST .../files`, `.../files/zip`) and file-byte
- * download (`GET .../files/*`) are intentionally NOT in this ts-rest contract —
- * multipart/streamed-binary do not round-trip cleanly through ts-rest. They are
- * plain Fastify routes; their response shapes are still shared via the Zod
- * schemas in ./schemas.ts (e.g. `uploadResponse`).
+ * Management/write concerns (creating, deleting, uploading) and any ownership /
+ * auth model are intentionally NOT here — those live in the application layer
+ * that builds on top of this contract.
+ *
+ * NOTE: the file-byte download is a streamed-binary route
+ * (`GET /api/projects/:project/files/*`) and is intentionally NOT a ts-rest
+ * endpoint (binary does not round-trip cleanly through ts-rest). A conforming
+ * backend MUST still expose it; the editor fetches it directly.
  */
 export const contract = c.router(
   {
@@ -27,18 +32,7 @@ export const contract = c.router(
       method: "GET",
       path: "/api/projects",
       responses: { 200: z.array(projectSchema) },
-      summary: "List all projects in the default owner namespace",
-    },
-    createProject: {
-      method: "POST",
-      path: "/api/projects",
-      body: createProjectBody,
-      responses: {
-        201: projectSchema,
-        409: errorBody,
-        400: errorBody,
-      },
-      summary: "Create a project",
+      summary: "List the projects this backend serves",
     },
     getProject: {
       method: "GET",
@@ -49,16 +43,6 @@ export const contract = c.router(
         404: errorBody,
       },
       summary: "Get a project and its file tree",
-    },
-    deleteProject: {
-      method: "DELETE",
-      path: "/api/projects/:project",
-      body: c.type<Record<string, never>>(),
-      responses: {
-        200: z.object({ id: z.string().uuid() }),
-        404: errorBody,
-      },
-      summary: "Delete a project and all its files",
     },
     listFiles: {
       method: "GET",

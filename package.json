@@ -1,7 +1,12 @@
 {
-  "name": "@kicad-web/contract",
-  "version": "0.0.0",
-  "private": true,
+  "name": "@pcbjam/shared",
+  "version": "0.1.0",
+  "description": "The contract between the PCBJam wasm-frontend and any backend that serves projects to it (ts-rest + zod).",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/emergence-engineering/pcbjam-shared.git"
+  },
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
