@@ -2,52 +2,103 @@
  * KiCad file ⇄ Y.Doc representation (ysync 0007) — MIT, pure text.
  *
  * A `KicadDoc` is the canonical, CRDT-friendly decomposition of a KiCad s-expr
- * document: every top-level item (anything carrying a direct `(uuid "X")`) is an
- * opaque s-expr blob keyed by its uuid, and an ordered `layout` records the exact
- * sequence of the root's children (item references interleaved with non-item
- * "raw" blobs: version, generator, setup, layers, nets, lib_symbols, the document
- * `(uuid …)`, sheet/symbol instances, …).
+ * document. EVERY uuid-bearing node — at any depth — is hoisted into a flat
+ * `items` map keyed by its uuid, so a footprint and each of its pads/fields, or a
+ * symbol and each of its pins, are independently addressable (and independently
+ * mergeable / attributable). Containment is preserved two ways:
  *
- * This makes file⇄doc a pure text operation — `docToFile(fileToDoc(text))`
- * reconstructs `text` structurally, with no KiCad code and no field-by-field
- * schema mapping. The `items` map is the unit of concurrent edit; mapping onto
- * live CRDT types is mechanical (`items` → Y.Map, `layout` → Y.Array).
+ *   - each item carries `parent` (the uuid of the item that contains it, or null
+ *     at the document root) — O(1) upward lookup, matches how the live wasm bridge
+ *     resolves items by global uuid;
+ *   - each item's `body` is the ORDERED list of its children, where a child is
+ *     either a `raw` s-expr fragment (a non-item field: layer, at, effects, …) or
+ *     an `item` reference to a nested uuid item. `layout` is the same for the
+ *     document root's children.
  *
- * v1 keeps a top-level item (e.g. a footprint with its pads/fields) as ONE blob;
- * flattening nested uuid items + scalar overlays for hot fields are future work
- * (see the 0007 design doc).
+ * Reconstruction (`docToFile`) walks `layout` then each item's `body`, splicing
+ * child items back by reference — so `docToFile(fileToDoc(text))` reproduces
+ * `text` structurally with no KiCad code and no field-by-field schema mapping.
+ *
+ * Mapping onto live CRDT types is mechanical: `items` → Y.Map, each `body`/`layout`
+ * → Y.Array, each `raw` fragment → Y.Text/string. The `parent` link is exactly the
+ * containment the current bridge drops (the cause of the footprint-reconstruction
+ * gaps in the standalone-hardening 0004 round trips); flattening with `parent`
+ * restores it losslessly.
  */
 
 import { z } from "zod";
 import { directUuid, parseSexpr, printSexpr, type SNode } from "./sexpr.js";
 
+export const bodyEntrySchema = z.union([
+  z.object({ raw: z.string() }), // a non-item child fragment, verbatim
+  z.object({ item: z.string() }), // reference to a nested item by uuid
+]);
+export type BodyEntry = z.infer<typeof bodyEntrySchema>;
+
 export const kicadItemSchema = z.object({
-  /** Head keyword of the item's s-expr (e.g. "footprint", "wire", "gr_text"). */
+  /** Head keyword of the item's s-expr (e.g. "footprint", "pad", "pin", "wire"). */
   type: z.string(),
-  /** The item's full native s-expr fragment, verbatim. */
-  sexpr: z.string(),
+  /** uuid of the containing item, or null when the item sits at the document root. */
+  parent: z.string().nullable(),
+  /** Ordered children: raw field fragments interleaved with nested item refs. */
+  body: z.array(bodyEntrySchema),
 });
 export type KicadItem = z.infer<typeof kicadItemSchema>;
-
-export const kicadLayoutEntrySchema = z.union([
-  z.object({ raw: z.string() }),
-  z.object({ item: z.string() }),
-]);
-export type KicadLayoutEntry = z.infer<typeof kicadLayoutEntrySchema>;
 
 export const kicadDocSchema = z.object({
   /** Top-level form name, e.g. "kicad_pcb" / "kicad_sch" / "kicad_wks". */
   root: z.string(),
-  /** uuid → item blob. The CRDT-mergeable item set. */
+  /** uuid → item. Every uuid in the file, flattened. */
   items: z.record(z.string(), kicadItemSchema),
-  /** Ordered top-level children: a `raw` blob or a reference to an `item` by uuid. */
-  layout: z.array(kicadLayoutEntrySchema),
+  /** Ordered children of the document root form. */
+  layout: z.array(bodyEntrySchema),
 });
 export type KicadDoc = z.infer<typeof kicadDocSchema>;
 
+/** Whether a node is an extractable item: a list `(<keyword> … (uuid "X") …)`. */
+function itemUuid(node: SNode): string | null {
+  if (!Array.isArray(node) || typeof node[0] !== "string") return null;
+  return directUuid(node);
+}
+
+/** Decompose `node`'s children into body entries, extracting nested items. */
+function decomposeChildren(
+  children: SNode[],
+  selfUuid: string | null,
+  items: Record<string, KicadItem>,
+): BodyEntry[] {
+  const body: BodyEntry[] = [];
+  for (const child of children) {
+    const id = itemUuid(child);
+    // Extract as an item unless its uuid is already taken (a malformed duplicate /
+    // self-reference) — then keep it inline as raw, preserving losslessness.
+    if (id !== null && !(id in items)) {
+      extractItem(child as SNode[], id, selfUuid, items);
+      body.push({ item: id });
+    } else {
+      body.push({ raw: printSexpr(child) });
+    }
+  }
+  return body;
+}
+
+/** Register `node` (a uuid list) and its descendants into `items`. */
+function extractItem(
+  node: SNode[],
+  uuid: string,
+  parent: string | null,
+  items: Record<string, KicadItem>,
+): void {
+  const type = typeof node[0] === "string" ? node[0] : "";
+  // Reserve the uuid before recursing so a deeper duplicate is detected.
+  const item: KicadItem = { type, parent, body: [] };
+  items[uuid] = item;
+  item.body = decomposeChildren(node.slice(1), uuid, items);
+}
+
 /**
- * Decompose KiCad s-expr text into a `KicadDoc`. Throws if `text` is not a single
- * top-level `(<root> …)` form.
+ * Decompose KiCad s-expr text into a flattened `KicadDoc`. Throws if `text` is not
+ * a single top-level `(<root> …)` form.
  */
 export function fileToDoc(text: string): KicadDoc {
   const forms = parseSexpr(text);
@@ -61,34 +112,33 @@ export function fileToDoc(text: string): KicadDoc {
   }
 
   const items: Record<string, KicadItem> = {};
-  const layout: KicadLayoutEntry[] = [];
-
-  for (const child of root.slice(1)) {
-    const id = directUuid(child);
-    // Keep a (rare) duplicate top-level uuid as a raw blob rather than collapsing
-    // two distinct nodes onto one key — preserves losslessness either way.
-    if (id !== null && Array.isArray(child) && !(id in items)) {
-      const type = typeof child[0] === "string" ? child[0] : "";
-      items[id] = { type, sexpr: printSexpr(child) };
-      layout.push({ item: id });
-    } else {
-      layout.push({ raw: printSexpr(child) });
-    }
-  }
+  const layout = decomposeChildren(root.slice(1), null, items);
 
   return kicadDocSchema.parse({ root: name, items, layout });
+}
+
+/** Render a single item (and its nested items) back to s-expr text. */
+export function renderItem(
+  doc: Pick<KicadDoc, "items">,
+  uuid: string,
+  seen: Set<string> = new Set(),
+): string {
+  if (seen.has(uuid)) throw new Error(`renderItem: cycle through item ${uuid}`);
+  const item = doc.items[uuid];
+  if (!item) throw new Error(`renderItem: missing item ${uuid}`);
+  seen.add(uuid);
+  const parts = item.body.map((e) =>
+    "item" in e ? renderItem(doc, e.item, seen) : e.raw,
+  );
+  seen.delete(uuid);
+  return parts.length ? `(${item.type} ${parts.join(" ")})` : `(${item.type})`;
 }
 
 /** Reassemble KiCad s-expr text from a `KicadDoc`, in `layout` order. */
 export function docToFile(doc: KicadDoc): string {
   kicadDocSchema.parse(doc);
-  const parts = doc.layout.map((entry) => {
-    if ("item" in entry) {
-      const item = doc.items[entry.item];
-      if (!item) throw new Error(`docToFile: layout references missing item ${entry.item}`);
-      return item.sexpr;
-    }
-    return entry.raw;
-  });
+  const parts = doc.layout.map((entry) =>
+    "item" in entry ? renderItem(doc, entry.item) : entry.raw,
+  );
   return parts.length ? `(${doc.root} ${parts.join(" ")})` : `(${doc.root})`;
 }
