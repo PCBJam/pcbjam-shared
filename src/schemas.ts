@@ -85,3 +85,28 @@ export type ProjectWithFiles = z.infer<typeof projectWithFiles>;
 
 export const errorBody = z.object({ message: z.string() });
 export type ErrorBody = z.infer<typeof errorBody>;
+
+// --- collaboration (Yjs network sync) ---
+// The contract between the editor and ANY Yjs sync backend (the closed PartyKit
+// server, or an OSS Hocuspocus one). Only the wire-level naming/handshake lives
+// here; how a backend persists or authorizes is its own (non-shared) concern.
+
+/**
+ * Identifies one collaboratively edited document — a board/schematic — within a
+ * project. Both the editor (to pick a room to connect to) and the backend (to
+ * namespace + persist that room) derive it the same way so they never drift.
+ * `projectId` is a uuid and `docPath` is a POSIX project-relative path.
+ */
+export const collabRoomIdSchema = z.string().min(1);
+export function collabRoomId(projectId: string, docPath: string): string {
+  return `${projectId}:${docPath}`;
+}
+
+/**
+ * Connection params a Yjs provider sends to the sync backend (query string).
+ * `token` is the (thin, for now) auth credential; backends MAY require it.
+ */
+export const collabConnectParams = z.object({
+  token: z.string().optional(),
+});
+export type CollabConnectParams = z.infer<typeof collabConnectParams>;
