@@ -8,6 +8,8 @@ import {
 } from "./schemas.js";
 
 export * from "./schemas.js";
+export * from "./sexpr.js";
+export * from "./kicad-doc.js";
 
 const c = initContract();
 
