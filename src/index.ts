@@ -13,6 +13,7 @@ export * from "./kicad-doc.js";
 export * from "./collab-wire.js";
 export * from "./kicad-delta.js";
 export * from "./kicad-y.js";
+export * from "./items-wire.js";
 
 const c = initContract();
 
