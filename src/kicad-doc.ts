@@ -150,6 +150,33 @@ export function fileToDoc(text: string): KicadDoc {
   return kicadDocSchema.parse({ root: name, items, layout });
 }
 
+/**
+ * Parse ONE item's s-expr — e.g. what the live bridge emits for a changed
+ * footprint — into its flattened items: the item itself plus every nested uuid
+ * descendant (pads, fields, pins), each with correct `parent` links. `parent` is
+ * the uuid of the enclosing item in the target doc (null for a root-level item).
+ *
+ * Inverse of `renderItem`: `renderItem({ items }, uuid)` reproduces the s-expr
+ * structurally.
+ */
+export function sexprToItems(
+  text: string,
+  parent: string | null = null,
+): { uuid: string; items: Record<string, KicadItem> } {
+  const forms = parseSexpr(text);
+  if (forms.length !== 1 || !Array.isArray(forms[0])) {
+    throw new Error("sexprToItems: expected exactly one top-level (…) form");
+  }
+  const node = forms[0] as SNode[];
+  const uuid = itemUuid(node);
+  if (uuid === null) {
+    throw new Error("sexprToItems: form carries no direct (uuid …) — not an item");
+  }
+  const items: Record<string, KicadItem> = {};
+  extractItem(node, uuid, parent, items);
+  return { uuid, items };
+}
+
 // ── Render: KicadDoc → file text ─────────────────────────────────────────────
 
 function renderSlots(

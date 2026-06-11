@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   args,
@@ -13,30 +12,8 @@ import {
   scalar,
   type Slot,
 } from "../src/kicad-doc.js";
-import { directUuid, parseSexpr, type SNode } from "../src/sexpr.js";
-
-const here = path.dirname(fileURLToPath(import.meta.url));
-const FIXTURES = path.join(here, "fixtures", "kicad");
-const KICAD_EXT = /\.(kicad_pcb|kicad_sch|kicad_wks|kicad_sym)$/;
-
-function listFixtures(dir: string): string[] {
-  const out: string[] = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...listFixtures(full));
-    else if (KICAD_EXT.test(entry.name)) out.push(full);
-  }
-  return out.sort();
-}
-
-/** Every uuid that appears as a direct (uuid "X") child of a list node, anywhere. */
-function allUuids(node: SNode, acc: Set<string> = new Set()): Set<string> {
-  if (!Array.isArray(node)) return acc;
-  const id = directUuid(node);
-  if (id !== null) acc.add(id);
-  for (const c of node) allUuids(c, acc);
-  return acc;
-}
+import { parseSexpr, type SNode } from "../src/sexpr.js";
+import { allUuids, FIXTURES, listFixtures } from "./helpers.js";
 
 /** Keys of the field slots in order (helper for assertions). */
 function keys(slots: Slot[]): string[] {

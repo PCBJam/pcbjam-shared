@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@ts-rest/core": "^3.52.1",
+    "yjs": "^13.6.18",
     "zod": "^3.24.1"
   },
   "devDependencies": {
