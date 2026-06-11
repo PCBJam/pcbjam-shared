@@ -28,6 +28,7 @@ import {
   type KeyedKicadItem,
   type KicadDelta,
 } from "./kicad-delta.js";
+import { directUuid, parseSexpr, printSexpr, type SNode } from "./sexpr.js";
 
 export const wireItemSchema = z.object({
   /** The item's full native s-expr fragment (subtree included). */
@@ -82,6 +83,40 @@ export function descendants(
 }
 
 /**
+ * Unwrap a wire `sexpr` payload to its single uuid-bearing item form. Tools emit
+ * their NATIVE blob shapes, all of which this tolerates:
+ *   - a bare item:                `(footprint … (uuid X) …)`, `(wire … (uuid X))`
+ *   - an envelope whose children include the item:
+ *     `(kicad_wks (version …) (tbtext (uuid X) …))`,
+ *     `(kicad_pcb (version …) (layers …) (segment … (uuid X)))`
+ *   - multi-form clipboard text:  `(lib_symbols …) (symbol … (uuid X) …)`
+ * Exactly one uuid-bearing candidate is required; envelope furniture (version,
+ * generator, layers, lib_symbols) is sender context, not document content.
+ */
+export function unwrapWireItem(text: string): string {
+  const forms = parseSexpr(text);
+  const candidates: SNode[] = [];
+
+  for (const form of forms) {
+    if (!Array.isArray(form)) continue;
+    if (directUuid(form) !== null) {
+      candidates.push(form);
+      continue;
+    }
+    for (const child of form) {
+      if (Array.isArray(child) && directUuid(child) !== null) candidates.push(child);
+    }
+  }
+
+  if (candidates.length !== 1) {
+    throw new Error(
+      `unwrapWireItem: expected exactly 1 uuid-bearing item form, found ${candidates.length}`,
+    );
+  }
+  return printSexpr(candidates[0]!);
+}
+
+/**
  * Convert a bridge items-wire delta into a `KicadDelta` against the `current`
  * item set (typically the Y.Doc's items). Pure; exact subtree reconciliation:
  * a changed footprint whose pad disappeared yields `removed: [that pad]`.
@@ -93,7 +128,7 @@ export function itemsWireToDelta(
   const delta = emptyKicadDelta();
 
   const upsert = (w: WireItem): void => {
-    const { uuid, items } = sexprToItems(w.sexpr, w.parent);
+    const { uuid, items } = sexprToItems(unwrapWireItem(w.sexpr), w.parent);
     // Previous subtree members (known to `current`) that the new flatten no
     // longer contains have been deleted inside this item.
     const stale = new Set(

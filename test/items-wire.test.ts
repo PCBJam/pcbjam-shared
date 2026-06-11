@@ -113,6 +113,63 @@ describe("deltaToItemsWire (Y → editor)", () => {
   });
 });
 
+describe("unwrapWireItem (native tool blob shapes)", () => {
+  it("pl_editor-style (kicad_wks …) envelope unwraps to the item", () => {
+    const wire = parseItemsWireDelta(
+      JSON.stringify({
+        added: [
+          {
+            sexpr: `(kicad_wks (version 20220228) (generator "pl_editor") (generator_version "9.0")
+  (tbtext "Title" (uuid "t-1") (pos 100 20 ltcorner)))`,
+          },
+        ],
+      }),
+    );
+    const d = itemsWireToDelta(wire, {});
+    expect(d.added.map((i) => i.uuid)).toEqual(["t-1"]);
+    expect(d.added[0]!.type).toBe("tbtext");
+  });
+
+  it("pcbnew-style (kicad_pcb …) envelope with layers unwraps to the item", () => {
+    const wire = parseItemsWireDelta(
+      JSON.stringify({
+        changed: [
+          {
+            sexpr: `(kicad_pcb (version 20241229) (generator "pcbnew") (layers (0 "F.Cu" signal))
+  (segment (start 0 0) (end 1 1) (width 0.2) (layer "F.Cu") (uuid "s-1")))`,
+          },
+        ],
+      }),
+    );
+    const d = itemsWireToDelta(wire, {});
+    expect(d.added.map((i) => i.uuid)).toEqual(["s-1"]); // not in current → added
+  });
+
+  it("eeschema-style multi-form (lib_symbols + symbol) unwraps to the symbol", () => {
+    const wire = parseItemsWireDelta(
+      JSON.stringify({
+        added: [
+          {
+            sexpr: `(lib_symbols (symbol "Device:R" (pin_numbers hide)))
+(symbol (lib_id "Device:R") (at 10 10 0) (uuid "sym-1") (property "Reference" "R1" (at 0 0 0)))`,
+          },
+        ],
+      }),
+    );
+    const d = itemsWireToDelta(wire, {});
+    expect(d.added.map((i) => i.uuid)).toEqual(["sym-1"]);
+  });
+
+  it("rejects payloads with zero or multiple uuid items", () => {
+    expect(() =>
+      itemsWireToDelta(
+        parseItemsWireDelta(JSON.stringify({ added: [{ sexpr: "(layers (0 \"F.Cu\"))" }] })),
+        {},
+      ),
+    ).toThrow(/expected exactly 1/);
+  });
+});
+
 describe("wire schema", () => {
   it("defaults omitted arrays and parent", () => {
     const d = parseItemsWireDelta(JSON.stringify({ added: [{ sexpr: "(x (uuid \"u\"))" }] }));
