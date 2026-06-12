@@ -96,6 +96,52 @@ describe("applyDeltaToY / deltaFromYEvents (the default onChange impl)", () => {
     expect(delta.updated[0]!.body).toEqual([{ k: "width", v: [{ atom: "0.4" }] }]);
   });
 
+  it("keeps kdoc_layout in step: live ROOT add/remove stays materializable via docToFile", () => {
+    const { a, b } = pair();
+    docToY(fileToDoc(BASE), a, "seed");
+
+    // A live editor edit (the binding's applyDeltaToY path): one root added,
+    // one root removed. Before the layout maintenance this dropped txt-1 from
+    // docToFile output and made the stale via-1 slot THROW renderItem.
+    applyDeltaToY(
+      a,
+      {
+        added: [
+          {
+            uuid: "txt-1",
+            type: "gr_text",
+            parent: null,
+            body: [{ atom: '"hi"' }, { k: "uuid", v: [{ atom: '"txt-1"' }] }],
+          },
+        ],
+        updated: [],
+        removed: ["via-1"],
+      },
+      "local-edit",
+    );
+
+    // Both the editing doc and the relayed peer materialize the post-edit file.
+    for (const ydoc of [a, b]) {
+      const text = docToFile(yToDoc(ydoc));
+      expect(text).toContain('(gr_text "hi"');
+      expect(text).not.toContain("via-1");
+      expect(text).toContain("seg-1"); // untouched root keeps its slot
+    }
+  });
+
+  it("re-applying an existing root (adopt echo) does not duplicate its layout slot", () => {
+    const { a } = pair();
+    docToY(fileToDoc(BASE), a, "seed");
+    const doc = yToDoc(a);
+    applyDeltaToY(a, {
+      added: [{ uuid: "seg-1", ...doc.items["seg-1"]! }],
+      updated: [],
+      removed: [],
+    });
+    const text = docToFile(yToDoc(a));
+    expect(text.match(/"seg-1"/g)).toHaveLength(1);
+  });
+
   it("no-op upserts produce no events", () => {
     const { a, b } = pair();
     docToY(fileToDoc(BASE), a);

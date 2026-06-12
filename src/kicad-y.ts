@@ -107,6 +107,14 @@ export function yToDoc(ydoc: Y.Doc): KicadDoc {
 /**
  * Write a `KicadDelta` into the Y.Doc in one transaction (added/updated upsert,
  * removed delete), tagged with `origin` for the runtime's echo suppression.
+ *
+ * `kdoc_layout` is the document root's "body" and is kept in step here for ROOT
+ * items (children are covered by their parent's body re-emit): new parent-null
+ * items get an `{ item: uuid }` slot appended (file position is lost — appended
+ * at the end — which is structurally equivalent), and removed uuids have their
+ * slots dropped (a stale reference makes `docToFile` throw). Without this,
+ * live-edited docs stop being materializable — the "file recoverable from the
+ * Y.Doc alone" invariant (ysync 0005) would only hold for the seeded state.
  */
 export function applyDeltaToY(ydoc: Y.Doc, delta: KicadDelta, origin?: unknown): void {
   ydoc.transact(() => {
@@ -114,6 +122,28 @@ export function applyDeltaToY(ydoc: Y.Doc, delta: KicadDelta, origin?: unknown):
     for (const it of delta.added) upsertYItem(items, it.uuid, it);
     for (const it of delta.updated) upsertYItem(items, it.uuid, it);
     for (const uuid of delta.removed) items.delete(uuid);
+
+    const layout = ydoc.getArray<Slot>(Y_KDOC_LAYOUT);
+    // Slots to drop: removed uuids, plus upserts that now have a parent (a kept
+    // slot would render the item twice — once at root, once inside the parent).
+    const gone = new Set(delta.removed);
+    for (const it of [...delta.added, ...delta.updated]) {
+      if (it.parent !== null) gone.add(it.uuid);
+    }
+    if (gone.size) {
+      for (let i = layout.length - 1; i >= 0; i--) {
+        const slot = layout.get(i);
+        if ("item" in slot && gone.has(slot.item)) layout.delete(i, 1);
+      }
+    }
+    const present = new Set<string>();
+    for (const slot of layout.toArray()) {
+      if ("item" in slot) present.add(slot.item);
+    }
+    const newRoots = [...delta.added, ...delta.updated]
+      .filter((it) => it.parent === null && !present.has(it.uuid))
+      .map((it): Slot => ({ item: it.uuid }));
+    if (newRoots.length) layout.push(newRoots);
   }, origin);
 }
 
