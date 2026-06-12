@@ -2,6 +2,8 @@ import { initContract } from "@ts-rest/core";
 import { z } from "zod";
 import {
   errorBody,
+  libItemSchema,
+  libSchema,
   projectFileSchema,
   projectSchema,
   projectWithFiles,
@@ -59,6 +61,27 @@ export const contract = c.router(
         404: errorBody,
       },
       summary: "List the files in a project",
+    },
+
+    // --- libraries (read-only) ---
+    // The item BODY fetch is a raw streamed-text route
+    // (`GET /api/libs/:lib/items/:kind/:name`), NOT a ts-rest endpoint — same as
+    // file-byte download. A conforming backend MUST still expose it.
+    listLibs: {
+      method: "GET",
+      path: "/api/libs",
+      responses: { 200: z.array(libSchema) },
+      summary: "List the libraries this backend serves",
+    },
+    listLibItems: {
+      method: "GET",
+      path: "/api/libs/:lib/items",
+      pathParams: z.object({ lib: z.string() }),
+      responses: {
+        200: z.array(libItemSchema),
+        404: errorBody,
+      },
+      summary: "List the items (symbols/footprints) in a library",
     },
   },
   {

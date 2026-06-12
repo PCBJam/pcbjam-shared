@@ -86,6 +86,41 @@ export type ProjectWithFiles = z.infer<typeof projectWithFiles>;
 export const errorBody = z.object({ message: z.string() });
 export type ErrorBody = z.infer<typeof errorBody>;
 
+// --- libraries (symbol/footprint libs served to the editor) ---
+// The read surface a backend exposes so the editor can enumerate libraries,
+// list their items, and fetch a single self-contained item body. How a backend
+// stores or composes libs (origins, per-user mirrors, merge) is its own concern;
+// only this read shape is shared. Item BODIES are streamed text (a complete
+// `kicad_symbol_lib` s-expr) over a raw route, NOT a ts-rest endpoint:
+//   GET /api/libs/:lib/items/:kind/:name
+// (same reasoning as file-byte download). The editor's WASM lib plugin fetches
+// it directly; a conforming backend MUST expose it.
+
+/**
+ * One library as the editor sees it. `id` is the opaque token used in the
+ * `/mnt/pcbjam/<id>` lib-table URI (a name for the example backend, a uuid for
+ * the registry-backed one); `name` is the display nickname.
+ */
+export const libSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  // 'origin' | 'mirror' | 'user'
+  type: z.string(),
+  description: z.string().nullish(),
+  itemCount: z.number().int().nonnegative().optional(),
+});
+export type Lib = z.infer<typeof libSchema>;
+
+/** One item (symbol/footprint/3D model) in a library's listing. */
+export const libItemSchema = z.object({
+  // 'symbol' | 'footprint' | 'model3d'
+  kind: z.string(),
+  name: z.string(),
+  description: z.string().nullish(),
+  keywords: z.string().nullish(),
+});
+export type LibItem = z.infer<typeof libItemSchema>;
+
 // --- collaboration (Yjs network sync) ---
 // The contract between the editor and ANY Yjs sync backend (the closed PartyKit
 // server, or an OSS Hocuspocus one). Only the wire-level naming/handshake lives
