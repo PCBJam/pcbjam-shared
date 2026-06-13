@@ -121,6 +121,27 @@ export const libItemSchema = z.object({
 });
 export type LibItem = z.infer<typeof libItemSchema>;
 
+// --- library WRITE protocol (0004: user-defined libs, the first write path) ---
+// Unlike project management (createProject etc., which live in the closed app
+// contract), the lib write protocol is shared: the open build (GPL standalone +
+// example backend) must round-trip create-a-lib + save-an-item end-to-end. How a
+// backend stores/scopes user libs (registry+R2 + per-user owner in the closed
+// server; plain files in the example backend) is its own concern — only this
+// wire shape is shared.
+
+/**
+ * Header carrying the (thin, pre-auth) per-user owner identity on lib requests.
+ * A backend scopes user libs to this owner; absent ⇒ the backend's default
+ * owner. Real auth replaces it later without reshaping the protocol.
+ */
+export const OWNER_HEADER = "x-pcbjam-owner";
+
+/** Body for creating a user library (owner comes from `OWNER_HEADER`). */
+export const createLibBody = z.object({
+  name: z.string().min(1).max(200),
+});
+export type CreateLibBody = z.infer<typeof createLibBody>;
+
 // --- collaboration (Yjs network sync) ---
 // The contract between the editor and ANY Yjs sync backend (the closed PartyKit
 // server, or an OSS Hocuspocus one). Only the wire-level naming/handshake lives

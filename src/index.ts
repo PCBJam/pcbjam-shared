@@ -1,6 +1,7 @@
 import { initContract } from "@ts-rest/core";
 import { z } from "zod";
 import {
+  createLibBody,
   errorBody,
   libItemSchema,
   libSchema,
@@ -25,9 +26,12 @@ const c = initContract();
  * surface a backend must implement for the editor to enumerate projects, read a
  * project's file tree, and stream file bytes into the WASM tools.
  *
- * Management/write concerns (creating, deleting, uploading) and any ownership /
- * auth model are intentionally NOT here — those live in the application layer
- * that builds on top of this contract.
+ * Project management/write (createProject, deleteProject, uploads) and the auth
+ * model are intentionally NOT here — those live in the closed application
+ * contract. The ONE write exception is the library protocol (createLib + the raw
+ * item-body PUT, 0004): the open build must round-trip create-a-lib + save-an-item
+ * without the closed backend, so its wire shape is shared (the rich registry /
+ * per-user impl stays closed). Owner identity travels via `OWNER_HEADER`.
  *
  * NOTE: the file-byte download is a streamed-binary route
  * (`GET /api/projects/:project/files/*`) and is intentionally NOT a ts-rest
@@ -82,6 +86,24 @@ export const contract = c.router(
         404: errorBody,
       },
       summary: "List the items (symbols/footprints) in a library",
+    },
+
+    // --- library write (0004) ---
+    // Creating a lib is JSON in/out (ts-rest). Writing an item BODY is a raw
+    // streamed-text route (the mirror image of the GET item-body), NOT ts-rest:
+    //   PUT /api/libs/:lib/items/:kind/:name   body = a kicad_symbol_lib s-expr
+    // A conforming backend MUST expose it; the editor's WASM plugin PUTs to it.
+    // Both carry the owner via `OWNER_HEADER`.
+    createLib: {
+      method: "POST",
+      path: "/api/libs",
+      body: createLibBody,
+      responses: {
+        201: libSchema,
+        400: errorBody,
+        409: errorBody,
+      },
+      summary: "Create a user library (owner from OWNER_HEADER)",
     },
   },
   {
