@@ -136,6 +136,14 @@ export type LibItem = z.infer<typeof libItemSchema>;
  */
 export const OWNER_HEADER = "x-pcbjam-owner";
 
+/**
+ * Header carrying the current project id on lib requests. A backend MAY use it
+ * to scope or compose lib resolution per project, so collaborators on a shared
+ * project resolve identically; the minimal reference backend ignores it. Absent
+ * ⇒ unscoped resolution.
+ */
+export const PROJECT_HEADER = "x-pcbjam-project";
+
 /** Body for creating a user library (owner comes from `OWNER_HEADER`). */
 export const createLibBody = z.object({
   name: z.string().min(1).max(200),
