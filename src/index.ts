@@ -74,8 +74,15 @@ export const contract = c.router(
     listLibs: {
       method: "GET",
       path: "/api/libs",
+      query: z.object({
+        // Optional item-kind filter ("symbol" | "footprint"). When set, origins
+        // are filtered to those holding >=1 item of that kind; user libs (which
+        // are kind-agnostic containers) are always listed. Drives per-tool
+        // lib-table generation (a footprint tool requests kind=footprint).
+        kind: z.string().optional(),
+      }),
       responses: { 200: z.array(libSchema) },
-      summary: "List the libraries this backend serves",
+      summary: "List the libraries this backend serves (optionally filtered by kind)",
     },
     listLibItems: {
       method: "GET",
