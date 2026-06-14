@@ -7,6 +7,7 @@ export const TOOLS = [
   "calculator",
   "pl_editor",
   "symbol_editor",
+  "footprint_editor",
   "gerbview",
 ] as const;
 export const toolSchema = z.enum(TOOLS);
@@ -19,6 +20,7 @@ export const TOOL_LABELS: Record<Tool, string> = {
   calculator: "PCB Calculator",
   pl_editor: "Drawing Sheet Editor",
   symbol_editor: "Symbol Editor",
+  footprint_editor: "Footprint Editor",
   gerbview: "Gerber Viewer",
 };
 
@@ -35,10 +37,15 @@ export const EXTENSION_TOOL: Record<string, Tool> = {
  * not implement OpenProjectFiles), so we boot it standalone rather than auto-open.
  * The gerber viewer likewise opens gerber/drill files through its own File→Open
  * UI — projects carry no gerber files to auto-open — so it boots standalone too.
+ * The footprint editor is the same: no project board/schematic file to auto-open;
+ * it edits libraries (via the fp-lib-table) through its own UI. It is still
+ * project-scoped (routed under /p/:project/ with a Prj()) — "fileless" here only
+ * means no auto-open, not "no project".
  */
 export const FILELESS_TOOLS: ReadonlySet<Tool> = new Set<Tool>([
   "calculator",
   "symbol_editor",
+  "footprint_editor",
   "gerbview",
 ]);
 
