@@ -32,6 +32,16 @@ export const EXTENSION_TOOL: Record<string, Tool> = {
 };
 
 /**
+ * Library-file extension → the editor that opens it scoped to that lib. Unlike
+ * EXTENSION_TOOL (document files opened into the tool), these are LIBRARY files:
+ * the editor browses the file's contents through the lib bridge, not File→Open.
+ */
+export const LIB_EXTENSION_TOOL: Record<string, Tool> = {
+  ".kicad_sym": "symbol_editor",
+  ".kicad_mod": "footprint_editor",
+};
+
+/**
  * Tools that do not take a file (booted standalone). The calculator has no file
  * concept; the symbol editor opens libraries through its own UI (its frame does
  * not implement OpenProjectFiles), so we boot it standalone rather than auto-open.
