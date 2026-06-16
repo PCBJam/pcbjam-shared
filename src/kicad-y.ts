@@ -93,6 +93,22 @@ export function docToY(doc: KicadDoc, ydoc: Y.Doc, origin?: unknown): void {
   }, origin);
 }
 
+/**
+ * Whether a Y.Doc has been seeded with document state at all. `docToY` always
+ * writes `kdoc_meta.root` and `kdoc_layout`, so a seeded doc is detectable even
+ * when it has NO uuid items — which is the case for drawing sheets
+ * (`.kicad_wks`, pl_editor) and any file whose elements carry no `(uuid …)`.
+ * Callers must use THIS (not `kicadItemsMap(doc).size`) to tell an empty room
+ * from a populated one, or such docs look empty and never get adopted.
+ */
+export function ydocHasState(ydoc: Y.Doc): boolean {
+  return (
+    kicadItemsMap(ydoc).size > 0 ||
+    ydoc.getArray<Slot>(Y_KDOC_LAYOUT).length > 0 ||
+    ydoc.getMap(Y_KDOC_META).get("root") !== undefined
+  );
+}
+
 /** Read the full `KicadDoc` back out of a Y.Doc (validated). */
 export function yToDoc(ydoc: Y.Doc): KicadDoc {
   const root = ydoc.getMap(Y_KDOC_META).get("root");
@@ -102,6 +118,23 @@ export function yToDoc(ydoc: Y.Doc): KicadDoc {
   });
   const layout = ydoc.getArray<Slot>(Y_KDOC_LAYOUT).toArray();
   return kicadDocSchema.parse({ root, items, layout });
+}
+
+/**
+ * Rebuild a `KicadDoc` directly from a persisted Yjs state update (the bytes
+ * `Y.encodeStateAsUpdate` produces — what the sync server stores in the `.ydoc`
+ * blob or returns for a live room). Lets a backend materialize a file from a
+ * stored room without importing `yjs` itself (the Y.Doc is constructed and
+ * discarded here). Pair with `docToFile` to get the KiCad s-expr.
+ */
+export function ydocUpdateToKicadDoc(update: Uint8Array): KicadDoc {
+  const doc = new Y.Doc();
+  try {
+    Y.applyUpdate(doc, update);
+    return yToDoc(doc);
+  } finally {
+    doc.destroy();
+  }
 }
 
 /**

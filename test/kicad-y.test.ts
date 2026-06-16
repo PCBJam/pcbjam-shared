@@ -8,6 +8,8 @@ import {
   docToY,
   kicadItemsMap,
   yToDoc,
+  ydocHasState,
+  ydocUpdateToKicadDoc,
 } from "../src/kicad-y.js";
 import { isEmptyKicadDelta, type KicadDelta } from "../src/kicad-delta.js";
 import { docToFile, fileToDoc } from "../src/kicad-doc.js";
@@ -40,6 +42,16 @@ describe("docToY / yToDoc", () => {
     expect(parseSexpr(docToFile(yToDoc(remote)))).toEqual(parseSexpr(BASE));
   });
 
+  it("ydocUpdateToKicadDoc rebuilds the file from a persisted state update", () => {
+    // The server-side materialize path: a stored `.ydoc` (encodeStateAsUpdate)
+    // → KicadDoc → file, without the caller touching yjs.
+    const ydoc = new Y.Doc();
+    docToY(fileToDoc(BASE), ydoc);
+    const update = Y.encodeStateAsUpdate(ydoc);
+    const doc = ydocUpdateToKicadDoc(update);
+    expect(parseSexpr(docToFile(doc))).toEqual(parseSexpr(BASE));
+  });
+
   it("re-seeding removes stale items and preserves layout order", () => {
     const ydoc = new Y.Doc();
     docToY(fileToDoc(BASE), ydoc);
@@ -51,6 +63,39 @@ describe("docToY / yToDoc", () => {
     const back = yToDoc(ydoc);
     expect(Object.keys(back.items)).toEqual(["seg-1"]);
     expect(parseSexpr(docToFile(back))).toEqual(parseSexpr(docToFile(next)));
+  });
+});
+
+describe("ydocHasState — uuid-less docs (pl_editor drawing sheets)", () => {
+  // A drawing sheet has NO uuids, so fileToDoc puts everything in layout/meta
+  // and kdoc_items stays empty. The seed/adopt/materialize decisions must still
+  // see this as a populated room (regression: a 2nd tab opened the stale file).
+  const WKS = `(page_layout
+  (setup (textsize 1.5 1.5) (linewidth 0.15))
+  (rect (name border:Rect) (start 0 0 ltcorner) (end 0 0 rbcorner))
+  (tbtext "Title" (name title) (pos 100 22))
+)`;
+
+  it("a fresh Y.Doc reports no state", () => {
+    expect(ydocHasState(new Y.Doc())).toBe(false);
+  });
+
+  it("a seeded drawing sheet reports state despite zero kdoc_items", () => {
+    const doc = fileToDoc(WKS);
+    expect(Object.keys(doc.items)).toHaveLength(0); // no uuids → no items
+    const ydoc = new Y.Doc();
+    docToY(doc, ydoc);
+    expect(kicadItemsMap(ydoc).size).toBe(0); // the OLD items-only check → "empty"
+    expect(ydocHasState(ydoc)).toBe(true); // the FIX → layout/meta count as state
+  });
+
+  it("the materialize a joining tab would open round-trips across the wire", () => {
+    const ydoc = new Y.Doc();
+    docToY(fileToDoc(WKS), ydoc);
+    const remote = new Y.Doc(); // the 2nd tab's doc after provider sync
+    Y.applyUpdate(remote, Y.encodeStateAsUpdate(ydoc));
+    expect(ydocHasState(remote)).toBe(true);
+    expect(parseSexpr(docToFile(yToDoc(remote)))).toEqual(parseSexpr(WKS));
   });
 });
 

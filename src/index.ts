@@ -1,5 +1,6 @@
 import { initContract } from "@ts-rest/core";
 import { z } from "zod";
+import { driftReportBody, driftSummary } from "./drift.js";
 import {
   createLibBody,
   errorBody,
@@ -17,6 +18,7 @@ export * from "./collab-wire.js";
 export * from "./kicad-delta.js";
 export * from "./kicad-y.js";
 export * from "./items-wire.js";
+export * from "./drift.js";
 
 const c = initContract();
 
@@ -111,6 +113,21 @@ export const contract = c.router(
         409: errorBody,
       },
       summary: "Create a user library (owner from OWNER_HEADER)",
+    },
+
+    // --- collaboration drift reporting (ysync) ---
+    // Generic: the editor posts a detected ydoc/wasm divergence (both KicadDoc
+    // representations + the diff). How a backend stores/lists drifts is closed.
+    reportDrift: {
+      method: "POST",
+      path: "/api/projects/:project/drift",
+      pathParams: z.object({ project: z.string() }),
+      body: driftReportBody,
+      responses: {
+        201: driftSummary,
+        404: errorBody,
+      },
+      summary: "Report a detected ydoc/wasm drift for a project document",
     },
   },
   {

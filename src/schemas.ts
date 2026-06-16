@@ -91,6 +91,15 @@ export const projectFileSchema = z.object({
   contentType: z.string(),
   createdAt: z.string(),
   updatedAt: z.string(),
+  // --- collaborative-state overlay (optional; a backend MAY surface it) ---
+  /** A persisted Y.Doc (`.ydoc`) exists for this file (collaboratively edited). */
+  hasYdoc: z.boolean().optional(),
+  /** Size of the `.ydoc` blob, when present. */
+  ydocSize: z.number().int().nonnegative().optional(),
+  /** A room for this file is open right now (someone is editing live). */
+  isLive: z.boolean().optional(),
+  /** max(file updatedAt, ydoc last-modified), ISO 8601 — for "last changed". */
+  lastChanged: z.string().optional(),
 });
 export type ProjectFile = z.infer<typeof projectFileSchema>;
 
@@ -191,3 +200,35 @@ export const collabConnectParams = z.object({
   token: z.string().optional(),
 });
 export type CollabConnectParams = z.infer<typeof collabConnectParams>;
+
+/**
+ * Make a `docPath` safe to embed in an R2 key while preserving its POSIX shape
+ * (slashes kept, `..` collapsed, leading slashes dropped, exotic chars folded).
+ */
+function sanitizeDocPath(docPath: string): string {
+  return docPath
+    .replace(/\.\.+/g, ".")
+    .replace(/^\/+/, "")
+    .replace(/[^A-Za-z0-9._/-]/g, "_");
+}
+
+/**
+ * R2 key of a room's persisted Yjs state, beside its raw file under the flat
+ * `projects/<projectId>/` prefix (no owner segment — derivable from `projectId`
+ * alone, which is all the sync worker knows). Both the sync server (persist) and
+ * the app server (materialize/list) compute it identically so they never drift.
+ * e.g. `projects/<uuid>/pcbnew/board.kicad_pcb.ydoc`.
+ */
+export function collabDocKey(projectId: string, docPath: string): string {
+  return `projects/${projectId}/${sanitizeDocPath(docPath)}.ydoc`;
+}
+
+/**
+ * R2 key of a room's liveness marker (a tiny blob the sync DO writes while the
+ * room has connections, deletes when empty). The app server checks for it to
+ * decide whether to fetch live Y state from the sync worker — without it, a cold
+ * Durable Object is never woken. Sits beside the `.ydoc` blob.
+ */
+export function collabLiveKey(projectId: string, docPath: string): string {
+  return `projects/${projectId}/${sanitizeDocPath(docPath)}.live`;
+}
