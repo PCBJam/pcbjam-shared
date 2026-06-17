@@ -19,6 +19,7 @@ export * from "./kicad-delta.js";
 export * from "./kicad-y.js";
 export * from "./items-wire.js";
 export * from "./drift.js";
+export * from "./sync-wire.js";
 
 const c = initContract();
 

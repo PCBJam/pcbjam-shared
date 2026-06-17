@@ -1,0 +1,23 @@
+{
+  "name": "@pcbjam/sync-client",
+  "version": "0.1.0",
+  "description": "Generic R2⇄IndexedDB sync bridge — browser client (layered per-namespace cache + realtime). No KiCad/lib vocabulary.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": ["src"],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@pcbjam/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.0"
+  }
+}
