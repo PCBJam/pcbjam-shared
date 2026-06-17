@@ -212,6 +212,15 @@ function sanitizeDocPath(docPath: string): string {
     .replace(/[^A-Za-z0-9._/-]/g, "_");
 }
 
+/** Flat prefix every collab blob for a project lives under. */
+function collabKeyPrefix(projectId: string): string {
+  return `projects/${projectId}/`;
+}
+
+/** Suffixes appended to a doc's key for its persisted state / liveness marker. */
+const COLLAB_DOC_SUFFIX = ".ydoc";
+const COLLAB_LIVE_SUFFIX = ".live";
+
 /**
  * R2 key of a room's persisted Yjs state, beside its raw file under the flat
  * `projects/<projectId>/` prefix (no owner segment — derivable from `projectId`
@@ -220,7 +229,7 @@ function sanitizeDocPath(docPath: string): string {
  * e.g. `projects/<uuid>/pcbnew/board.kicad_pcb.ydoc`.
  */
 export function collabDocKey(projectId: string, docPath: string): string {
-  return `projects/${projectId}/${sanitizeDocPath(docPath)}.ydoc`;
+  return `${collabKeyPrefix(projectId)}${sanitizeDocPath(docPath)}${COLLAB_DOC_SUFFIX}`;
 }
 
 /**
@@ -230,5 +239,32 @@ export function collabDocKey(projectId: string, docPath: string): string {
  * Durable Object is never woken. Sits beside the `.ydoc` blob.
  */
 export function collabLiveKey(projectId: string, docPath: string): string {
-  return `projects/${projectId}/${sanitizeDocPath(docPath)}.live`;
+  return `${collabKeyPrefix(projectId)}${sanitizeDocPath(docPath)}${COLLAB_LIVE_SUFFIX}`;
+}
+
+/**
+ * Inverse of {@link collabDocKey} / {@link collabLiveKey}: recover the doc path and
+ * blob kind from an R2 key, or null if `key` isn't a collab blob under this project's
+ * prefix. Keeps the key scheme (prefix + `.ydoc`/`.live` suffix) defined in ONE place
+ * so the backend can list collab-only docs without re-deriving it by hand.
+ *
+ * NOTE: {@link collabDocKey} runs `docPath` through a lossy {@link sanitizeDocPath},
+ * so the recovered path equals the original only for already-clean POSIX paths — which
+ * is exactly the case that matters here (paths that came from the file list / editor).
+ */
+export function parseCollabKey(
+  projectId: string,
+  key: string,
+): { path: string; kind: "ydoc" | "live" } | null {
+  const prefix = collabKeyPrefix(projectId);
+  if (!key.startsWith(prefix)) return null;
+  const suffix = key.endsWith(COLLAB_DOC_SUFFIX)
+    ? COLLAB_DOC_SUFFIX
+    : key.endsWith(COLLAB_LIVE_SUFFIX)
+      ? COLLAB_LIVE_SUFFIX
+      : null;
+  if (!suffix) return null;
+  const path = key.slice(prefix.length, -suffix.length);
+  if (!path) return null;
+  return { path, kind: suffix === COLLAB_DOC_SUFFIX ? "ydoc" : "live" };
 }
