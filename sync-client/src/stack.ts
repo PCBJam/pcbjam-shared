@@ -80,6 +80,22 @@ export class SyncStack {
     return null;
   }
 
+  /**
+   * Merged bodies for every path in one shot — the bulk counterpart of
+   * {@link read}. Layers are read bottom → top and overlaid, so the topmost layer
+   * providing a path wins, identical to {@link read}/{@link list}. Per-layer reads
+   * run concurrently; the merge preserves stack order. Lets a caller hydrate a
+   * whole namespace (e.g. a KiCad library) without N per-item round-trips.
+   */
+  async readAll(): Promise<Map<string, Uint8Array>> {
+    const perLayer = await Promise.all(this.layers.map((l) => l.readAll()));
+    const merged = new Map<string, Uint8Array>();
+    for (const layerBodies of perLayer) {
+      for (const [path, body] of layerBodies) merged.set(path, body);
+    }
+    return merged;
+  }
+
   /** Merged listing: top layers override lower ones by path. */
   async list(): Promise<Array<{ path: string; hash: string; size: number }>> {
     const merged = new Map<string, { hash: string; size: number }>();

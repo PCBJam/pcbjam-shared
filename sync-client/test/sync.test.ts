@@ -165,6 +165,56 @@ describe("layered merge (origin + mirror overlay)", () => {
   });
 });
 
+describe("bulk readAll (fat list)", () => {
+  let cloud: FakeCloud;
+  beforeEach(() => {
+    cloud = new FakeCloud();
+  });
+
+  it("returns every body in one shot, matching read()/list()", async () => {
+    await cloud.server(MIRROR).seed("symbol/R", body("(R)"));
+    await cloud.server(MIRROR).seed("symbol/C", body("(C)"));
+    const s = browser().stack(cloud, [liveMirror()]);
+    await s.open();
+
+    const all = await s.readAll();
+    expect([...all.keys()].sort()).toEqual(["symbol/C", "symbol/R"]);
+    expect(text(all.get("symbol/R")!)).toBe("(R)");
+    // Same path set as list(), same bytes as read().
+    expect([...all.keys()].sort()).toEqual(
+      (await s.list()).map((e) => e.path).sort(),
+    );
+    expect(text(all.get("symbol/C")!)).toBe(text(await s.read("symbol/C")));
+  });
+
+  it("merges layers top-wins — a mirror overlay shadows the origin", async () => {
+    await cloud.server(ORIGIN).seed("symbol/R", body("origin-R"));
+    await cloud.server(ORIGIN).seed("symbol/C", body("origin-C"));
+    const s = browser().stack(cloud, [staticOrigin(), liveMirror()]);
+    await s.open();
+
+    // Before any edit: the bulk view is the origin, exactly like read().
+    let all = await s.readAll();
+    expect(text(all.get("symbol/R")!)).toBe("origin-R");
+    expect(text(all.get("symbol/C")!)).toBe("origin-C");
+
+    // Edit R into the overlay; the bulk view must reflect the same top-wins merge
+    // read() does — overlay R, origin C — and a brand-new overlay-only path shows.
+    await s.push("symbol/R", body("mine-R"));
+    await s.push("symbol/N", body("mine-N"));
+    await settle();
+
+    all = await s.readAll();
+    expect(text(all.get("symbol/R")!)).toBe("mine-R"); // overlay wins
+    expect(text(all.get("symbol/C")!)).toBe("origin-C"); // origin shows through
+    expect(text(all.get("symbol/N")!)).toBe("mine-N"); // overlay-only path
+    // Every entry agrees with the per-path read().
+    for (const [path, bytes] of all) {
+      expect(text(bytes)).toBe(text(await s.read(path)));
+    }
+  });
+});
+
 describe("hash-driven sync (regression: version gate)", () => {
   it("refetches a body whose hash changed even when the manifest version is unchanged", async () => {
     const cloud = new FakeCloud();

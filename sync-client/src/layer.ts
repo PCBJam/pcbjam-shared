@@ -242,6 +242,23 @@ export class SyncLayer {
     return this.store.getBody(path);
   }
 
+  /**
+   * Every body this layer currently provides, scoped to the in-memory manifest so
+   * the result matches {@link hasPath}/{@link entries} (the source of truth the
+   * stack merges on). One bulk store read; a manifest entry whose body is somehow
+   * absent from the cache is simply omitted (the per-item `getBody` path still
+   * covers it). Used by the stack's bulk "fat list" load.
+   */
+  async readAll(): Promise<Map<string, Uint8Array>> {
+    const all = await this.store.getAllBodies();
+    const out = new Map<string, Uint8Array>();
+    for (const path of Object.keys(this.manifest.entries)) {
+      const body = all.get(path);
+      if (body) out.set(path, body);
+    }
+    return out;
+  }
+
   close(): void {
     this.channel?.close();
   }

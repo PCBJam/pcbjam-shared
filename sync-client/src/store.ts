@@ -12,6 +12,8 @@ export interface LayerStore {
   getManifest(): Promise<SyncManifest | null>;
   setManifest(m: SyncManifest): Promise<void>;
   getBody(path: string): Promise<Uint8Array | null>;
+  /** Read every cached body in one transaction (bulk "fat list" load). */
+  getAllBodies(): Promise<Map<string, Uint8Array>>;
   putBody(path: string, body: Uint8Array): Promise<void>;
   delBody(path: string): Promise<void>;
   /** Write many bodies in one transaction (cold `init` bulk hydrate). */
@@ -29,6 +31,7 @@ export function memStore(): LayerStore {
       manifest = m;
     },
     getBody: async (p) => bodies.get(p) ?? null,
+    getAllBodies: async () => new Map(bodies),
     putBody: async (p, b) => {
       bodies.set(p, b);
     },
@@ -116,6 +119,21 @@ export function idbStore(dbName: string): LayerStore {
         d.transaction(BODIES, "readonly").objectStore(BODIES).get(path),
       );
       return (v as Uint8Array | undefined) ?? null;
+    },
+    async getAllBodies() {
+      const d = await db();
+      // One readonly transaction, two requests on the same store. getAllKeys()
+      // and getAll() both return in ascending key order, so they pair by index.
+      const os = d.transaction(BODIES, "readonly").objectStore(BODIES);
+      const [keys, vals] = await Promise.all([
+        reqDone(os.getAllKeys()),
+        reqDone(os.getAll()),
+      ]);
+      const out = new Map<string, Uint8Array>();
+      for (let i = 0; i < keys.length; i++) {
+        out.set(String(keys[i]), vals[i] as Uint8Array);
+      }
+      return out;
     },
     async putBody(path, body) {
       const d = await db();
