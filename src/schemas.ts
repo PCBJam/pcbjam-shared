@@ -68,13 +68,39 @@ export const projectSlugSchema = z
     "slug must start alphanumeric and contain only lowercase letters, digits, '.', '_', '-'",
   );
 
+/** A library name is a slug within its scope (same shape as a project slug). */
+export const libNameSchema = projectSlugSchema;
+
 /**
- * A project as seen by the wasm-frontend. This is the minimal shape a backend
- * must return; ownership / multi-tenancy fields are intentionally NOT part of
- * the shared contract (they live in the closed application layer).
+ * A scope is the first URL segment — a neutral namespace (user, org, team, …)
+ * that owns projects and libs, GitHub-like (`scope/kind/name`). Reserved virtual
+ * scopes carry a leading `@` (e.g. `@local` = browser-local content); ordinary
+ * scopes are bare slugs. Reserved/blocklisted names are enforced by the backend.
+ */
+export const scopeSlugSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(
+    /^@?[a-z0-9][a-z0-9._-]*$/,
+    "scope must be a slug (lowercase alphanumeric, '.', '_', '-'), optionally '@'-prefixed for a reserved virtual scope",
+  );
+
+/** Reserved system scopes (never handed out as user/org slugs). */
+export const KICAD_SCOPE = "kicad";
+export const DEMO_SCOPE = "demo";
+/** Browser-local (IndexedDB) content in standalone/demo; never hits a backend. */
+export const LOCAL_SCOPE = "@local";
+
+/**
+ * A project as seen by the wasm-frontend. `scope` is the owning namespace — now
+ * part of the shared identity because it appears in every URL (`scope/projects/
+ * slug`). Membership/auth still live in the closed application layer; `scope` is
+ * just the addressable namespace slug.
  */
 export const projectSchema = z.object({
   id: z.string().uuid(),
+  scope: z.string(),
   slug: z.string(),
   name: z.string(),
   createdAt: z.string(),
@@ -129,9 +155,15 @@ export type ErrorBody = z.infer<typeof errorBody>;
  */
 export const libSchema = z.object({
   id: z.string(),
+  // The scope (namespace) this lib belongs to, e.g. "kicad" or "myorg". Optional
+  // on the wire for sources that don't model scopes (built-in/static examples).
+  scope: z.string().optional(),
   name: z.string(),
-  // 'origin' | 'mirror' | 'user'
+  // 'origin' | 'mirror' | 'org'
   type: z.string(),
+  // 'public' | 'private' — origins are always public. Optional for sources that
+  // don't model visibility.
+  visibility: z.string().optional(),
   description: z.string().nullish(),
   itemCount: z.number().int().nonnegative().optional(),
 });
@@ -156,11 +188,18 @@ export type LibItem = z.infer<typeof libItemSchema>;
 // wire shape is shared.
 
 /**
- * Header carrying the (thin, pre-auth) per-user owner identity on lib requests.
- * A backend scopes user libs to this owner; absent ⇒ the backend's default
- * owner. Real auth replaces it later without reshaping the protocol.
+ * Header carrying the active scope (namespace) a request operates in. The scope
+ * also appears in the path; the header is the canonical value services read.
  */
-export const OWNER_HEADER = "x-pcbjam-owner";
+export const SCOPE_HEADER = "x-pcbjam-scope";
+
+/**
+ * Header carrying the (thin, pre-auth) current-user identity. Per-user concerns
+ * (lib pin opt-outs / explicit adds) key on it; absent ⇒ the backend's default
+ * user. Real auth replaces it later without reshaping the protocol. The user's
+ * own slug doubles as their personal scope.
+ */
+export const USER_HEADER = "x-pcbjam-user";
 
 /**
  * Header carrying the current project id on lib requests. A backend MAY use it
@@ -170,7 +209,7 @@ export const OWNER_HEADER = "x-pcbjam-owner";
  */
 export const PROJECT_HEADER = "x-pcbjam-project";
 
-/** Body for creating a user library (owner comes from `OWNER_HEADER`). */
+/** Body for creating a library (the scope comes from the path / SCOPE_HEADER). */
 export const createLibBody = z.object({
   name: z.string().min(1).max(200),
 });

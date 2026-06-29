@@ -12,6 +12,7 @@ import {
 } from "./schemas.js";
 
 export * from "./schemas.js";
+export * from "./routes.js";
 export * from "./sexpr.js";
 export * from "./kicad-doc.js";
 export * from "./collab-wire.js";
@@ -34,25 +35,30 @@ const c = initContract();
  * contract. The ONE write exception is the library protocol (createLib + the raw
  * item-body PUT, 0004): the open build must round-trip create-a-lib + save-an-item
  * without the closed backend, so its wire shape is shared (the rich registry /
- * per-user impl stays closed). Owner identity travels via `OWNER_HEADER`.
+ * per-scope impl stays closed). Identity travels via `SCOPE_HEADER`/`USER_HEADER`.
+ *
+ * Every resource is addressed `scope/kind/name` (see routes.ts): projects and
+ * libs live under `/api/scopes/:scope/...`. `:scope` is the owning namespace,
+ * `:project`/`:lib` the slug within it.
  *
  * NOTE: the file-byte download is a streamed-binary route
- * (`GET /api/projects/:project/files/*`) and is intentionally NOT a ts-rest
- * endpoint (binary does not round-trip cleanly through ts-rest). A conforming
- * backend MUST still expose it; the editor fetches it directly.
+ * (`GET /api/scopes/:scope/projects/:project/files/*`) and is intentionally NOT
+ * a ts-rest endpoint (binary does not round-trip cleanly through ts-rest). A
+ * conforming backend MUST still expose it; the editor fetches it directly.
  */
 export const contract = c.router(
   {
     listProjects: {
       method: "GET",
-      path: "/api/projects",
+      path: "/api/scopes/:scope/projects",
+      pathParams: z.object({ scope: z.string() }),
       responses: { 200: z.array(projectSchema) },
-      summary: "List the projects this backend serves",
+      summary: "List the projects in a scope",
     },
     getProject: {
       method: "GET",
-      path: "/api/projects/:project",
-      pathParams: z.object({ project: z.string() }),
+      path: "/api/scopes/:scope/projects/:project",
+      pathParams: z.object({ scope: z.string(), project: z.string() }),
       responses: {
         200: projectWithFiles,
         404: errorBody,
@@ -61,8 +67,8 @@ export const contract = c.router(
     },
     listFiles: {
       method: "GET",
-      path: "/api/projects/:project/files",
-      pathParams: z.object({ project: z.string() }),
+      path: "/api/scopes/:scope/projects/:project/files",
+      pathParams: z.object({ scope: z.string(), project: z.string() }),
       responses: {
         200: z.array(projectFileSchema),
         404: errorBody,
@@ -72,25 +78,30 @@ export const contract = c.router(
 
     // --- libraries (read-only) ---
     // The item BODY fetch is a raw streamed-text route
-    // (`GET /api/libs/:lib/items/:kind/:name`), NOT a ts-rest endpoint — same as
-    // file-byte download. A conforming backend MUST still expose it.
+    // (`GET /api/scopes/:scope/libs/:lib/items/:kind/:name`), NOT a ts-rest
+    // endpoint — same as file-byte download. A conforming backend MUST expose it.
     listLibs: {
       method: "GET",
-      path: "/api/libs",
+      path: "/api/scopes/:scope/libs",
+      pathParams: z.object({ scope: z.string() }),
       query: z.object({
         // Optional item-kind filter ("symbol" | "footprint"). When set, origins
-        // are filtered to those holding >=1 item of that kind; user libs (which
+        // are filtered to those holding >=1 item of that kind; org libs (which
         // are kind-agnostic containers) are always listed. Drives per-tool
         // lib-table generation (a footprint tool requests kind=footprint).
         kind: z.string().optional(),
+        // Optional project slug: when present, the backend returns the COMPUTED
+        // resolved set for that project (kicad + scope libs + this project's
+        // override mirrors + adds − opt-outs); absent ⇒ the scope's own libs.
+        project: z.string().optional(),
       }),
       responses: { 200: z.array(libSchema) },
-      summary: "List the libraries this backend serves (optionally filtered by kind)",
+      summary: "List the libraries visible in a scope (optionally project-resolved)",
     },
     listLibItems: {
       method: "GET",
-      path: "/api/libs/:lib/items",
-      pathParams: z.object({ lib: z.string() }),
+      path: "/api/scopes/:scope/libs/:lib/items",
+      pathParams: z.object({ scope: z.string(), lib: z.string() }),
       responses: {
         200: z.array(libItemSchema),
         404: errorBody,
@@ -101,19 +112,19 @@ export const contract = c.router(
     // --- library write (0004) ---
     // Creating a lib is JSON in/out (ts-rest). Writing an item BODY is a raw
     // streamed-text route (the mirror image of the GET item-body), NOT ts-rest:
-    //   PUT /api/libs/:lib/items/:kind/:name   body = a kicad_symbol_lib s-expr
+    //   PUT /api/scopes/:scope/libs/:lib/items/:kind/:name  body = kicad_symbol_lib
     // A conforming backend MUST expose it; the editor's WASM plugin PUTs to it.
-    // Both carry the owner via `OWNER_HEADER`.
     createLib: {
       method: "POST",
-      path: "/api/libs",
+      path: "/api/scopes/:scope/libs",
+      pathParams: z.object({ scope: z.string() }),
       body: createLibBody,
       responses: {
         201: libSchema,
         400: errorBody,
         409: errorBody,
       },
-      summary: "Create a user library (owner from OWNER_HEADER)",
+      summary: "Create a library in a scope",
     },
 
     // --- collaboration drift reporting (ysync) ---
@@ -121,8 +132,8 @@ export const contract = c.router(
     // representations + the diff). How a backend stores/lists drifts is closed.
     reportDrift: {
       method: "POST",
-      path: "/api/projects/:project/drift",
-      pathParams: z.object({ project: z.string() }),
+      path: "/api/scopes/:scope/projects/:project/drift",
+      pathParams: z.object({ scope: z.string(), project: z.string() }),
       body: driftReportBody,
       responses: {
         201: driftSummary,
