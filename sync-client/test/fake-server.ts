@@ -22,6 +22,8 @@ export class FakeServer {
   bodyFetches = 0;
   bundleFetches = 0;
   putCount = 0;
+  /** Content-addressed GET /blob/<hash> fetches (sparse bodyUrlTemplate path). */
+  blobFetches = 0;
 
   /** Seed an item with no change broadcast (initial server state). */
   async seed(path: string, body: Uint8Array): Promise<void> {
@@ -47,6 +49,15 @@ export class FakeServer {
           paths.map((path) => [path, this.bodies.get(path) ?? new Uint8Array()]),
         ),
       );
+    }
+    if (req.method === "GET" && p.startsWith("/blob/")) {
+      // Content-addressed body lookup (the sparse layer's bodyUrlTemplate).
+      const hash = p.slice("/blob/".length);
+      this.blobFetches += 1;
+      for (const [path, e] of Object.entries(this.manifest.entries)) {
+        if (e.hash === hash) return bin(this.bodies.get(path)!);
+      }
+      return new Response(null, { status: 404 });
     }
     if (p.startsWith("/body/")) {
       const path = decodeURIComponent(p.slice("/body/".length));

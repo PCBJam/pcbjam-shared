@@ -56,6 +56,7 @@ export class SyncStack {
         store: makeStore(d.namespace),
         http,
         channel,
+        bodyUrlTemplate: d.bodyUrlTemplate,
         onChange: (c) => void this.onLayerChange(c),
       });
     });

@@ -25,6 +25,9 @@ export interface LayerHttp {
     bodies: Array<[string, Uint8Array]>;
   }>;
   getBodies(paths: string[]): Promise<Array<[string, Uint8Array]>>;
+  /** One body from an absolute URL — the sparse layer resolves its
+   *  `bodyUrlTemplate` (it owns the manifest hashes) and fetches through this. */
+  getBodyFromUrl(url: string): Promise<Uint8Array>;
   putBody(path: string, body: Uint8Array): Promise<PutResult>;
   deleteBody(path: string): Promise<{ version: number }>;
 }
@@ -38,7 +41,7 @@ export function httpLayer(
   base: string,
   token: string | undefined,
   fetchImpl: typeof fetch,
-  mode: "live" | "static",
+  mode: "live" | "static" | "sparse",
 ): LayerHttp {
   const authH: Record<string, string> = token
     ? { authorization: `Bearer ${token}` }
@@ -57,12 +60,19 @@ export function httpLayer(
       return (await r.json()) as SyncManifest;
     },
     async getBundle() {
+      if (mode === "sparse")
+        throw new Error(`sparse layer ${base} has no bundle`);
       const r = await fetchImpl(url("/bundle"), { headers: authH });
       if (!r.ok) throw new Error(`getBundle ${r.status}`);
       return decodeBundle(new Uint8Array(await r.arrayBuffer()));
     },
+    async getBodyFromUrl(u) {
+      const r = await fetchImpl(u, { headers: authH });
+      if (!r.ok) throw new Error(`getBodyFromUrl ${u} ${r.status}`);
+      return new Uint8Array(await r.arrayBuffer());
+    },
     async getBodies(paths) {
-      if (mode === "static") {
+      if (mode !== "live") {
         return Promise.all(
           paths.map(async (p): Promise<[string, Uint8Array]> => {
             const r = await fetchImpl(bodyUrl(p), { headers: authH });
@@ -80,7 +90,7 @@ export function httpLayer(
       return decodeFrames(new Uint8Array(await r.arrayBuffer()));
     },
     putBody:
-      mode === "static"
+      mode !== "live"
         ? (readOnly("put") as LayerHttp["putBody"])
         : async (path, body) => {
             const r = await fetchImpl(bodyUrl(path), {
@@ -92,7 +102,7 @@ export function httpLayer(
             return (await r.json()) as PutResult;
           },
     deleteBody:
-      mode === "static"
+      mode !== "live"
         ? (readOnly("delete") as LayerHttp["deleteBody"])
         : async (path) => {
             const r = await fetchImpl(bodyUrl(path), {

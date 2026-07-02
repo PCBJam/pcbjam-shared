@@ -234,6 +234,83 @@ describe("hash-driven sync (regression: version gate)", () => {
   });
 });
 
+describe("sparse layer (lazy bodies)", () => {
+  const MODELS = "http://models";
+  const sparseModels = (): LayerDescriptor => ({
+    namespace: "models:R@v1",
+    kind: "sparse",
+    url: MODELS,
+    bodyUrlTemplate: `${MODELS}/blob/{hash}`,
+  });
+
+  let cloud: FakeCloud;
+  beforeEach(async () => {
+    cloud = new FakeCloud();
+    await cloud.server(MODELS).seed("model3d/a.step", body("STEP-A"));
+    await cloud.server(MODELS).seed("model3d/b.step", body("STEP-B"));
+  });
+
+  it("open() syncs the manifest only — no bundle, no bodies", async () => {
+    const s = browser().stack(cloud, [sparseModels()]);
+    await s.open();
+
+    expect((await s.list()).map((e) => e.path).sort()).toEqual([
+      "model3d/a.step",
+      "model3d/b.step",
+    ]);
+    expect(cloud.server(MODELS).bundleFetches).toBe(0);
+    expect(cloud.server(MODELS).bodyFetches).toBe(0);
+    expect(cloud.server(MODELS).blobFetches).toBe(0);
+  });
+
+  it("read() lazily fetches ONE body via the content-addressed template, then caches", async () => {
+    const b = browser();
+    const s = b.stack(cloud, [sparseModels()]);
+    await s.open();
+
+    expect(text(await s.read("model3d/a.step"))).toBe("STEP-A");
+    expect(cloud.server(MODELS).blobFetches).toBe(1); // exactly a, not b
+
+    expect(text(await s.read("model3d/a.step"))).toBe("STEP-A");
+    expect(cloud.server(MODELS).blobFetches).toBe(1); // served from cache
+
+    // Warm reopen (same store map): still cached, manifest-only sync.
+    const reopened = b.stack(cloud, [sparseModels()]);
+    await reopened.open();
+    expect(text(await reopened.read("model3d/a.step"))).toBe("STEP-A");
+    expect(cloud.server(MODELS).blobFetches).toBe(1);
+  });
+
+  it("unknown path reads null without any fetch", async () => {
+    const s = browser().stack(cloud, [sparseModels()]);
+    await s.open();
+    expect(await s.read("model3d/nope.step")).toBeNull();
+    expect(cloud.server(MODELS).blobFetches).toBe(0);
+  });
+
+  it("a changed hash invalidates the cached body; the next read refetches", async () => {
+    const b = browser();
+    const s = b.stack(cloud, [sparseModels()]);
+    await s.open();
+    expect(text(await s.read("model3d/a.step"))).toBe("STEP-A");
+
+    await cloud.server(MODELS).revise("model3d/a.step", body("STEP-A2"));
+    await s.sync();
+
+    expect(text(await s.read("model3d/a.step"))).toBe("STEP-A2");
+    expect(cloud.server(MODELS).blobFetches).toBe(2);
+  });
+
+  it("rejects writes (read-only like static)", async () => {
+    const s = browser().stack(cloud, [sparseModels()]);
+    await s.open();
+    // No writable layer → the stack rejects the push outright (sync throw).
+    expect(() => s.push("model3d/a.step", body("x"))).toThrow(
+      /no writable layer/,
+    );
+  });
+});
+
 describe("realtime resync", () => {
   it("resyncs on reconnect when it missed changes while disconnected", async () => {
     const cloud = new FakeCloud();

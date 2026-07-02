@@ -46,15 +46,25 @@ export interface SyncChange {
  * One layer in a client-merged stack. The bridge opens an ordered list and merges
  * top-wins by path; writes target the top `writable` layer. `static` layers are
  * immutable read-only (cacheable HTTP, no socket); `live` layers are a DO room.
+ * `sparse` layers are static layers whose bodies are fetched lazily per read
+ * (only the manifest syncs eagerly; there is no bundle) — for namespaces too
+ * large to mirror, where the client needs an unpredictable subset.
  */
 export interface LayerDescriptor {
   namespace: string;
-  kind: "static" | "live";
-  /** static: CDN/R2 base; live: DO/party base */
+  kind: "static" | "live" | "sparse";
+  /** static/sparse: CDN/R2 base; live: DO/party base */
   url: string;
   /** live: bearer carried on WS + HTTP */
   token?: string;
   writable?: boolean;
+  /**
+   * sparse: overrides where a single body is fetched from. `{hash}` and `{path}`
+   * expand to the manifest entry's hash and the URL-encoded path — so bodies can
+   * live at content-addressed keys shared across snapshots. Default (absent):
+   * `<url>/body/<path>` like a static layer.
+   */
+  bodyUrlTemplate?: string;
 }
 
 /* ---------------------------------------------------------------- messages --

@@ -10,12 +10,14 @@ import type { LayerHttp, RealtimeChannel } from "./transport.js";
 
 export interface SyncLayerDeps {
   namespace: string;
-  kind: "static" | "live";
+  kind: "static" | "live" | "sparse";
   writable: boolean;
   store: LayerStore;
   http: LayerHttp;
   /** live only */
   channel?: RealtimeChannel;
+  /** sparse only: content-addressed body location ({hash}/{path} placeholders) */
+  bodyUrlTemplate?: string;
   /** notify the stack of a low-level change (path-scoped) */
   onChange?: (c: SyncChange) => void;
 }
@@ -34,12 +36,13 @@ function clone(m: SyncManifest): SyncManifest {
  */
 export class SyncLayer {
   readonly namespace: string;
-  readonly kind: "static" | "live";
+  readonly kind: "static" | "live" | "sparse";
   readonly writable: boolean;
 
   private readonly store: LayerStore;
   private readonly http: LayerHttp;
   private readonly channel?: RealtimeChannel;
+  private readonly bodyUrlTemplate?: string;
   private readonly onChange?: (c: SyncChange) => void;
 
   private manifest: SyncManifest = emptyManifest();
@@ -47,6 +50,8 @@ export class SyncLayer {
   /** Paths with an in-flight local push, so the server's echo of our own write
    *  isn't re-fetched (the broadcast can beat the PUT response). */
   private readonly pendingPush = new Set<string>();
+  /** sparse: in-flight lazy body fetches, coalesced per path. */
+  private readonly inflight = new Map<string, Promise<Uint8Array | null>>();
 
   constructor(d: SyncLayerDeps) {
     this.namespace = d.namespace;
@@ -55,13 +60,16 @@ export class SyncLayer {
     this.store = d.store;
     this.http = d.http;
     this.channel = d.channel;
+    this.bodyUrlTemplate = d.bodyUrlTemplate;
     this.onChange = d.onChange;
   }
 
   /** Hydrate from cache then reconcile; wire realtime for `live` layers. */
   async open(): Promise<void> {
     this.manifest = (await this.store.getManifest()) ?? emptyManifest();
-    if (Object.keys(this.manifest.entries).length === 0) await this.init();
+    // Sparse layers never bundle: only the manifest syncs; bodies come per read.
+    if (this.kind === "sparse") await this.sync();
+    else if (Object.keys(this.manifest.entries).length === 0) await this.init();
     else await this.sync();
 
     if (this.channel) {
@@ -95,6 +103,17 @@ export class SyncLayer {
     // gating on version would mask a changed body (e.g. a re-mirror). diffManifest
     // is a cheap in-memory compare; when nothing changed it yields no fetches.
     const diff = diffManifest(this.manifest, remote);
+    if (this.kind === "sparse") {
+      // No body downloads here — a changed hash just invalidates any cached copy
+      // (the next read re-fetches).  diff.put is mostly "new, never cached" paths;
+      // only ones we previously listed can hold a stale body worth dropping.
+      const stale = diff.put.filter((p) => this.manifest.entries[p] !== undefined);
+      for (const p of [...stale, ...diff.del]) await this.store.delBody(p);
+      await this.store.setManifest(remote);
+      this.manifest = remote;
+      for (const p of diff.del) this.onChange?.({ op: "del", path: p, version: remote.version });
+      return;
+    }
     if (diff.put.length) await this.store.bulkPut(await this.http.getBodies(diff.put));
     for (const p of diff.del) await this.store.delBody(p);
     await this.store.setManifest(remote);
@@ -239,7 +258,46 @@ export class SyncLayer {
   }
 
   getBody(path: string): Promise<Uint8Array | null> {
-    return this.store.getBody(path);
+    if (this.kind !== "sparse") return this.store.getBody(path);
+    return this.sparseRead(path);
+  }
+
+  /** sparse: serve from cache, else lazily fetch-and-cache one body. Fetch
+   *  failures resolve to null (the caller treats the path as absent) and are NOT
+   *  cached — the next read retries. Concurrent reads of one path coalesce. */
+  private async sparseRead(path: string): Promise<Uint8Array | null> {
+    const cached = await this.store.getBody(path);
+    if (cached) return cached;
+    const entry = this.manifest.entries[path];
+    if (!entry) return null;
+
+    let p = this.inflight.get(path);
+    if (!p) {
+      p = this.fetchSparseBody(path, entry).finally(() => this.inflight.delete(path));
+      this.inflight.set(path, p);
+    }
+    return p;
+  }
+
+  private async fetchSparseBody(path: string, entry: SyncEntry): Promise<Uint8Array | null> {
+    try {
+      let body: Uint8Array;
+      if (this.bodyUrlTemplate) {
+        const url = this.bodyUrlTemplate
+          .replace("{hash}", entry.hash)
+          .replace("{path}", encodeURIComponent(path));
+        body = await this.http.getBodyFromUrl(url);
+      } else {
+        const got = await this.http.getBodies([path]);
+        const first = got[0];
+        if (!first) return null;
+        body = first[1];
+      }
+      await this.store.putBody(path, body);
+      return body;
+    } catch {
+      return null;
+    }
   }
 
   /**
