@@ -39,6 +39,8 @@ import { emptyKicadDelta, type KicadDelta } from "./kicad-delta.js";
 export const Y_KDOC_META = "kdoc_meta";
 export const Y_KDOC_ITEMS = "kdoc_items";
 export const Y_KDOC_LAYOUT = "kdoc_layout";
+/** kdoc_meta key holding the winning seeder's nonce (see `seedDocToY`). */
+export const Y_KDOC_SEED_NONCE = "seedNonce";
 
 export type KicadYItems = Y.Map<Y.Map<unknown>>;
 
@@ -94,6 +96,67 @@ export function docToY(doc: KicadDoc, ydoc: Y.Doc, origin?: unknown): void {
 }
 
 /**
+ * Seed a Y.Doc from a `KicadDoc` with DOUBLE-SEED ARBITRATION (bug 06). The
+ * seed-vs-adopt decision is a client-side check-then-act, so two clients opening
+ * the same fresh room can both observe "empty" and both seed. `kdoc_meta` and
+ * `kdoc_items` converge per key (Y.Map LWW), but `kdoc_layout` is a Y.Array:
+ * both insert sequences survive the merge and every root renders twice, forever.
+ *
+ * This writes `nonce` into `kdoc_meta.seedNonce` in the same transaction as the
+ * seed and returns a RETRACTOR that surgically deletes exactly the layout slots
+ * this seed inserted (identified by insertion id — this client, this clock
+ * window — so slots appended by later edits are untouched). The runtime watches
+ * `seedNonce`: when the merged value is a FOREIGN nonce, this client's seed lost
+ * the LWW race and it calls the retractor; the winner's sequence remains as the
+ * single clean layout.
+ */
+export function seedDocToY(
+  doc: KicadDoc,
+  ydoc: Y.Doc,
+  origin: unknown,
+  nonce: string,
+): () => void {
+  const clientId = ydoc.clientID;
+  const before = Y.getState(ydoc.store, clientId);
+  ydoc.transact(() => {
+    docToY(doc, ydoc, origin);
+    ydoc.getMap(Y_KDOC_META).set(Y_KDOC_SEED_NONCE, nonce);
+  }, origin);
+  const after = Y.getState(ydoc.store, clientId);
+
+  return () => {
+    const layout = ydoc.getArray<Slot>(Y_KDOC_LAYOUT);
+    // Walk the Y.Array's item chain to find OUR seed's inserts by insertion id.
+    // (Internal yjs structures — Item.id/.deleted/.countable — are stable across
+    // the pinned yjs major and covered by the double-seed regression tests.)
+    interface YItemNode {
+      id: { client: number; clock: number };
+      length: number;
+      deleted: boolean;
+      countable: boolean;
+      right: YItemNode | null;
+    }
+    ydoc.transact(() => {
+      const ranges: Array<[number, number]> = [];
+      let idx = 0;
+      let node = (layout as unknown as { _start: YItemNode | null })._start;
+      for (; node; node = node.right) {
+        if (node.deleted || !node.countable) continue;
+        if (
+          node.id.client === clientId &&
+          node.id.clock >= before &&
+          node.id.clock < after
+        ) {
+          ranges.push([idx, node.length]);
+        }
+        idx += node.length;
+      }
+      for (const [start, len] of ranges.reverse()) layout.delete(start, len);
+    }, origin);
+  };
+}
+
+/**
  * Whether a Y.Doc has been seeded with document state at all. `docToY` always
  * writes `kdoc_meta.root` and `kdoc_layout`, so a seeded doc is detectable even
  * when it has NO uuid items — which is the case for drawing sheets
@@ -138,6 +201,31 @@ export function ydocUpdateToKicadDoc(update: Uint8Array): KicadDoc {
 }
 
 /**
+ * Deep-remove every `{item: uuid}` slot from a body (slots recurse through
+ * `(k …)` children). Returns the pruned copy, or null when nothing referenced
+ * the uuid (so callers can skip a no-op Y write).
+ */
+function pruneItemRefs(slots: Slot[], uuid: string): Slot[] | null {
+  let changed = false;
+  const walk = (list: Slot[]): Slot[] =>
+    list
+      .filter((s) => {
+        const drop = typeof s === "object" && "item" in s && s.item === uuid;
+        if (drop) changed = true;
+        return !drop;
+      })
+      .map((s) => {
+        if (typeof s === "object" && "k" in s) {
+          const v = walk(s.v);
+          return v === s.v ? s : { k: s.k, v };
+        }
+        return s;
+      });
+  const out = walk(slots);
+  return changed ? out : null;
+}
+
+/**
  * Write a `KicadDelta` into the Y.Doc in one transaction (added/updated upsert,
  * removed delete), tagged with `origin` for the runtime's echo suppression.
  *
@@ -154,7 +242,24 @@ export function applyDeltaToY(ydoc: Y.Doc, delta: KicadDelta, origin?: unknown):
     const items = kicadItemsMap(ydoc);
     for (const it of delta.added) upsertYItem(items, it.uuid, it);
     for (const it of delta.updated) upsertYItem(items, it.uuid, it);
-    for (const uuid of delta.removed) items.delete(uuid);
+    for (const uuid of delta.removed) {
+      // Before deleting a CHILD item, prune its `{item: uuid}` slot from the
+      // surviving parent's body — a dangling reference makes renderItem/docToFile
+      // throw, poisoning the room's materialization until the parent is next
+      // re-emitted wholesale. Keeps "file recoverable from the Y.Doc alone"
+      // unconditionally true, whatever the emitter sent.
+      const ym = items.get(uuid);
+      const parentUuid = (ym?.get("parent") ?? null) as string | null;
+      if (parentUuid !== null) {
+        const parentYm = items.get(parentUuid);
+        if (parentYm) {
+          const body = (parentYm.get("body") ?? []) as Slot[];
+          const pruned = pruneItemRefs(body, uuid);
+          if (pruned) parentYm.set("body", pruned);
+        }
+      }
+      items.delete(uuid);
+    }
 
     const layout = ydoc.getArray<Slot>(Y_KDOC_LAYOUT);
     // Slots to drop: removed uuids, plus upserts that now have a parent (a kept

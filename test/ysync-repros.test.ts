@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { applyDeltaToY, docToY, Y_KDOC_LAYOUT, yToDoc } from "../src/kicad-y.js";
+import {
+  applyDeltaToY,
+  docToY,
+  seedDocToY,
+  Y_KDOC_LAYOUT,
+  Y_KDOC_META,
+  Y_KDOC_SEED_NONCE,
+  yToDoc,
+} from "../src/kicad-y.js";
 import { docToFile, fileToDoc, renderItem, type Slot } from "../src/kicad-doc.js";
 
 /**
@@ -38,21 +46,20 @@ describe("bug 03 — child-only removal leaves a dangling {item} slot in the par
     return ydoc;
   }
 
-  it.fails("the parent still renders after a child-only removal", () => {
+  it("the parent still renders after a child-only removal", () => {
     const doc = yToDoc(removeChildOnly());
     expect(doc.items["fld-1"]).toBeUndefined(); // the item itself IS deleted
-    // CORRECT: the parent's body no longer references the child, so it renders.
-    // TODAY: fp-1's body still holds {item:"fld-1"} → "renderItem: missing item".
+    // The parent's body no longer references the child (applyDeltaToY prunes
+    // the {item} slot from the surviving parent), so it renders.
     const text = renderItem(doc, "fp-1");
     expect(text).not.toContain("fld-1");
     expect(text).toContain("pad-1"); // the sibling child survives
   });
 
-  it.fails("the doc still materializes (docToFile) after a child-only removal", () => {
+  it("the doc still materializes (docToFile) after a child-only removal", () => {
     const doc = yToDoc(removeChildOnly());
-    // CORRECT: the room stays materializable (the "file recoverable from the
-    // Y.Doc alone" invariant, ysync 0005). TODAY: docToFile throws through the
-    // same dangling slot, poisoning ydoc-mode opens of the room.
+    // The room stays materializable (the "file recoverable from the Y.Doc
+    // alone" invariant, ysync 0005), whatever wire shape the emitter sent.
     const text = docToFile(doc);
     expect(text).not.toContain("fld-1");
     expect(text).toContain("seg-1"); // untouched root keeps its slot
@@ -62,49 +69,87 @@ describe("bug 03 — child-only removal leaves a dangling {item} slot in the par
 // ── Bug 06 — concurrent first-seed duplicates kdoc_layout ────────────────────
 // 06-bug-concurrent-seed-duplicates-layout.md: seed-vs-adopt is a client-side
 // check-then-act, so two clients opening the same fresh room can both observe
-// "empty" and both run docToY. kdoc_meta/kdoc_items converge (Y.Map LWW), but
+// "empty" and both seed. kdoc_meta/kdoc_items converge (Y.Map LWW), but
 // kdoc_layout is a Y.Array: each client's delete sees only its own (empty)
 // view, both insert sequences survive the merge, and nothing ever heals it.
+// FIX: `seedDocToY` stamps a nonce into kdoc_meta in the seed transaction and
+// returns a retractor; the LWW loser retracts exactly its own layout inserts
+// (the runtime binding drives this off a kdoc_meta observer).
 
-describe("bug 06 — concurrent first-seed duplicates kdoc_layout", () => {
-  function concurrentSeed(): { kdoc: ReturnType<typeof fileToDoc>; a: Y.Doc; b: Y.Doc } {
+describe("bug 06 — concurrent first-seed, arbitrated (seedDocToY)", () => {
+  function concurrentSeed() {
     const kdoc = fileToDoc(PCB);
     const a = new Y.Doc();
     const b = new Y.Doc();
     // Both clients pass the ydocHasState check before seeing each other (the
     // network round-trip window / the whole BroadcastChannel settleMs)…
-    docToY(kdoc, a, "seed-a");
-    docToY(kdoc, b, "seed-b");
+    const retractA = seedDocToY(kdoc, a, "seed-a", "nonce-a");
+    const retractB = seedDocToY(kdoc, b, "seed-b", "nonce-b");
     // …then their seed transactions exchange.
     Y.applyUpdate(a, Y.encodeStateAsUpdate(b));
     Y.applyUpdate(b, Y.encodeStateAsUpdate(a));
-    return { kdoc, a, b };
+    return { kdoc, a, b, retractA, retractB };
+  }
+
+  /** What the binding does on each client: the LWW loser retracts its inserts. */
+  function arbitrate(s: ReturnType<typeof concurrentSeed>): void {
+    const winner = s.a.getMap(Y_KDOC_META).get(Y_KDOC_SEED_NONCE);
+    expect(s.b.getMap(Y_KDOC_META).get(Y_KDOC_SEED_NONCE)).toBe(winner); // same LWW outcome
+    if (winner !== "nonce-a") s.retractA();
+    if (winner !== "nonce-b") s.retractB();
+    Y.applyUpdate(s.a, Y.encodeStateAsUpdate(s.b));
+    Y.applyUpdate(s.b, Y.encodeStateAsUpdate(s.a));
   }
 
   it("both clients converge on the same merged state (CRDT determinism)", () => {
     const { a, b } = concurrentSeed();
-    // Green baseline: the merge is deterministic — both docs corrupt IDENTICALLY,
-    // which is why nothing downstream can tell the room is damaged.
+    // Green baseline: the merge is deterministic on both docs — which is what
+    // makes the nonce arbitration sound (both clients see the same winner).
     expect(docToFile(yToDoc(a))).toBe(docToFile(yToDoc(b)));
   });
 
-  it.fails("the merged layout holds each root slot exactly once", () => {
-    const { a } = concurrentSeed();
-    const layout = a.getArray<Slot>(Y_KDOC_LAYOUT).toArray();
-    const fpSlots = layout.filter((s) => "item" in s && s.item === "fp-1");
-    // CORRECT: seeding the same file twice must be idempotent per root uuid.
-    // TODAY: 2 slots — one per seeder — and every preamble form is doubled too.
+  it("the merged layout holds each root slot exactly once", () => {
+    const s = concurrentSeed();
+    arbitrate(s);
+    const layout = s.a.getArray<Slot>(Y_KDOC_LAYOUT).toArray();
+    const fpSlots = layout.filter((x) => "item" in x && x.item === "fp-1");
     expect(fpSlots).toHaveLength(1);
   });
 
-  it.fails("the merged doc materializes the single-seed output", () => {
-    const { kdoc, a } = concurrentSeed();
+  it("the merged doc materializes the single-seed output", () => {
+    const s = concurrentSeed();
+    arbitrate(s);
     const single = new Y.Doc();
-    docToY(kdoc, single);
-    // CORRECT: same file, same room → same materialization as one seeder.
-    // TODAY: every root item renders twice (each duplicate {item} slot resolves;
-    // the per-render `seen` set only guards cycles), the preamble doubles, and
-    // ydocHasState is now true so no client ever re-seeds — permanent corruption.
-    expect(docToFile(yToDoc(a))).toBe(docToFile(yToDoc(single)));
+    docToY(s.kdoc, single);
+    // Same file, same room → same materialization as one seeder, on BOTH tabs.
+    expect(docToFile(yToDoc(s.a))).toBe(docToFile(yToDoc(single)));
+    expect(docToFile(yToDoc(s.b))).toBe(docToFile(yToDoc(single)));
+  });
+
+  it("retraction only removes the seed's own inserts — later edits survive", () => {
+    const s = concurrentSeed();
+    // The loser appends a NEW root slot (a later local edit) before arbitration fires.
+    const winner = s.a.getMap(Y_KDOC_META).get(Y_KDOC_SEED_NONCE);
+    const loserDoc = winner === "nonce-a" ? s.b : s.a;
+    applyDeltaToY(
+      loserDoc,
+      {
+        added: [
+          {
+            uuid: "seg-2",
+            type: "segment",
+            parent: null,
+            body: ["(start 5 5)", "(end 6 6)"],
+          },
+        ],
+        updated: [],
+        removed: [],
+      },
+      "edit",
+    );
+    arbitrate(s);
+    const layout = s.a.getArray<Slot>(Y_KDOC_LAYOUT).toArray();
+    expect(layout.filter((x) => "item" in x && x.item === "fp-1")).toHaveLength(1);
+    expect(layout.filter((x) => "item" in x && x.item === "seg-2")).toHaveLength(1);
   });
 });
