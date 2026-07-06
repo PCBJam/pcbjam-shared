@@ -22,6 +22,8 @@ export * from "./items-wire.js";
 export * from "./drift.js";
 export * from "./sync-wire.js";
 export * from "./presence-wire.js";
+export * from "./comments-wire.js";
+export * from "./comments-y.js";
 
 const c = initContract();
 
