@@ -30,6 +30,8 @@ import * as Y from "yjs";
 import {
   kicadDocSchema,
   kicadItemSchema,
+  libSymbolsFromLayout,
+  slotFromSexpr,
   type KicadDoc,
   type KicadItem,
   type Slot,
@@ -39,6 +41,14 @@ import { emptyKicadDelta, type KicadDelta } from "./kicad-delta.js";
 export const Y_KDOC_META = "kdoc_meta";
 export const Y_KDOC_ITEMS = "kdoc_items";
 export const Y_KDOC_LAYOUT = "kdoc_layout";
+/**
+ * Embedded library definitions (miss 08): lib id → `(symbol …)` definition
+ * text. A dedicated Y.Map so concurrent placements of DIFFERENT symbols merge
+ * per definition instead of LWW-clobbering one layout slot. The layout's
+ * `lib_symbols` slot is kept EMPTY in the doc; `yToDoc` re-injects the map's
+ * definitions (sorted by lib id — the same order KiCad's writer emits).
+ */
+export const Y_KDOC_LIBSYMBOLS = "kdoc_libsymbols";
 /** kdoc_meta key holding the winning seeder's nonce (see `seedDocToY`). */
 export const Y_KDOC_SEED_NONCE = "seedNonce";
 
@@ -49,6 +59,11 @@ export function kicadItemsMap(ydoc: Y.Doc): KicadYItems {
   return ydoc.getMap<Y.Map<unknown>>(Y_KDOC_ITEMS);
 }
 
+/** The doc's embedded library definitions (lib id → definition text). */
+export function kicadLibSymbolsMap(ydoc: Y.Doc): Y.Map<string> {
+  return ydoc.getMap<string>(Y_KDOC_LIBSYMBOLS);
+}
+
 /** Read one item Y.Map back into a validated `KicadItem`. */
 export function yToItem(ym: Y.Map<unknown>): KicadItem {
   return kicadItemSchema.parse({
@@ -56,6 +71,39 @@ export function yToItem(ym: Y.Map<unknown>): KicadItem {
     parent: ym.get("parent") ?? null,
     body: ym.get("body") ?? [],
   });
+}
+
+/**
+ * `yToItem` without the zod parse — the observer HOT PATH (opt 12): the
+ * schema walk of every body tree dominated remote-batch cost at scale. Y item
+ * content is written exclusively by this module's writers from already-validated
+ * sources (the wire parse zod-validates at the trust boundary; seed/materialize
+ * paths keep the checked read).
+ */
+export function yToItemUnchecked(ym: Y.Map<unknown>): KicadItem {
+  return {
+    type: (ym.get("type") as string) ?? "",
+    parent: (ym.get("parent") as string | null) ?? null,
+    body: (ym.get("body") as Slot[]) ?? [],
+  };
+}
+
+/**
+ * Merge library definitions into `kdoc_libsymbols` (additive, LWW per id).
+ * Used by the runtime when a wire blob carries `(lib_symbols …)` context.
+ */
+export function upsertLibSymbolsToY(
+  ydoc: Y.Doc,
+  defs: Record<string, string>,
+  origin?: unknown,
+): void {
+  if (Object.keys(defs).length === 0) return;
+  ydoc.transact(() => {
+    const libs = kicadLibSymbolsMap(ydoc);
+    for (const [id, def] of Object.entries(defs)) {
+      if (libs.get(id) !== def) libs.set(id, def);
+    }
+  }, origin);
 }
 
 /** Upsert an item into the items map, writing only the keys that changed. */
@@ -89,9 +137,22 @@ export function docToY(doc: KicadDoc, ydoc: Y.Doc, origin?: unknown): void {
     for (const [uuid, item] of Object.entries(doc.items)) {
       upsertYItem(items, uuid, item);
     }
+    // Library definitions live in their own per-id map (see Y_KDOC_LIBSYMBOLS);
+    // the layout keeps an EMPTY lib_symbols slot as the injection point.
+    const defs = libSymbolsFromLayout(doc.layout, doc.items);
+    const libs = kicadLibSymbolsMap(ydoc);
+    for (const id of [...libs.keys()]) {
+      if (!(id in defs)) libs.delete(id);
+    }
+    for (const [id, def] of Object.entries(defs)) {
+      if (libs.get(id) !== def) libs.set(id, def);
+    }
+    const layoutOut = doc.layout.map(
+      (s): Slot => ("k" in s && s.k === "lib_symbols" ? { k: s.k, v: [] } : s),
+    );
     const layout = ydoc.getArray<Slot>(Y_KDOC_LAYOUT);
     layout.delete(0, layout.length);
-    layout.insert(0, doc.layout);
+    layout.insert(0, layoutOut);
   }, origin);
 }
 
@@ -180,6 +241,25 @@ export function yToDoc(ydoc: Y.Doc): KicadDoc {
     items[uuid] = yToItem(ym);
   });
   const layout = ydoc.getArray<Slot>(Y_KDOC_LAYOUT).toArray();
+
+  // Re-inject the library definitions into the layout's lib_symbols slot
+  // (sorted by lib id — the order KiCad's own writer produces, since its lib
+  // cache is a sorted map).
+  const libs = kicadLibSymbolsMap(ydoc);
+  if (libs.size > 0) {
+    const defSlots = [...libs.keys()]
+      .sort()
+      .map((id) => slotFromSexpr(libs.get(id)!, items));
+    const at = layout.findIndex((s) => "k" in s && s.k === "lib_symbols");
+    const slot: Slot = { k: "lib_symbols", v: defSlots };
+    if (at >= 0) {
+      layout[at] = slot;
+    } else {
+      const firstItem = layout.findIndex((s) => "item" in s);
+      layout.splice(firstItem < 0 ? layout.length : firstItem, 0, slot);
+    }
+  }
+
   return kicadDocSchema.parse({ root, items, layout });
 }
 
@@ -283,6 +363,83 @@ export function applyDeltaToY(ydoc: Y.Doc, delta: KicadDelta, origin?: unknown):
       .map((it): Slot => ({ item: it.uuid }));
     if (newRoots.length) layout.push(newRoots);
   }, origin);
+}
+
+/**
+ * Coarse non-item layout sync from a freshly SAVED file (miss 08). Item slots
+ * belong to the item sync and are never touched; everything else — title block,
+ * paper, setup, settings… — reconciles per HEAD KEYWORD: when a head's slot
+ * group in the saved file differs from the doc's, the doc's group is replaced
+ * wholesale (LWW at head granularity; concurrent edits to DIFFERENT heads
+ * merge, same-head edits last-write-win). Coarse but converging — without it a
+ * settings edit diverges silently forever, and in ydoc mode the author's own
+ * edit is lost on the next open.
+ *
+ * Deliberate freezes:
+ * - `net` (pcbnew's root net table): net-creating edits aren't possible in the
+ *   standalone; reconciling a repeated positional head would be guesswork.
+ * - `lib_symbols`: routed to the kdoc_libsymbols map instead (ADDITIVE only —
+ *   the saved file can't know about a peer's not-yet-applied placement, so
+ *   absent defs are kept, never deleted).
+ *
+ * Returns true when anything changed.
+ */
+export function syncLayoutToY(fileDoc: KicadDoc, ydoc: Y.Doc, origin?: unknown): boolean {
+  kicadDocSchema.parse(fileDoc);
+  const FROZEN = new Set(["net", "lib_symbols"]);
+  let changed = false;
+
+  ydoc.transact(() => {
+    // lib_symbols → the defs map, additive.
+    const defs = libSymbolsFromLayout(fileDoc.layout, fileDoc.items);
+    const libs = kicadLibSymbolsMap(ydoc);
+    for (const [id, def] of Object.entries(defs)) {
+      if (libs.get(id) !== def) {
+        libs.set(id, def);
+        changed = true;
+      }
+    }
+
+    const layout = ydoc.getArray<Slot>(Y_KDOC_LAYOUT);
+
+    const groupsOf = (slots: Slot[]): Map<string, Slot[]> => {
+      const m = new Map<string, Slot[]>();
+      for (const s of slots) {
+        if (!("k" in s) || FROZEN.has(s.k)) continue;
+        const list = m.get(s.k) ?? [];
+        list.push(s);
+        m.set(s.k, list);
+      }
+      return m;
+    };
+
+    const fileGroups = groupsOf(fileDoc.layout);
+    const heads = new Set([...fileGroups.keys(), ...groupsOf(layout.toArray()).keys()]);
+
+    for (const head of heads) {
+      const cur = layout.toArray(); // refresh after prior group mutations
+      const curGroup = cur.filter((s) => "k" in s && s.k === head);
+      const fileGroup = fileGroups.get(head) ?? [];
+      if (JSON.stringify(curGroup) === JSON.stringify(fileGroup)) continue;
+
+      // Replace the whole group: delete existing occurrences (reverse keeps
+      // indices valid), then insert the file's at the first old position (or
+      // before the first {item} slot for a brand-new head).
+      let insertAt = cur.findIndex((s) => "k" in s && s.k === head);
+      if (insertAt < 0) {
+        const firstItem = cur.findIndex((s) => "item" in s);
+        insertAt = firstItem < 0 ? cur.length : firstItem;
+      }
+      for (let i = cur.length - 1; i >= 0; i--) {
+        const s = cur[i]!;
+        if ("k" in s && s.k === head) layout.delete(i, 1);
+      }
+      if (fileGroup.length) layout.insert(Math.min(insertAt, layout.length), fileGroup);
+      changed = true;
+    }
+  }, origin);
+
+  return changed;
 }
 
 /**

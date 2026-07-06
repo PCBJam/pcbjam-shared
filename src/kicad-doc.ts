@@ -223,6 +223,61 @@ export function docToFile(doc: KicadDoc): string {
   return inner.length ? `(${doc.root} ${inner})` : `(${doc.root})`;
 }
 
+// ── lib_symbols helpers (miss 08: embedded library definitions) ──────────────
+
+/** Strip surrounding quotes from a verbatim atom ("\"Device:R\"" → "Device:R"). */
+export function unquoteAtom(atom: string): string {
+  return atom.length >= 2 && atom.startsWith('"') && atom.endsWith('"')
+    ? atom.slice(1, -1)
+    : atom;
+}
+
+/** Render one slot back to s-expr text ({item} refs resolve through `items`). */
+export function renderSlotText(
+  slot: Slot,
+  items: Record<string, KicadItem> = {},
+): string {
+  return renderSlot(slot, items, new Set());
+}
+
+/**
+ * Parse ONE `(k …)` form into a field slot. Any uuid-bearing descendants hoist
+ * into `items` exactly like `fileToDoc` would (library definitions carry none in
+ * practice, but losslessness must not depend on that).
+ */
+export function slotFromSexpr(text: string, items: Record<string, KicadItem>): Slot {
+  const forms = parseSexpr(text);
+  if (forms.length !== 1 || !Array.isArray(forms[0])) {
+    throw new Error("slotFromSexpr: expected exactly one (…) form");
+  }
+  const node = forms[0] as SNode[];
+  const head = node[0];
+  if (typeof head !== "string") {
+    throw new Error("slotFromSexpr: form has no leading name atom");
+  }
+  return { k: head, v: parseSlots(node.slice(1), null, items) };
+}
+
+/**
+ * The embedded library definitions of a layout's `(lib_symbols …)` slot, keyed
+ * by lib id ("Device:R"), each rendered to its `(symbol …)` definition text.
+ */
+export function libSymbolsFromLayout(
+  layout: Slot[],
+  items: Record<string, KicadItem>,
+): Record<string, string> {
+  const defs: Record<string, string> = {};
+  for (const slot of layout) {
+    if (!("k" in slot) || slot.k !== "lib_symbols") continue;
+    for (const def of slot.v) {
+      if (!("k" in def) || def.k !== "symbol") continue;
+      const id = args(def.v)[0];
+      if (id) defs[unquoteAtom(id)] = renderSlotText(def, items);
+    }
+  }
+  return defs;
+}
+
 // ── Accessors: ergonomic (lossy) reads over slot lists ───────────────────────
 
 /** The positional atoms of a slot list, verbatim, in order. */
