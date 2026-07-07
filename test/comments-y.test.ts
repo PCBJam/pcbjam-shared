@@ -10,6 +10,7 @@ import {
   observeComments,
   removeMessage,
   resolveAnchor,
+  setThreadAnchor,
   setThreadResolved,
 } from "../src/comments-y.js";
 import { docToFile, fileToDoc } from "../src/kicad-doc.js";
@@ -186,6 +187,16 @@ describe("anchor resolution", () => {
     // Delete the item → the pin falls back to its captured absolute position.
     applyDeltaToY(ydoc, { added: [], removed: ["fp-1"], updated: [] });
     expect(resolveAnchor(ydoc, anchor, 1e6)).toEqual({ x: 100e6, y: 50e6, detached: true });
+  });
+
+  it("setThreadAnchor re-pins a thread (drag), LWW across peers", () => {
+    const { a, b } = pair();
+    const t = createThread(a, { anchor: { pos: { x: 1, y: 2 } }, author: "a", body: "x", now: 1 });
+
+    expect(setThreadAnchor(b, t, { pos: { x: 30, y: 40 } })).toBe(true);
+    expect(getThread(a, t)!.anchor).toEqual({ pos: { x: 30, y: 40 } });
+    expect(resolveAnchor(a, getThread(a, t)!.anchor, 1e6)).toEqual({ x: 30, y: 40, detached: false });
+    expect(setThreadAnchor(a, "missing", { pos: { x: 0, y: 0 } })).toBe(false);
   });
 
   it("item-less anchors sit at their absolute position, never detached", () => {

@@ -136,6 +136,17 @@ export function removeMessage(
   return "removed";
 }
 
+/** Re-pin a thread (drag): replace its anchor wholesale (LWW — a concurrent
+ *  drag of the same pin converges to one position). */
+export function setThreadAnchor(ydoc: Y.Doc, threadId: string, anchor: CommentAnchor): boolean {
+  const thread = commentsYMap(ydoc).get(threadId);
+
+  if (!thread) return false;
+
+  thread.set("anchor", anchor);
+  return true;
+}
+
 /** Resolve (close) / reopen a thread. Independent LWW key — never conflicts
  *  with concurrent replies. */
 export function setThreadResolved(ydoc: Y.Doc, threadId: string, resolved: boolean): boolean {
