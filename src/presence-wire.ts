@@ -36,6 +36,13 @@ export const presenceStateSchema = z.object({
   cursor: z.object({ x: z.number(), y: z.number() }).nullable(),
   /** KIID strings of the client's current selection. Published by 0002. */
   selection: z.array(z.string()),
+  /**
+   * pcbnew only (0006): for each selected footprint, its schematic link —
+   * the `FOOTPRINT::GetPath()` KIID_PATH string (`/<sheetUuid>/…/<symbolUuid>`).
+   * Lets an eeschema peer highlight the corresponding symbols. Optional so
+   * states from older builds (and eeschema, which never sets it) validate.
+   */
+  selectionPaths: z.array(z.string()).optional(),
   /** ms epoch of the last field change (display-only, e.g. stale fadeout). */
   updatedAt: z.number(),
 });
@@ -68,6 +75,17 @@ export const PRESENCE_COLORS = [
  * same color for the same user with zero coordination; collisions between
  * different users are acceptable (palette of 12).
  */
+/**
+ * The schematic symbol uuid a footprint's `GetPath()` string points at — the
+ * KIID_PATH's last segment (`/<sheetUuid>/…/<symbolUuid>` → `<symbolUuid>`).
+ * Cross-app selection (0006) derives eeschema highlight targets from pcbnew
+ * peers' `selectionPaths` with this. Returns null for empty/degenerate paths.
+ */
+export function symbolUuidFromFootprintPath(path: string): string | null {
+  const last = path.split("/").filter(Boolean).pop();
+  return last ?? null;
+}
+
 export function colorForUser(slug: string): string {
   let h = 0x811c9dc5;
   for (let i = 0; i < slug.length; i++) {

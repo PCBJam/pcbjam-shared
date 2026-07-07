@@ -232,6 +232,19 @@ export function collabRoomId(projectId: string, docPath: string): string {
 }
 
 /**
+ * The project-wide PRESENCE room (collab-presence 0006): awareness-only, no
+ * document content — every collab-capable tool joins it alongside its per-file
+ * room(s) so cross-app features (eeschema⇄pcbnew selection highlight) can see
+ * peers in the project's OTHER documents. The `~presence` token cannot collide
+ * with a real `docPath` (project files are always relative paths without `~`).
+ * Backends should not persist these rooms (nothing writes to their Y.Doc).
+ */
+export const PRESENCE_DOC_PATH = "~presence";
+export function presenceRoomId(projectId: string): string {
+  return `${projectId}:${PRESENCE_DOC_PATH}`;
+}
+
+/**
  * Connection params a Yjs provider sends to the sync backend (query string).
  * `token` is the (thin, for now) auth credential; backends MAY require it.
  */

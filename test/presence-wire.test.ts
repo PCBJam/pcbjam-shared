@@ -3,8 +3,10 @@ import {
   colorForUser,
   PRESENCE_COLORS,
   presenceStateSchema,
+  symbolUuidFromFootprintPath,
   type PresenceState,
 } from "../src/presence-wire.js";
+import { collabRoomId, presenceRoomId } from "../src/schemas.js";
 
 describe("colorForUser", () => {
   it("is deterministic and stays inside the palette", () => {
@@ -22,6 +24,31 @@ describe("colorForUser", () => {
   });
 });
 
+describe("symbolUuidFromFootprintPath", () => {
+  it("returns the KIID_PATH's last segment", () => {
+    expect(symbolUuidFromFootprintPath("/00000000-0000-0000-0000-00004549f4be")).toBe(
+      "00000000-0000-0000-0000-00004549f4be",
+    );
+    expect(
+      symbolUuidFromFootprintPath("/aaaa0000-0000-0000-0000-000000000001/bbbb0000-0000-0000-0000-000000000002"),
+    ).toBe("bbbb0000-0000-0000-0000-000000000002");
+  });
+
+  it("returns null for degenerate paths", () => {
+    expect(symbolUuidFromFootprintPath("")).toBeNull();
+    expect(symbolUuidFromFootprintPath("/")).toBeNull();
+    expect(symbolUuidFromFootprintPath("//")).toBeNull();
+  });
+});
+
+describe("presenceRoomId", () => {
+  it("cannot collide with any real docPath room", () => {
+    expect(presenceRoomId("P1")).toBe("P1:~presence");
+    // Project files are relative POSIX paths — `~presence` is not a valid one.
+    expect(presenceRoomId("P1")).not.toBe(collabRoomId("P1", "board.kicad_pcb"));
+  });
+});
+
 describe("presenceStateSchema", () => {
   const valid: PresenceState = {
     user: { id: "alice", name: "alice", color: colorForUser("alice") },
@@ -35,6 +62,19 @@ describe("presenceStateSchema", () => {
     expect(presenceStateSchema.parse(valid)).toEqual(valid);
     const withSheet = { ...valid, sheetPath: "sub/child.kicad_sch", cursor: null };
     expect(presenceStateSchema.parse(withSheet)).toEqual(withSheet);
+  });
+
+  it("round-trips selectionPaths and rejects non-string entries (0006)", () => {
+    const withPaths = {
+      ...valid,
+      selectionPaths: ["/00000000-0000-0000-0000-00004549f4be"],
+    };
+    expect(presenceStateSchema.parse(withPaths)).toEqual(withPaths);
+    // Absent field (older builds / eeschema) still validates — see `valid` above.
+    expect(presenceStateSchema.safeParse(valid).success).toBe(true);
+    expect(
+      presenceStateSchema.safeParse({ ...valid, selectionPaths: [42] }).success,
+    ).toBe(false);
   });
 
   it("rejects a state missing the user identity", () => {
