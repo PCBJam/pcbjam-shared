@@ -43,12 +43,31 @@ export const presenceStateSchema = z.object({
    * states from older builds (and eeschema, which never sets it) validate.
    */
   selectionPaths: z.array(z.string()).optional(),
+  /**
+   * Follow-user (0008): the visible world RECT — center + half-extents in
+   * KiCad IU. Deliberately NOT the zoom: px-per-IU is window-size dependent,
+   * so a follower fits this rect with its OWN canvas size ("contain") and
+   * different monitors still see the same world region. Optional so states
+   * from older builds (and canvas-less tools) validate; null while the
+   * viewport is unknown.
+   */
+  viewport: z
+    .object({
+      cx: z.number(),
+      cy: z.number(),
+      halfW: z.number().positive(),
+      halfH: z.number().positive(),
+    })
+    .nullable()
+    .optional(),
   /** ms epoch of the last field change (display-only, e.g. stale fadeout). */
   updatedAt: z.number(),
 });
 
 export type PresenceUser = z.infer<typeof presenceUserSchema>;
 export type PresenceState = z.infer<typeof presenceStateSchema>;
+/** The follow-user (0008) world rect: NonNullable of the wire's viewport. */
+export type PresenceViewport = NonNullable<PresenceState["viewport"]>;
 
 /**
  * Fixed presence palette — distinguishable hues that hold up as small avatar

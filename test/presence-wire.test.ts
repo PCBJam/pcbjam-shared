@@ -77,6 +77,24 @@ describe("presenceStateSchema", () => {
     ).toBe(false);
   });
 
+  it("accepts the optional follow-user viewport rect (0008) and rejects bad rects", () => {
+    const withViewport = {
+      ...valid,
+      viewport: { cx: 1e8, cy: 2e8, halfW: 5e7, halfH: 4e7 },
+    };
+    expect(presenceStateSchema.parse(withViewport)).toEqual(withViewport);
+    // Null while unknown, absent on older builds — both validate.
+    expect(presenceStateSchema.safeParse({ ...valid, viewport: null }).success).toBe(true);
+    expect(presenceStateSchema.safeParse(valid).success).toBe(true);
+    // Degenerate half-extents (zero/negative) are rejected, not fitted.
+    expect(
+      presenceStateSchema.safeParse({
+        ...valid,
+        viewport: { cx: 0, cy: 0, halfW: 0, halfH: 10 },
+      }).success,
+    ).toBe(false);
+  });
+
   it("rejects a state missing the user identity", () => {
     const { user: _user, ...rest } = valid;
     expect(presenceStateSchema.safeParse(rest).success).toBe(false);
