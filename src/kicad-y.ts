@@ -15,15 +15,21 @@
  * Y shape (namespaced `kdoc_*` so it can coexist with the legacy scalar "items"
  * map during migration):
  *
- *   kdoc_meta    Y.Map    { root: string }                      (document form name)
- *   kdoc_items   Y.Map    uuid → Y.Map { type: string, parent: string|null,
- *                                        body: Slot[] (plain JSON value) }
+ *   kdoc_meta    Y.Map    { root: string, sexprVersion: number }  (form name + encoding)
+ *   kdoc_items   Y.Map    uuid → Y.Map { type: string, parent: string|null, body }
  *   kdoc_layout  Y.Array  Slot[] (plain JSON entries, root form order)
  *
- * Granularity (v1): an item's `body` is ONE plain-JSON value → item-level merge.
- * The flatten step (0007) already gives per-pad / per-field / per-pin granularity
- * because those ARE separate items; deep Y types per slot (field-level merge
- * inside one item) are the later refinement.
+ * Body granularity is versioned (`kdoc_meta.sexprVersion`, ysync 0009):
+ *   v1 (absent/1): `body` is ONE plain-JSON `Slot[]` → item-level merge; any
+ *     edit rewrites the whole body (LWW drops concurrent same-item edits).
+ *   v2: `body` is a keyed NODE MAP (see `kicad-y2.ts`) → field-level merge;
+ *     concurrent edits of different slots of one item both survive, and gc-off
+ *     retained growth per edit is ~the changed fields.
+ * READERS support both (the body's type discriminates: plain array = v1, Y.Map
+ * = v2). WRITERS never mix: every write path resolves the doc's version first
+ * and writes only that shape; a fresh doc is stamped `SEXPR_VERSION_CURRENT`.
+ * The flatten step (0007) additionally gives per-pad / per-field / per-pin
+ * granularity because those ARE separate items.
  */
 
 import * as Y from "yjs";
@@ -37,6 +43,15 @@ import {
   type Slot,
 } from "./kicad-doc.js";
 import { emptyKicadDelta, type KicadDelta } from "./kicad-delta.js";
+import { Y_KDOC_COMMENTS } from "./comments-wire.js";
+import {
+  nodeFromSlots,
+  SEXPR_VERSION_CURRENT,
+  slotsFromNode,
+  pruneItemRefFromNode,
+  updateNodeFromSlots,
+  Y_KDOC_SEXPR_VERSION,
+} from "./kicad-y2.js";
 
 export const Y_KDOC_META = "kdoc_meta";
 export const Y_KDOC_ITEMS = "kdoc_items";
@@ -64,12 +79,43 @@ export function kicadLibSymbolsMap(ydoc: Y.Doc): Y.Map<string> {
   return ydoc.getMap<string>(Y_KDOC_LIBSYMBOLS);
 }
 
+/**
+ * The doc's s-expr encoding version (`kdoc_meta.sexprVersion`); absent = 1
+ * (every doc predating ysync 0009 is v1). See `SEXPR_VERSION_SUPPORTED`.
+ */
+export function ydocSexprVersion(ydoc: Y.Doc): number {
+  const v = ydoc.getMap(Y_KDOC_META).get(Y_KDOC_SEXPR_VERSION);
+  return typeof v === "number" ? v : 1;
+}
+
+/**
+ * The version WRITES must use, resolved (and for a fresh doc, stamped) inside
+ * the calling transaction: an explicit `sexprVersion` wins; a doc with state
+ * but no version predates versioning = v1; an empty doc starts at CURRENT.
+ * Writers never mix — a doc is written in its own version only (§5).
+ */
+function resolveWriteVersion(ydoc: Y.Doc): number {
+  const meta = ydoc.getMap(Y_KDOC_META);
+  const v = meta.get(Y_KDOC_SEXPR_VERSION);
+  if (typeof v === "number") return v;
+  if (ydocHasState(ydoc)) return 1;
+  meta.set(Y_KDOC_SEXPR_VERSION, SEXPR_VERSION_CURRENT);
+  return SEXPR_VERSION_CURRENT;
+}
+
+/** An item's body as plain slots, whatever its stored shape (v1/v2). */
+function bodySlots(ym: Y.Map<unknown>): Slot[] {
+  const body = ym.get("body");
+  if (body instanceof Y.Map) return slotsFromNode(body);
+  return (body as Slot[]) ?? [];
+}
+
 /** Read one item Y.Map back into a validated `KicadItem`. */
 export function yToItem(ym: Y.Map<unknown>): KicadItem {
   return kicadItemSchema.parse({
     type: ym.get("type"),
     parent: ym.get("parent") ?? null,
-    body: ym.get("body") ?? [],
+    body: bodySlots(ym),
   });
 }
 
@@ -84,7 +130,7 @@ export function yToItemUnchecked(ym: Y.Map<unknown>): KicadItem {
   return {
     type: (ym.get("type") as string) ?? "",
     parent: (ym.get("parent") as string | null) ?? null,
-    body: (ym.get("body") as Slot[]) ?? [],
+    body: bodySlots(ym),
   };
 }
 
@@ -106,17 +152,42 @@ export function upsertLibSymbolsToY(
   }, origin);
 }
 
-/** Upsert an item into the items map, writing only the keys that changed. */
-function upsertYItem(items: KicadYItems, uuid: string, item: KicadItem): void {
-  let ym = items.get(uuid);
-  if (!ym) {
-    ym = new Y.Map<unknown>();
+/**
+ * Upsert an item into the items map, writing only what changed, in the doc's
+ * body encoding (`version`). A NEW item is populated before `items.set` so a
+ * concurrent create of the same uuid LWWs wholesale (double-seed, §3.6). A
+ * body of the WRONG shape for `version` (post-conversion straggler) is
+ * replaced wholesale — writers never mix shapes within one doc.
+ */
+function upsertYItem(
+  items: KicadYItems,
+  uuid: string,
+  item: KicadItem,
+  version: number,
+): void {
+  const existing = items.get(uuid);
+  if (!existing) {
+    const ym = new Y.Map<unknown>();
+    ym.set("type", item.type);
+    ym.set("parent", item.parent);
+    ym.set("body", version >= 2 ? nodeFromSlots(item.body) : item.body);
     items.set(uuid, ym);
+    return;
   }
+  const ym = existing;
   if (ym.get("type") !== item.type) ym.set("type", item.type);
   if ((ym.get("parent") ?? null) !== item.parent) ym.set("parent", item.parent);
-  // body is one plain-JSON value (item-level merge, see header) — compare to skip no-ops.
-  if (JSON.stringify(ym.get("body")) !== JSON.stringify(item.body)) {
+  const body = ym.get("body");
+  if (version >= 2) {
+    if (body instanceof Y.Map) {
+      updateNodeFromSlots(body, item.body); // the v2 differ (kicad-y2.ts)
+    } else {
+      ym.set("body", nodeFromSlots(item.body));
+    }
+  } else if (body instanceof Y.Map) {
+    ym.set("body", item.body);
+  } else if (JSON.stringify(body) !== JSON.stringify(item.body)) {
+    // v1: body is one plain-JSON value (item-level merge) — compare to skip no-ops.
     ym.set("body", item.body);
   }
 }
@@ -129,13 +200,14 @@ function upsertYItem(items: KicadYItems, uuid: string, item: KicadItem): void {
 export function docToY(doc: KicadDoc, ydoc: Y.Doc, origin?: unknown): void {
   kicadDocSchema.parse(doc);
   ydoc.transact(() => {
+    const version = resolveWriteVersion(ydoc); // before the root write marks the doc non-empty
     ydoc.getMap(Y_KDOC_META).set("root", doc.root);
     const items = kicadItemsMap(ydoc);
     for (const uuid of [...items.keys()]) {
       if (!(uuid in doc.items)) items.delete(uuid);
     }
     for (const [uuid, item] of Object.entries(doc.items)) {
-      upsertYItem(items, uuid, item);
+      upsertYItem(items, uuid, item, version);
     }
     // Library definitions live in their own per-id map (see Y_KDOC_LIBSYMBOLS);
     // the layout keeps an EMPTY lib_symbols slot as the injection point.
@@ -280,6 +352,94 @@ export function ydocUpdateToKicadDoc(update: Uint8Array): KicadDoc {
   }
 }
 
+/** Deep-clone a Y value tree (Y.Map / Y.Array / plain JSON leaves). */
+function cloneYValue(v: unknown): unknown {
+  if (v instanceof Y.Map) {
+    const m = new Y.Map<unknown>();
+    v.forEach((val, k) => m.set(k, cloneYValue(val)));
+    return m;
+  }
+  if (v instanceof Y.Array) {
+    const a = new Y.Array<unknown>();
+    a.insert(0, v.toArray().map(cloneYValue));
+    return a;
+  }
+  return v;
+}
+
+/**
+ * Root types a kdoc room can hold BESIDES the kdoc itself. A version
+ * conversion / compaction rebuilds the doc from materialized state, so
+ * anything not listed here would be silently DROPPED — every new root type
+ * added to room docs must be registered here.
+ */
+const KDOC_EXTRA_ROOT_MAPS = [Y_KDOC_COMMENTS];
+
+export interface YdocCompaction {
+  /** The replacement state update (a fresh doc — new epoch, new clientIDs). */
+  update: Uint8Array;
+  fromVersion: number;
+  reason: "version-upgrade" | "compaction";
+}
+
+/**
+ * The ysync 0009 §5 conversion point, for the sync server's read-file hook
+ * (`BoardRoom.onLoad` — the provably safe epoch boundary: clients never
+ * persist ydocs locally and onLoad runs before any client syncs). Given a
+ * persisted state update:
+ *
+ *  - a doc written in an OLDER s-expr version is re-seeded as a fresh
+ *    `SEXPR_VERSION_CURRENT` doc (`reason: "version-upgrade"`);
+ *  - a current-version doc whose blob has bloated past `ratio ×` its compacted
+ *    size is re-seeded the same way (`reason: "compaction"` — this is also the
+ *    recurring gc-off compaction event, §6);
+ *  - anything else returns null: hydrate the blob as-is. That covers docs
+ *    NEWER than this build (never downgrade), presence/empty docs, and
+ *    editor-snapshot-seeded docs with no `kdoc_meta.root` (not materializable
+ *    — they stay on their version, which is consistent for every client).
+ *
+ * Comment threads (and any `KDOC_EXTRA_ROOT_MAPS` entry) are deep-cloned into
+ * the fresh doc; layout arbitration state (`seedNonce`) is deliberately not —
+ * it only matters within one concurrent-seed race window.
+ */
+export function compactYdocUpdate(
+  update: Uint8Array,
+  opts: { ratio?: number } = {},
+): YdocCompaction | null {
+  const ratio = opts.ratio ?? 3;
+  const src = new Y.Doc();
+  try {
+    Y.applyUpdate(src, update);
+    const version = ydocSexprVersion(src);
+    if (version > SEXPR_VERSION_CURRENT) return null;
+    if (src.getMap(Y_KDOC_META).get("root") === undefined) return null;
+
+    const kdoc = yToDoc(src);
+    const out = new Y.Doc();
+    try {
+      docToY(kdoc, out); // fresh doc → stamped SEXPR_VERSION_CURRENT
+      for (const key of KDOC_EXTRA_ROOT_MAPS) {
+        const from = src.getMap<unknown>(key);
+        if (from.size === 0) continue;
+        const to = out.getMap<unknown>(key);
+        from.forEach((val, k) => to.set(k, cloneYValue(val)));
+      }
+      const compacted = Y.encodeStateAsUpdate(out);
+      if (version < SEXPR_VERSION_CURRENT) {
+        return { update: compacted, fromVersion: version, reason: "version-upgrade" };
+      }
+      if (update.length > ratio * compacted.length) {
+        return { update: compacted, fromVersion: version, reason: "compaction" };
+      }
+      return null;
+    } finally {
+      out.destroy();
+    }
+  } finally {
+    src.destroy();
+  }
+}
+
 /**
  * Deep-remove every `{item: uuid}` slot from a body (slots recurse through
  * `(k …)` children). Returns the pruned copy, or null when nothing referenced
@@ -319,9 +479,10 @@ function pruneItemRefs(slots: Slot[], uuid: string): Slot[] | null {
  */
 export function applyDeltaToY(ydoc: Y.Doc, delta: KicadDelta, origin?: unknown): void {
   ydoc.transact(() => {
+    const version = resolveWriteVersion(ydoc);
     const items = kicadItemsMap(ydoc);
-    for (const it of delta.added) upsertYItem(items, it.uuid, it);
-    for (const it of delta.updated) upsertYItem(items, it.uuid, it);
+    for (const it of delta.added) upsertYItem(items, it.uuid, it, version);
+    for (const it of delta.updated) upsertYItem(items, it.uuid, it, version);
     for (const uuid of delta.removed) {
       // Before deleting a CHILD item, prune its `{item: uuid}` slot from the
       // surviving parent's body — a dangling reference makes renderItem/docToFile
@@ -333,9 +494,13 @@ export function applyDeltaToY(ydoc: Y.Doc, delta: KicadDelta, origin?: unknown):
       if (parentUuid !== null) {
         const parentYm = items.get(parentUuid);
         if (parentYm) {
-          const body = (parentYm.get("body") ?? []) as Slot[];
-          const pruned = pruneItemRefs(body, uuid);
-          if (pruned) parentYm.set("body", pruned);
+          const body = parentYm.get("body");
+          if (body instanceof Y.Map) {
+            pruneItemRefFromNode(body, uuid, pruneItemRefs);
+          } else {
+            const pruned = pruneItemRefs((body ?? []) as Slot[], uuid);
+            if (pruned) parentYm.set("body", pruned);
+          }
         }
       }
       items.delete(uuid);
@@ -470,8 +635,10 @@ export function deltaFromYEvents(
         }
       });
     } else {
-      // A key changed on one item's Y.Map; relative to `items` its path is [uuid].
-      const uuid = ev.path[ev.path.length - 1];
+      // An event below the items map: on one item's Y.Map (path [uuid]) or, in
+      // a v2 doc, deep inside a body node map (path [uuid, "body", …]). The
+      // owning uuid is path[0] in both shapes.
+      const uuid = ev.path[0];
       if (typeof uuid === "string" && !added.has(uuid)) updated.add(uuid);
     }
   }

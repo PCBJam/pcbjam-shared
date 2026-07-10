@@ -139,7 +139,10 @@ describe("bug 06 — concurrent first-seed, arbitrated (seedDocToY)", () => {
             uuid: "seg-2",
             type: "segment",
             parent: null,
-            body: ["(start 5 5)", "(end 6 6)"],
+            body: [
+              { k: "start", v: [{ atom: "5" }, { atom: "5" }] },
+              { k: "end", v: [{ atom: "6" }, { atom: "6" }] },
+            ],
           },
         ],
         updated: [],

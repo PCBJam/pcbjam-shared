@@ -109,6 +109,12 @@ function parseSlots(
     if (typeof head !== "string") {
       throw new Error("parseSlots: encountered a list child without a head atom");
     }
+    // `#` is the v2 keyed-slot separator (ysync 0009 §3.2); s-expr heads are
+    // unquoted grammar tokens and can never contain it — reject loudly here
+    // (the seed boundary) rather than risk key confusion in the Y encoding.
+    if (head.includes("#")) {
+      throw new Error(`parseSlots: head contains reserved '#': ${JSON.stringify(head)}`);
+    }
     // A non-item child stays in place as a field; its descendants keep the same
     // nearest-item parent (a field is not an item).
     slots.push({ k: head, v: parseSlots(child.slice(1), parent, items) });
