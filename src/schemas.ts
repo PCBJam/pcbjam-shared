@@ -132,6 +132,15 @@ export type ProjectFile = z.infer<typeof projectFileSchema>;
 export const projectWithFiles = z.object({
   project: projectSchema,
   files: z.array(projectFileSchema),
+  /**
+   * Capability overlay (optional; a backend MAY surface it): may the CURRENT
+   * caller write this project's documents? "read" puts the editor into
+   * read-only viewer mode (read-only-viewer). Absent ⇒ "write" — authz-free
+   * backends stay writable without knowing the field exists. A capability
+   * descriptor like `LayerDescriptor.writable`, not authz policy: how it is
+   * computed stays in the closed application layer.
+   */
+  access: z.enum(["read", "write"]).optional(),
 });
 export type ProjectWithFiles = z.infer<typeof projectWithFiles>;
 
