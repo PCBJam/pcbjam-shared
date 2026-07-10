@@ -295,6 +295,24 @@ export function collabLiveKey(projectId: string, docPath: string): string {
 }
 
 /**
+ * R2 key of an ARCHIVED ydoc epoch: the exact blob `<…>.ydoc` held before an
+ * onLoad version-conversion/compaction replaced it (ysync 0009 §5/§6 — the
+ * attribution-history chain survives even though the reseed resets the live
+ * doc's CRDT history). `epochMs` is the replacement time; one doc's chain is
+ * every key under the `<docKey>.` prefix, ordered by the numeric suffix.
+ * Deliberately NOT recognized by {@link parseCollabKey}, so archives never
+ * surface as live collab docs in listings.
+ * e.g. `projects/<uuid>/pcbnew/board.kicad_pcb.ydoc.1783680000000`.
+ */
+export function collabDocArchiveKey(
+  projectId: string,
+  docPath: string,
+  epochMs: number,
+): string {
+  return `${collabDocKey(projectId, docPath)}.${epochMs}`;
+}
+
+/**
  * Inverse of {@link collabDocKey} / {@link collabLiveKey}: recover the doc path and
  * blob kind from an R2 key, or null if `key` isn't a collab blob under this project's
  * prefix. Keeps the key scheme (prefix + `.ydoc`/`.live` suffix) defined in ONE place

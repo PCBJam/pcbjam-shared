@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  collabDocArchiveKey,
   collabDocKey,
   collabLiveKey,
   parseCollabKey,
@@ -23,5 +24,18 @@ describe("parseCollabKey (inverse of collabDocKey/collabLiveKey)", () => {
   it("returns null for a raw file (no .ydoc/.live suffix) and for the bare prefix", () => {
     expect(parseCollabKey(PID, `projects/${PID}/board.kicad_pcb`)).toBeNull();
     expect(parseCollabKey(PID, `projects/${PID}/.ydoc`)).toBeNull();
+  });
+});
+
+describe("collabDocArchiveKey (ysync 0009 archived epochs)", () => {
+  it("extends the doc key with the epoch, under the doc-key prefix", () => {
+    const key = collabDocArchiveKey(PID, "pcbnew/board.kicad_pcb", 1783680000000);
+    expect(key).toBe(`${collabDocKey(PID, "pcbnew/board.kicad_pcb")}.1783680000000`);
+    expect(key.startsWith(`${collabDocKey(PID, "pcbnew/board.kicad_pcb")}.`)).toBe(true);
+  });
+
+  it("archives never parse as live collab docs (invisible to listings)", () => {
+    const key = collabDocArchiveKey(PID, "board.kicad_pcb", 42);
+    expect(parseCollabKey(PID, key)).toBeNull();
   });
 });
