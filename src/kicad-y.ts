@@ -344,6 +344,16 @@ export function upsertDocToY(doc: KicadDoc, ydoc: Y.Doc, origin?: unknown): void
 export const KICAD_VALIDITY_REVERT_ORIGIN = "kicad-validity-revert";
 
 /**
+ * Merge encoded Yjs updates into one (Y.mergeUpdates verbatim — re-exported so
+ * yjs-free backends can compose `checkpoint + buffered frames` for the
+ * bisect-blame pass, kicad-validity 0001 §4.5). Updates are idempotent, so
+ * frames already contained in the base merge as no-ops.
+ */
+export function mergeYUpdates(updates: Uint8Array[]): Uint8Array {
+  return Y.mergeUpdates(updates);
+}
+
+/**
  * Compute the incremental Yjs update that reverts a doc's CONTENT to a
  * known-good checkpoint — CRDT merges are monotonic, so a rollback must be a
  * forward operation (kicad-validity 0001 §4.4). Both inputs are encoded state
