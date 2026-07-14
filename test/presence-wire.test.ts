@@ -43,9 +43,9 @@ describe("symbolUuidFromFootprintPath", () => {
 
 describe("presenceRoomId", () => {
   it("cannot collide with any real docPath room", () => {
-    expect(presenceRoomId("P1")).toBe("P1:~presence");
+    expect(presenceRoomId("S1", "P1")).toBe("S1:P1:~presence");
     // Project files are relative POSIX paths — `~presence` is not a valid one.
-    expect(presenceRoomId("P1")).not.toBe(collabRoomId("P1", "board.kicad_pcb"));
+    expect(presenceRoomId("S1", "P1")).not.toBe(collabRoomId("S1", "P1", "board.kicad_pcb"));
   });
 });
 

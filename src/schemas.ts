@@ -101,6 +101,13 @@ export const LOCAL_SCOPE = "@local";
 export const projectSchema = z.object({
   id: z.string().uuid(),
   scope: z.string(),
+  /**
+   * Stable id of the owning scope (the `scope` slug can be renamed; this can't).
+   * Feeds team-scoped collab room ids / storage keys ({@link collabRoomId}).
+   * Optional on the wire so scope-less backends (the GPL example backend,
+   * `@local`) stay conforming; backends with real scopes SHOULD send it.
+   */
+  scopeId: z.string().optional(),
   slug: z.string(),
   name: z.string(),
   createdAt: z.string(),
@@ -233,11 +240,39 @@ export type CreateLibBody = z.infer<typeof createLibBody>;
  * Identifies one collaboratively edited document — a board/schematic — within a
  * project. Both the editor (to pick a room to connect to) and the backend (to
  * namespace + persist that room) derive it the same way so they never drift.
- * `projectId` is a uuid and `docPath` is a POSIX project-relative path.
+ * `scopeId` is the owning team's stable id ({@link projectSchema}.scopeId;
+ * `"local"` for scope-less backends), `projectId` is a uuid and `docPath` is a
+ * POSIX project-relative path. The room id carries the scope so the sync
+ * backend can persist under team-scoped storage keys without a lookup.
  */
 export const collabRoomIdSchema = z.string().min(1);
-export function collabRoomId(projectId: string, docPath: string): string {
-  return `${projectId}:${docPath}`;
+export function collabRoomId(
+  scopeId: string,
+  projectId: string,
+  docPath: string,
+): string {
+  return `${scopeId}:${projectId}:${docPath}`;
+}
+
+/**
+ * Inverse of {@link collabRoomId} / {@link presenceRoomId} — the ONE parser for
+ * the room-id format, shared by every backend that needs to recover the parts
+ * (ids contain no colons; `docPath` may, so only the first two split).
+ */
+export function parseCollabRoomId(
+  room: string,
+): { scopeId: string; projectId: string; docPath: string } | null {
+  const i = room.indexOf(":");
+  if (i <= 0) return null;
+  const j = room.indexOf(":", i + 1);
+  if (j <= i + 1) return null;
+  const docPath = room.slice(j + 1);
+  if (!docPath) return null; // every real room names a doc (or ~presence)
+  return {
+    scopeId: room.slice(0, i),
+    projectId: room.slice(i + 1, j),
+    docPath,
+  };
 }
 
 /**
@@ -249,8 +284,8 @@ export function collabRoomId(projectId: string, docPath: string): string {
  * Backends should not persist these rooms (nothing writes to their Y.Doc).
  */
 export const PRESENCE_DOC_PATH = "~presence";
-export function presenceRoomId(projectId: string): string {
-  return `${projectId}:${PRESENCE_DOC_PATH}`;
+export function presenceRoomId(scopeId: string, projectId: string): string {
+  return collabRoomId(scopeId, projectId, PRESENCE_DOC_PATH);
 }
 
 /**
@@ -273,9 +308,9 @@ function sanitizeDocPath(docPath: string): string {
     .replace(/[^A-Za-z0-9._/-]/g, "_");
 }
 
-/** Flat prefix every collab blob for a project lives under. */
-function collabKeyPrefix(projectId: string): string {
-  return `projects/${projectId}/`;
+/** Team-scoped prefix every collab blob for a project lives under. */
+function collabKeyPrefix(scopeId: string, projectId: string): string {
+  return `teams/${scopeId}/projects/${projectId}/`;
 }
 
 /** Suffixes appended to a doc's key for its persisted state / liveness marker. */
@@ -283,14 +318,18 @@ const COLLAB_DOC_SUFFIX = ".ydoc";
 const COLLAB_LIVE_SUFFIX = ".live";
 
 /**
- * R2 key of a room's persisted Yjs state, beside its raw file under the flat
- * `projects/<projectId>/` prefix (no owner segment — derivable from `projectId`
- * alone, which is all the sync worker knows). Both the sync server (persist) and
- * the app server (materialize/list) compute it identically so they never drift.
- * e.g. `projects/<uuid>/pcbnew/board.kicad_pcb.ydoc`.
+ * R2 key of a room's persisted Yjs state, beside its raw file under the
+ * team-scoped `teams/<scopeId>/projects/<projectId>/` prefix. Both segments come
+ * straight from the room id ({@link parseCollabRoomId}), so the sync worker and
+ * the app server compute identical keys and they never drift.
+ * e.g. `teams/<uuid>/projects/<uuid>/pcbnew/board.kicad_pcb.ydoc`.
  */
-export function collabDocKey(projectId: string, docPath: string): string {
-  return `${collabKeyPrefix(projectId)}${sanitizeDocPath(docPath)}${COLLAB_DOC_SUFFIX}`;
+export function collabDocKey(
+  scopeId: string,
+  projectId: string,
+  docPath: string,
+): string {
+  return `${collabKeyPrefix(scopeId, projectId)}${sanitizeDocPath(docPath)}${COLLAB_DOC_SUFFIX}`;
 }
 
 /**
@@ -299,8 +338,12 @@ export function collabDocKey(projectId: string, docPath: string): string {
  * decide whether to fetch live Y state from the sync worker — without it, a cold
  * Durable Object is never woken. Sits beside the `.ydoc` blob.
  */
-export function collabLiveKey(projectId: string, docPath: string): string {
-  return `${collabKeyPrefix(projectId)}${sanitizeDocPath(docPath)}${COLLAB_LIVE_SUFFIX}`;
+export function collabLiveKey(
+  scopeId: string,
+  projectId: string,
+  docPath: string,
+): string {
+  return `${collabKeyPrefix(scopeId, projectId)}${sanitizeDocPath(docPath)}${COLLAB_LIVE_SUFFIX}`;
 }
 
 /**
@@ -311,14 +354,15 @@ export function collabLiveKey(projectId: string, docPath: string): string {
  * every key under the `<docKey>.` prefix, ordered by the numeric suffix.
  * Deliberately NOT recognized by {@link parseCollabKey}, so archives never
  * surface as live collab docs in listings.
- * e.g. `projects/<uuid>/pcbnew/board.kicad_pcb.ydoc.1783680000000`.
+ * e.g. `teams/<uuid>/projects/<uuid>/pcbnew/board.kicad_pcb.ydoc.1783680000000`.
  */
 export function collabDocArchiveKey(
+  scopeId: string,
   projectId: string,
   docPath: string,
   epochMs: number,
 ): string {
-  return `${collabDocKey(projectId, docPath)}.${epochMs}`;
+  return `${collabDocKey(scopeId, projectId, docPath)}.${epochMs}`;
 }
 
 /**
@@ -332,10 +376,11 @@ export function collabDocArchiveKey(
  * is exactly the case that matters here (paths that came from the file list / editor).
  */
 export function parseCollabKey(
+  scopeId: string,
   projectId: string,
   key: string,
 ): { path: string; kind: "ydoc" | "live" } | null {
-  const prefix = collabKeyPrefix(projectId);
+  const prefix = collabKeyPrefix(scopeId, projectId);
   if (!key.startsWith(prefix)) return null;
   const suffix = key.endsWith(COLLAB_DOC_SUFFIX)
     ? COLLAB_DOC_SUFFIX
