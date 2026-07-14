@@ -124,6 +124,13 @@ export const projectFileSchema = z.object({
   contentType: z.string(),
   createdAt: z.string(),
   updatedAt: z.string(),
+  /**
+   * Set when the backend's validation of the last uploaded content failed
+   * (e.g. not parseable as KiCad). A flagged file is still served as-is, but
+   * the backend MAY refuse collaborative sessions on it. How validation is
+   * performed stays in the application layer; this is only the verdict.
+   */
+  invalidReason: z.string().optional(),
   // --- collaborative-state overlay (optional; a backend MAY surface it) ---
   /** A persisted Y.Doc (`.ydoc`) exists for this file (collaboratively edited). */
   hasYdoc: z.boolean().optional(),
