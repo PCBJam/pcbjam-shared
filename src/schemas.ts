@@ -373,6 +373,18 @@ export function collabDocArchiveKey(
 }
 
 /**
+ * R2 key of the LAST-KNOWN-GOOD ydoc checkpoint (kicad-validity 0001 §4.3):
+ * the exact encoded state that last passed the backend's validity check.
+ * Overwritten on every pass; the revert pipeline restores content from it on a
+ * deterministic failure. Like the epoch archives, deliberately NOT recognized
+ * by {@link parseCollabKey} so it never surfaces as a live collab doc.
+ * e.g. `projects/<uuid>/pcbnew/board.kicad_pcb.ydoc.good`.
+ */
+export function collabDocGoodKey(projectId: string, docPath: string): string {
+  return `${collabDocKey(projectId, docPath)}.good`;
+}
+
+/**
  * Inverse of {@link collabDocKey} / {@link collabLiveKey}: recover the doc path and
  * blob kind from an R2 key, or null if `key` isn't a collab blob under this project's
  * prefix. Keeps the key scheme (prefix + `.ydoc`/`.live` suffix) defined in ONE place

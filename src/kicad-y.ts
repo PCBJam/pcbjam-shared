@@ -289,6 +289,98 @@ export function seedDocToY(
   };
 }
 
+// --- validity revert (kicad-validity 0001 B2) --------------------------------
+// `kdoc_meta` marker a backend writes alongside a validity revert, so clients
+// can surface "this document was rolled back" (observed like seedNonce).
+export const Y_KDOC_REVERT_NONCE = "revertNonce";
+export const Y_KDOC_REVERT_REASON = "revertReason";
+export const Y_KDOC_REVERT_AT = "revertedAt";
+
+/**
+ * Apply a `KicadDoc` snapshot over a Y.Doc as a FORWARD operation, touching
+ * only what differs: items absent from `doc` are deleted, the rest go through
+ * `upsertYItem`'s no-op skip (v2 slot differ), lib defs sync per id, and the
+ * layout is replaced only when it differs at all (wholesale — layout is one
+ * ordered sequence; per-group patching can't restore item order). Unchanged
+ * state keeps its history/attribution untouched — the property a validity
+ * revert needs (kicad-validity 0001 §4.4).
+ */
+export function upsertDocToY(doc: KicadDoc, ydoc: Y.Doc, origin?: unknown): void {
+  kicadDocSchema.parse(doc);
+  ydoc.transact(() => {
+    const version = resolveWriteVersion(ydoc);
+    const meta = ydoc.getMap(Y_KDOC_META);
+    if (meta.get("root") !== doc.root) meta.set("root", doc.root);
+
+    const items = kicadItemsMap(ydoc);
+    for (const uuid of [...items.keys()]) {
+      if (!(uuid in doc.items)) items.delete(uuid);
+    }
+    for (const [uuid, item] of Object.entries(doc.items)) {
+      upsertYItem(items, uuid, item, version);
+    }
+
+    const defs = libSymbolsFromLayout(doc.layout, doc.items);
+    const libs = kicadLibSymbolsMap(ydoc);
+    for (const id of [...libs.keys()]) {
+      if (!(id in defs)) libs.delete(id);
+    }
+    for (const [id, def] of Object.entries(defs)) {
+      if (libs.get(id) !== def) libs.set(id, def);
+    }
+
+    const target = doc.layout.map(
+      (s): Slot => ("k" in s && s.k === "lib_symbols" ? { k: s.k, v: [] } : s),
+    );
+    const layout = ydoc.getArray<Slot>(Y_KDOC_LAYOUT);
+    if (JSON.stringify(layout.toArray()) !== JSON.stringify(target)) {
+      layout.delete(0, layout.length);
+      layout.insert(0, target);
+    }
+  }, origin);
+}
+
+/** Transaction origin tag for validity-revert writes. */
+export const KICAD_VALIDITY_REVERT_ORIGIN = "kicad-validity-revert";
+
+/**
+ * Compute the incremental Yjs update that reverts a doc's CONTENT to a
+ * known-good checkpoint — CRDT merges are monotonic, so a rollback must be a
+ * forward operation (kicad-validity 0001 §4.4). Both inputs are encoded state
+ * updates (`.ydoc` blob / `/room/state` shape). Returns the update to apply to
+ * the live room (it carries only the differing slots plus the revert marker in
+ * `kdoc_meta`), or null when the content already equals the checkpoint.
+ * Pure — the backend calls this without importing yjs itself.
+ */
+export function computeRevertUpdate(opts: {
+  current: Uint8Array;
+  good: Uint8Array;
+  nonce: string;
+  reason: string;
+  /** ISO timestamp for the marker (caller-supplied to keep this pure). */
+  at: string;
+}): Uint8Array | null {
+  const goodDoc = ydocUpdateToKicadDoc(opts.good);
+  const ydoc = new Y.Doc();
+  try {
+    Y.applyUpdate(ydoc, opts.current);
+    const sv = Y.encodeStateVector(ydoc);
+    upsertDocToY(goodDoc, ydoc, KICAD_VALIDITY_REVERT_ORIGIN);
+    // A no-op upsert encodes as the empty 2-byte diff — content already equals
+    // the checkpoint; no revert, no marker.
+    if (Y.encodeStateAsUpdate(ydoc, sv).length <= 2) return null;
+    ydoc.transact(() => {
+      const meta = ydoc.getMap(Y_KDOC_META);
+      meta.set(Y_KDOC_REVERT_NONCE, opts.nonce);
+      meta.set(Y_KDOC_REVERT_REASON, opts.reason);
+      meta.set(Y_KDOC_REVERT_AT, opts.at);
+    }, KICAD_VALIDITY_REVERT_ORIGIN);
+    return Y.encodeStateAsUpdate(ydoc, sv);
+  } finally {
+    ydoc.destroy();
+  }
+}
+
 /**
  * Whether a Y.Doc has been seeded with document state at all. `docToY` always
  * writes `kdoc_meta.root` and `kdoc_layout`, so a seeded doc is detectable even
