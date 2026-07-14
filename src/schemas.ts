@@ -378,10 +378,14 @@ export function collabDocArchiveKey(
  * Overwritten on every pass; the revert pipeline restores content from it on a
  * deterministic failure. Like the epoch archives, deliberately NOT recognized
  * by {@link parseCollabKey} so it never surfaces as a live collab doc.
- * e.g. `projects/<uuid>/pcbnew/board.kicad_pcb.ydoc.good`.
+ * e.g. `teams/<uuid>/projects/<uuid>/pcbnew/board.kicad_pcb.ydoc.good`.
  */
-export function collabDocGoodKey(projectId: string, docPath: string): string {
-  return `${collabDocKey(projectId, docPath)}.good`;
+export function collabDocGoodKey(
+  scopeId: string,
+  projectId: string,
+  docPath: string,
+): string {
+  return `${collabDocKey(scopeId, projectId, docPath)}.good`;
 }
 
 /**
