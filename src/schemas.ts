@@ -89,6 +89,8 @@ export const scopeSlugSchema = z
 /** Reserved system scopes (never handed out as user/org slugs). */
 export const KICAD_SCOPE = "kicad";
 export const DEMO_SCOPE = "demo";
+/** Global home of user-triggered URL ingests (community-imported origin libs). */
+export const COMMUNITY_SCOPE = "community";
 /** Browser-local (IndexedDB) content in standalone/demo; never hits a backend. */
 export const LOCAL_SCOPE = "@local";
 
