@@ -142,6 +142,12 @@ export const contract = c.router(
       body: driftReportBody,
       responses: {
         201: driftSummary,
+        // Accepted but not stored (no actual drift, or a duplicate of the
+        // latest stored report) — the editor is fire-and-forget either way.
+        // z.undefined() (not c.noBody()): this file typechecks under BOTH the
+        // GPL and closed workspaces, whose separate @ts-rest/core copies make
+        // noBody's unique-symbol type incompatible across them.
+        204: z.undefined(),
         404: errorBody,
       },
       summary: "Report a detected ydoc/wasm drift for a project document",

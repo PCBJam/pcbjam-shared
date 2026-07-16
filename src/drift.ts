@@ -22,6 +22,10 @@ export const driftReportBody = z.object({
   diff: kicadDeltaSchema,
   layoutChanged: z.boolean().optional(),
   metaChanged: z.boolean().optional(),
+  /** The Y.Doc's s-expr encoding version (`ydocSexprVersion`) — triage aid:
+   *  the materialized `KicadDoc`s above are version-blind, so this is the only
+   *  place a report says which storage encoding the doc actually used. */
+  sexprVersion: z.number().int().positive().optional(),
 });
 export type DriftReportBody = z.infer<typeof driftReportBody>;
 
@@ -35,6 +39,8 @@ export const driftSummary = z.object({
   removedCount: z.number().int().nonnegative(),
   layoutChanged: z.boolean(),
   metaChanged: z.boolean(),
+  /** Null when the report predates version tracking (or an old client). */
+  sexprVersion: z.number().int().nullable(),
   createdAt: z.string(),
 });
 export type DriftSummary = z.infer<typeof driftSummary>;
