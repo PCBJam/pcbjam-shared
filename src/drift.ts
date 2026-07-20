@@ -6,7 +6,7 @@
  * drifts is its own (non-shared) concern — only these shapes are shared.
  */
 import { z } from "zod";
-import { kicadDeltaSchema } from "./kicad-delta.js";
+import { driftDeltaSchema } from "./kicad-delta.js";
 import { kicadDocSchema } from "./kicad-doc.js";
 
 /**
@@ -19,8 +19,14 @@ export const driftReportBody = z.object({
   docPath: z.string(),
   wasmDoc: kicadDocSchema,
   ydocDoc: kicadDocSchema,
-  diff: kicadDeltaSchema,
+  diff: driftDeltaSchema,
   layoutChanged: z.boolean().optional(),
+  /**
+   * The layout slots are the same multiset in a different order (y-sexpr v2
+   * reorders legitimately — see kicad-delta.ts). Reported for visibility, but
+   * NOT drift: `layoutChanged` stays false in that case.
+   */
+  layoutReordered: z.boolean().optional(),
   metaChanged: z.boolean().optional(),
   /** The Y.Doc's s-expr encoding version (`ydocSexprVersion`) — triage aid:
    *  the materialized `KicadDoc`s above are version-blind, so this is the only
@@ -37,7 +43,10 @@ export const driftSummary = z.object({
   addedCount: z.number().int().nonnegative(),
   updatedCount: z.number().int().nonnegative(),
   removedCount: z.number().int().nonnegative(),
+  /** Order-only item differences — shown, but not drift. */
+  reorderedCount: z.number().int().nonnegative(),
   layoutChanged: z.boolean(),
+  layoutReordered: z.boolean(),
   metaChanged: z.boolean(),
   /** Null when the report predates version tracking (or an old client). */
   sexprVersion: z.number().int().nullable(),
@@ -49,6 +58,6 @@ export type DriftSummary = z.infer<typeof driftSummary>;
 export const driftDetail = driftSummary.extend({
   wasmDoc: kicadDocSchema,
   ydocDoc: kicadDocSchema,
-  diff: kicadDeltaSchema,
+  diff: driftDeltaSchema,
 });
 export type DriftDetail = z.infer<typeof driftDetail>;
