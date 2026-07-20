@@ -237,3 +237,51 @@ describe("file-byte isolation (the invariant that keeps comments out of .kicad_*
     expect(getThread(ydoc, t)!.messages[0]!.body).toBe("hi");
   });
 });
+
+describe("author identity (display name + email)", () => {
+  // The slug stays the identity key — colors and "is this mine?" compare it —
+  // while the name/email ride along for display only.
+  it("denormalizes name + email onto the thread and its root message", () => {
+    const doc = new Y.Doc();
+    const id = createThread(doc, {
+      anchor: ANCHOR_FREE,
+      author: "acme",
+      authorName: "Ada Lovelace",
+      authorEmail: "ada@example.com",
+      body: "root",
+      now: 1,
+    });
+    const t = listThreads(doc).find((x) => x.id === id)!;
+    expect(t.createdBy).toBe("acme");
+    expect(t.authorName).toBe("Ada Lovelace");
+    expect(t.authorEmail).toBe("ada@example.com");
+    expect(t.messages[0]!.authorName).toBe("Ada Lovelace");
+    expect(t.messages[0]!.authorEmail).toBe("ada@example.com");
+  });
+
+  it("carries them onto replies too", () => {
+    const doc = new Y.Doc();
+    const id = createThread(doc, { anchor: ANCHOR_FREE, author: "a", body: "root", now: 1 });
+    addMessage(doc, id, {
+      author: "b",
+      authorName: "Grace Hopper",
+      authorEmail: "grace@example.com",
+      body: "reply",
+      now: 2,
+    });
+    const m = listThreads(doc).find((x) => x.id === id)!.messages[1]!;
+    expect(m.author).toBe("b");
+    expect(m.authorName).toBe("Grace Hopper");
+    expect(m.authorEmail).toBe("grace@example.com");
+  });
+
+  // Legacy comments predate the fields; they must still parse and render.
+  it("omits the fields entirely when not supplied (legacy shape)", () => {
+    const doc = new Y.Doc();
+    const id = createThread(doc, { anchor: ANCHOR_FREE, author: "a", body: "root", now: 1 });
+    const t = listThreads(doc).find((x) => x.id === id)!;
+    expect(t.authorName).toBeUndefined();
+    expect(t.messages[0]).not.toHaveProperty("authorName");
+    expect(t.messages[0]).not.toHaveProperty("authorEmail");
+  });
+});

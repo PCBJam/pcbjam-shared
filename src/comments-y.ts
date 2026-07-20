@@ -43,6 +43,9 @@ export function createThread(
   opts: {
     anchor: CommentAnchor;
     author: string;
+    /** Display name / email at write time (see comments-wire.ts `authorFields`). */
+    authorName?: string;
+    authorEmail?: string;
     body: string;
     id?: string;
     now?: number;
@@ -58,11 +61,20 @@ export function createThread(
     thread.set("anchor", opts.anchor);
     thread.set("resolved", false);
     thread.set("createdBy", opts.author);
+    if (opts.authorName) thread.set("authorName", opts.authorName);
+    if (opts.authorEmail) thread.set("authorEmail", opts.authorEmail);
     thread.set("createdAt", now);
     thread.set("rootId", rootId);
 
     const messages = new Y.Map<unknown>();
-    const root: CommentMessage = { id: rootId, author: opts.author, body: opts.body, createdAt: now };
+    const root: CommentMessage = {
+      id: rootId,
+      author: opts.author,
+      ...(opts.authorName ? { authorName: opts.authorName } : {}),
+      ...(opts.authorEmail ? { authorEmail: opts.authorEmail } : {}),
+      body: opts.body,
+      createdAt: now,
+    };
     messages.set(rootId, root);
     thread.set("messages", messages);
 
@@ -76,7 +88,14 @@ export function createThread(
 export function addMessage(
   ydoc: Y.Doc,
   threadId: string,
-  opts: { author: string; body: string; id?: string; now?: number },
+  opts: {
+    author: string;
+    authorName?: string;
+    authorEmail?: string;
+    body: string;
+    id?: string;
+    now?: number;
+  },
 ): string | null {
   const thread = commentsYMap(ydoc).get(threadId);
   const messages = thread && messagesOf(thread);
@@ -87,6 +106,8 @@ export function addMessage(
   const msg: CommentMessage = {
     id,
     author: opts.author,
+    ...(opts.authorName ? { authorName: opts.authorName } : {}),
+    ...(opts.authorEmail ? { authorEmail: opts.authorEmail } : {}),
     body: opts.body,
     createdAt: opts.now ?? Date.now(),
   };
@@ -186,6 +207,8 @@ function threadToPlain(thread: Y.Map<unknown>): CommentThread | null {
     anchor: thread.get("anchor"),
     resolved: thread.get("resolved"),
     createdBy: thread.get("createdBy"),
+    authorName: thread.get("authorName"),
+    authorEmail: thread.get("authorEmail"),
     createdAt: thread.get("createdAt"),
     rootId: thread.get("rootId"),
     messages: list,

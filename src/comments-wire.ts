@@ -31,10 +31,34 @@ export const commentAnchorSchema = z.object({
   offset: z.object({ x: z.number(), y: z.number() }).optional(),
 });
 
+/**
+ * Author identity, denormalized at write time.
+ *
+ * `author` stays the IDENTITY key — colors (`colorFor`) and the "is this mine?"
+ * ownership checks compare against it, so it must remain the slug and must not
+ * be swapped for a display name.
+ *
+ * `authorName` / `authorEmail` are display-only and OPTIONAL: messages written
+ * before this existed carry neither, so every reader must fall back to `author`.
+ * They are captured at write time rather than resolved at read time because a
+ * comment must still render correctly when its author is offline, has left the
+ * team, or was renamed — the document is the record.
+ *
+ * Consequence to be aware of: this persists emails into the `.ydoc` for anyone
+ * who can read the document, and they survive the author leaving the team.
+ */
+const authorFields = {
+  /** Display name at write time. Absent on legacy messages — fall back to `author`. */
+  authorName: z.string().optional(),
+  /** Email at write time, for the author tooltip. Absent on legacy messages. */
+  authorEmail: z.string().optional(),
+};
+
 export const commentMessageSchema = z.object({
   id: z.string().min(1),
   /** Author's user slug (pre-auth identity, same as presence). */
   author: z.string().min(1),
+  ...authorFields,
   /** Plain text (v1 — no rich text / mentions). */
   body: z.string(),
   /** ms epoch, client clock — ordering + display only. */
@@ -46,7 +70,9 @@ export const commentThreadSchema = z.object({
   id: z.string().min(1),
   anchor: commentAnchorSchema,
   resolved: z.boolean(),
+  /** Thread opener's slug — identity key, same rules as `commentMessage.author`. */
   createdBy: z.string().min(1),
+  ...authorFields,
   createdAt: z.number(),
   /** The opening message's id — deleting it deletes the whole thread. */
   rootId: z.string().min(1),
