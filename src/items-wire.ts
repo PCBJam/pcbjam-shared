@@ -14,10 +14,10 @@
  *                into its item subtree, computes adds/updates against `current`,
  *                removes subtree members that vanished from a changed item, and
  *                cascades `removed` roots over their descendants.
- *   Y → editor:  deltaToItemsWire(delta, view)    — renders each added/updated
- *                item back to its full s-expr (descendants resolved from `view`),
- *                pruning items whose ancestor is itself in the delta (the
- *                ancestor's sexpr already embeds them).
+ *   Y → editor:  deltaToItemsWire(delta, view)    — lifts each added/updated
+ *                item to its ROOT ancestor and renders the root's full s-expr
+ *                (descendants resolved from `view`), deduped — the C++ appliers
+ *                replace roots; a bare child blob cannot be re-attached.
  */
 
 import { z } from "zod";
@@ -218,8 +218,16 @@ export function wireLibSymbols(wire: ItemsWireDelta): Record<string, string> {
 /**
  * Render a `KicadDelta` into the items wire for the editor. `view` must contain
  * the delta's items AND their descendants (e.g. the post-apply Y items read back)
- * so each sexpr embeds its full subtree. Items whose ancestor is itself in the
- * delta are pruned — the ancestor's sexpr already carries them.
+ * so each sexpr embeds its full subtree.
+ *
+ * Every added/updated item is LIFTED to its root ancestor and the root's full
+ * subtree is rendered (deduped): the C++ appliers replace roots by uuid, and a
+ * bare child blob cannot be re-attached — pcbnew even wraps one in a board
+ * envelope where e.g. a lone `(pad …)` is unparseable, so a child-only change
+ * (pad size, field text) would silently never apply. A child added/updated
+ * under a surviving root therefore becomes that root's CONTENT change (mirrors
+ * the C++ sender's own liftBlob); children whose root is removed in the same
+ * delta are dropped — the removal covers them.
  *
  * `libDefs` (miss 08): resolves a lib id to its `(symbol …)` definition text
  * (typically a `kdoc_libsymbols` read). A root item carrying a `(lib_id …)`
@@ -232,32 +240,52 @@ export function deltaToItemsWire(
   view: Record<string, KicadItem>,
   libDefs?: (libId: string) => string | undefined,
 ): ItemsWireDelta {
-  const inDelta = new Set(
-    [...delta.added, ...delta.updated].map((it) => it.uuid),
-  );
+  const removed = new Set(delta.removed);
 
-  const coveredByAncestor = (it: KeyedKicadItem): boolean => {
-    let parent = it.parent;
-    while (parent !== null) {
-      if (inDelta.has(parent)) return true;
-      parent = view[parent]?.parent ?? null;
+  // Walk to the item's root. Cycle-guarded, and a chain that dead-ends on a
+  // uuid missing from `view` (dangling parent — bug 03 family) falls back to
+  // the item itself rather than rendering a missing root.
+  const rootOf = (uuid: string): string => {
+    let cur = uuid;
+    const seen = new Set<string>([cur]);
+    while (view[cur]?.parent != null) {
+      const next = view[cur]!.parent!;
+      if (seen.has(next)) return uuid;
+      seen.add(next);
+      cur = next;
     }
-    return false;
+    return view[cur] ? cur : uuid;
   };
 
-  const toWire = (it: KeyedKicadItem): WireItem => {
-    let sexpr = renderItem({ items: view }, it.uuid);
-    if (libDefs && it.parent === null) {
-      const libId = scalar(view[it.uuid]?.body ?? [], "lib_id");
+  const toWire = (uuid: string): WireItem => {
+    let sexpr = renderItem({ items: view }, uuid);
+    const parent = view[uuid]?.parent ?? null;
+    if (libDefs && parent === null) {
+      const libId = scalar(view[uuid]?.body ?? [], "lib_id");
       const def = libId ? libDefs(unquoteAtom(libId)) : undefined;
       if (def) sexpr = `(lib_symbols ${def}) ${sexpr}`;
     }
-    return { sexpr, parent: it.parent };
+    return { sexpr, parent };
   };
 
+  const added = new Set<string>();
+  const changed = new Set<string>();
+  for (const it of delta.added) {
+    const root = rootOf(it.uuid);
+    if (removed.has(root)) continue;
+    (root === it.uuid ? added : changed).add(root);
+  }
+  for (const it of delta.updated) {
+    const root = rootOf(it.uuid);
+    if (removed.has(root)) continue;
+    changed.add(root);
+  }
+  // An added root's sexpr already carries every descendant — drop echoes.
+  for (const root of added) changed.delete(root);
+
   return {
-    added: delta.added.filter((it) => !coveredByAncestor(it)).map(toWire),
-    changed: delta.updated.filter((it) => !coveredByAncestor(it)).map(toWire),
+    added: [...added].map(toWire),
+    changed: [...changed].map(toWire),
     removed: delta.removed,
   };
 }

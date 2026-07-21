@@ -99,17 +99,60 @@ describe("deltaToItemsWire (Y → editor)", () => {
     expect(wire.removed).toEqual(["seg-1"]);
   });
 
-  it("a lone child update renders just that child with its parent uuid", () => {
+  it("a lone child update lifts to its root's full re-render", () => {
+    // A bare child blob cannot be re-attached by the C++ appliers (pcbnew's
+    // envelope wrap even makes a lone pad unparseable — drift-trio finding,
+    // standalone-hardening 0008): the wire must carry the parent footprint.
     const view = current();
     const wire = deltaToItemsWire(
       { added: [], updated: [{ uuid: "pad-1", ...view["pad-1"]! }], removed: [] },
       view,
     );
     expect(wire.changed).toHaveLength(1);
-    expect(wire.changed[0]!.parent).toBe("fp-1");
-    expect(parseSexpr(wire.changed[0]!.sexpr)).toEqual(
-      parseSexpr(`(pad "1" smd (at 0 0) (uuid "pad-1"))`),
+    expect(wire.changed[0]!.parent).toBe(null);
+    expect(parseSexpr(wire.changed[0]!.sexpr)).toEqual(parseSexpr(FP)); // full subtree
+  });
+
+  it("a child added under a surviving root becomes the root's content change", () => {
+    const view = current();
+    const newPad: (typeof view)[string] = {
+      type: "pad",
+      parent: "fp-1",
+      body: view["pad-1"]!.body,
+    };
+    const wire = deltaToItemsWire(
+      { added: [{ uuid: "pad-9", ...newPad }], updated: [], removed: [] },
+      { ...view, "pad-9": newPad },
     );
+    expect(wire.added).toHaveLength(0);
+    expect(wire.changed).toHaveLength(1);
+    expect(wire.changed[0]!.parent).toBe(null);
+  });
+
+  it("a changed child whose root is removed in the same delta is dropped", () => {
+    const view = current();
+    const wire = deltaToItemsWire(
+      { added: [], updated: [{ uuid: "pad-1", ...view["pad-1"]! }], removed: ["fp-1"] },
+      view,
+    );
+    expect(wire.added).toHaveLength(0);
+    expect(wire.changed).toHaveLength(0);
+    expect(wire.removed).toEqual(["fp-1"]);
+  });
+
+  it("a dangling parent chain falls back to the child itself", () => {
+    const view = current();
+    const orphan: (typeof view)[string] = {
+      type: "pad",
+      parent: "gone-1",
+      body: view["pad-1"]!.body,
+    };
+    const wire = deltaToItemsWire(
+      { added: [], updated: [{ uuid: "pad-x", ...orphan }], removed: [] },
+      { ...view, "pad-x": orphan },
+    );
+    expect(wire.changed).toHaveLength(1);
+    expect(wire.changed[0]!.parent).toBe("gone-1");
   });
 });
 
