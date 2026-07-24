@@ -17,8 +17,15 @@ import { kicadItemsMap, yToItemUnchecked } from "./kicad-y.js";
  *
  * Storage shape under `Y_KDOC_COMMENTS` (Y.Map<threadId, thread Y.Map>):
  *   thread: { id, anchor (plain), resolved, createdBy, createdAt, rootId,
- *             messages: Y.Map<messageId, plain CommentMessage> }
+ *             messages: Y.Map<messageId, plain CommentMessage>,
+ *             seen:<slug> → ms epoch            (comments-ux 0001 C)
+ *             react:<msgId>|<slug>|<emoji> → ms (comments-ux 0001 D) }
  * Messages are whole-value LWW by id; display order is (createdAt, id).
+ *
+ * Per-user state (seen, reactions) lives in FLAT thread keys, never inside
+ * message values (whole-value LWW would drop concurrent writers) and never in
+ * sub-Y.Maps (concurrent lazy creation loses one side): each user writes only
+ * their own keys, so merges are trivially safe.
  */
 
 export function commentsYMap(ydoc: Y.Doc): Y.Map<Y.Map<unknown>> {
@@ -47,6 +54,8 @@ export function createThread(
     authorName?: string;
     authorEmail?: string;
     body: string;
+    /** Mentioned slugs, from accepted composer completions (0001 E). */
+    mentions?: string[];
     id?: string;
     now?: number;
   },
@@ -73,10 +82,14 @@ export function createThread(
       ...(opts.authorName ? { authorName: opts.authorName } : {}),
       ...(opts.authorEmail ? { authorEmail: opts.authorEmail } : {}),
       body: opts.body,
+      ...(opts.mentions?.length ? { mentions: opts.mentions } : {}),
       createdAt: now,
     };
     messages.set(rootId, root);
     thread.set("messages", messages);
+
+    // Your own write is definitionally seen (0001 C).
+    thread.set(`${SEEN_PREFIX}${opts.author}`, now);
 
     commentsYMap(ydoc).set(threadId, thread);
   });
@@ -93,6 +106,8 @@ export function addMessage(
     authorName?: string;
     authorEmail?: string;
     body: string;
+    /** Mentioned slugs, from accepted composer completions (0001 E). */
+    mentions?: string[];
     id?: string;
     now?: number;
   },
@@ -103,15 +118,25 @@ export function addMessage(
   if (!messages) return null;
 
   const id = opts.id ?? uid();
+  const now = opts.now ?? Date.now();
   const msg: CommentMessage = {
     id,
     author: opts.author,
     ...(opts.authorName ? { authorName: opts.authorName } : {}),
     ...(opts.authorEmail ? { authorEmail: opts.authorEmail } : {}),
     body: opts.body,
-    createdAt: opts.now ?? Date.now(),
+    ...(opts.mentions?.length ? { mentions: opts.mentions } : {}),
+    createdAt: now,
   };
-  messages.set(id, msg);
+
+  ydoc.transact(() => {
+    messages.set(id, msg);
+    // Your own reply is definitionally seen (0001 C) — forward-only, so a
+    // racing markThreadSeen can't be regressed either.
+    const seenKey = `${SEEN_PREFIX}${opts.author}`;
+    const prev = thread.get(seenKey);
+    if (typeof prev !== "number" || prev < now) thread.set(seenKey, now);
+  });
   return id;
 }
 
@@ -153,7 +178,17 @@ export function removeMessage(
     return "thread-deleted";
   }
 
-  messages.delete(messageId);
+  ydoc.transact(() => {
+    messages.delete(messageId);
+
+    // Sweep the removed message's reaction keys so they don't linger as
+    // orphans (concurrent reactions to a message being deleted are lost — a
+    // reaction to a gone message has nothing to attach to anyway).
+    const stale = [...thread.keys()].filter((k) =>
+      k.startsWith(`${REACT_PREFIX}${messageId}${REACT_SEP}`),
+    );
+    for (const k of stale) thread.delete(k);
+  });
   return "removed";
 }
 
@@ -189,6 +224,14 @@ export function deleteThread(ydoc: Y.Doc, threadId: string): boolean {
   return true;
 }
 
+const SEEN_PREFIX = "seen:";
+const REACT_PREFIX = "react:";
+const REACT_SEP = "|";
+
+function reactKey(messageId: string, slug: string, emoji: string): string {
+  return `${REACT_PREFIX}${messageId}${REACT_SEP}${slug}${REACT_SEP}${emoji}`;
+}
+
 function threadToPlain(thread: Y.Map<unknown>): CommentThread | null {
   const messages = messagesOf(thread);
   const list: CommentMessage[] = [];
@@ -202,6 +245,30 @@ function threadToPlain(thread: Y.Map<unknown>): CommentThread | null {
 
   list.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
 
+  // Aggregate the flat per-user keys (seen watermarks, reaction toggles).
+  const seen: Record<string, number> = {};
+  const reactions: Record<string, Record<string, string[]>> = {};
+
+  for (const [key, value] of thread.entries()) {
+    if (key.startsWith(SEEN_PREFIX)) {
+      if (typeof value === "number") seen[key.slice(SEEN_PREFIX.length)] = value;
+    } else if (key.startsWith(REACT_PREFIX)) {
+      // emoji may itself never contain the separator (toggleReaction rejects
+      // it), so a 3-way split is unambiguous; the tail re-join is belt and
+      // braces against foreign writers.
+      const parts = key.slice(REACT_PREFIX.length).split(REACT_SEP);
+      const [messageId, slug] = parts;
+      const emoji = parts.slice(2).join(REACT_SEP);
+      if (messageId && slug && emoji) {
+        ((reactions[messageId] ??= {})[emoji] ??= []).push(slug);
+      }
+    }
+  }
+
+  for (const perMessage of Object.values(reactions)) {
+    for (const slugs of Object.values(perMessage)) slugs.sort();
+  }
+
   const parsed = commentThreadSchema.safeParse({
     id: thread.get("id"),
     anchor: thread.get("anchor"),
@@ -212,6 +279,8 @@ function threadToPlain(thread: Y.Map<unknown>): CommentThread | null {
     createdAt: thread.get("createdAt"),
     rootId: thread.get("rootId"),
     messages: list,
+    ...(Object.keys(seen).length ? { seen } : {}),
+    ...(Object.keys(reactions).length ? { reactions } : {}),
   });
 
   return parsed.success ? parsed.data : null;
@@ -232,6 +301,88 @@ export function listThreads(ydoc: Y.Doc): CommentThread[] {
 export function getThread(ydoc: Y.Doc, threadId: string): CommentThread | null {
   const thread = commentsYMap(ydoc).get(threadId);
   return thread ? threadToPlain(thread) : null;
+}
+
+/**
+ * Advance a user's seen watermark on a thread (comments-ux 0001 C). Forward-
+ * only: a stale tab marking seen can never un-read newer messages. `upTo`
+ * defaults to the newest message's createdAt (else now). Own-key write —
+ * concurrency-safe by construction.
+ */
+export function markThreadSeen(
+  ydoc: Y.Doc,
+  threadId: string,
+  slug: string,
+  upTo?: number,
+): boolean {
+  const thread = commentsYMap(ydoc).get(threadId);
+
+  if (!thread || !slug) return false;
+
+  let at = upTo;
+  if (at === undefined) {
+    const messages = messagesOf(thread);
+    at = 0;
+    if (messages) {
+      for (const raw of messages.values()) {
+        const parsed = commentMessageSchema.safeParse(raw);
+        if (parsed.success && parsed.data.createdAt > at) at = parsed.data.createdAt;
+      }
+    }
+    if (at === 0) at = Date.now();
+  }
+
+  const key = `${SEEN_PREFIX}${slug}`;
+  const prev = thread.get(key);
+  if (typeof prev === "number" && prev >= at) return true;
+
+  thread.set(key, at);
+  return true;
+}
+
+/** Messages in a (plain) thread newer than the user's seen watermark, own
+ *  messages excluded. Resolved threads never count as unread. */
+export function threadUnreadCount(thread: CommentThread, slug: string): number {
+  if (thread.resolved) return 0;
+
+  const at = thread.seen?.[slug] ?? 0;
+  return thread.messages.filter((m) => m.author !== slug && m.createdAt > at).length;
+}
+
+/** True when any of the thread's unread-for-`slug` messages mentions them. */
+export function threadMentionsUnread(thread: CommentThread, slug: string): boolean {
+  if (thread.resolved) return false;
+
+  const at = thread.seen?.[slug] ?? 0;
+  return thread.messages.some(
+    (m) => m.author !== slug && m.createdAt > at && (m.mentions ?? []).includes(slug),
+  );
+}
+
+/**
+ * Toggle `slug`'s `emoji` reaction on a message (comments-ux 0001 D). Own-key
+ * set/delete only — two users reacting concurrently with the same emoji both
+ * survive. Rejects unknown thread/message and separator-carrying emoji.
+ */
+export function toggleReaction(
+  ydoc: Y.Doc,
+  threadId: string,
+  messageId: string,
+  slug: string,
+  emoji: string,
+): boolean {
+  const thread = commentsYMap(ydoc).get(threadId);
+  const messages = thread && messagesOf(thread);
+
+  if (!messages || !messages.has(messageId)) return false;
+  if (!slug || !emoji || emoji.includes(REACT_SEP) || slug.includes(REACT_SEP)) return false;
+
+  const key = reactKey(messageId, slug, emoji);
+
+  if (thread.has(key)) thread.delete(key);
+  else thread.set(key, Date.now());
+
+  return true;
 }
 
 /** Deep-observe the comments map. Returns the unobserve function. */

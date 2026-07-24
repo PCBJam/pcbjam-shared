@@ -59,8 +59,16 @@ export const commentMessageSchema = z.object({
   /** Author's user slug (pre-auth identity, same as presence). */
   author: z.string().min(1),
   ...authorFields,
-  /** Plain text (v1 — no rich text / mentions). */
+  /** Plain text. `@slug` mention tokens stay inline in the text. */
   body: z.string(),
+  /**
+   * Mentioned user slugs (comments-ux 0001 E), denormalized from the
+   * composer's accepted completions at write time — display highlighting and
+   * future notification indexing without re-parsing bodies. Optional: legacy
+   * messages carry none, and an old client editing a message drops it
+   * (display-only, acceptable).
+   */
+  mentions: z.array(z.string()).optional(),
   /** ms epoch, client clock — ordering + display only. */
   createdAt: z.number(),
   editedAt: z.number().optional(),
@@ -78,6 +86,24 @@ export const commentThreadSchema = z.object({
   rootId: z.string().min(1),
   /** Ordered by (createdAt, id); index 0 is the root message. */
   messages: z.array(commentMessageSchema),
+  /**
+   * Per-user seen watermarks (comments-ux 0001 C): slug → ms epoch of the
+   * newest message that user has seen. Stored as flat `seen:<slug>` keys on
+   * the thread Y.Map — each user only ever writes their OWN key, so
+   * concurrent updates merge trivially (messages are whole-value LWW and
+   * sub-maps have creation races; flat keys have neither problem).
+   */
+  seen: z.record(z.string(), z.number()).optional(),
+  /**
+   * Emoji reactions (comments-ux 0001 D), aggregated at read time from flat
+   * `react:<messageId>|<slug>|<emoji>` thread keys (own-key-only toggles,
+   * same rationale as `seen`): messageId → emoji → reacting slugs.
+   * The emoji is a free-form unicode string — the picker is the gatekeeper;
+   * wire validation only excludes the `|` separator.
+   */
+  reactions: z
+    .record(z.string(), z.record(z.string(), z.array(z.string())))
+    .optional(),
 });
 
 export type CommentAnchor = z.infer<typeof commentAnchorSchema>;

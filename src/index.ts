@@ -2,6 +2,7 @@ import { initContract } from "@ts-rest/core";
 import { z } from "zod";
 import { driftReportBody, driftSummary } from "./drift.js";
 import {
+  collaboratorSchema,
   createLibBody,
   errorBody,
   libItemSchema,
@@ -130,6 +131,22 @@ export const contract = c.router(
         409: errorBody,
       },
       summary: "Create a library in a scope",
+    },
+
+    // --- collaborators (display-only; comments-ux 0001 E) ---
+    // Mention autocomplete. Members-only and NEVER anonymous (a roster is not
+    // public data, unlike lib listings); who counts as a member stays closed.
+    listCollaborators: {
+      method: "GET",
+      path: "/api/scopes/:scope/collaborators",
+      pathParams: z.object({ scope: z.string() }),
+      responses: {
+        200: z.array(collaboratorSchema),
+        401: errorBody,
+        403: errorBody,
+        404: errorBody,
+      },
+      summary: "List a scope's collaborators for display (mention autocomplete)",
     },
 
     // --- collaboration drift reporting (ysync) ---

@@ -163,6 +163,21 @@ export type ProjectWithFiles = z.infer<typeof projectWithFiles>;
 export const errorBody = z.object({ message: z.string() });
 export type ErrorBody = z.infer<typeof errorBody>;
 
+/**
+ * A scope collaborator as seen by the editor (comments-ux 0001 E): the
+ * DISPLAY surface for @-mention autocomplete — slug (identity key, same as
+ * presence/comments), name, optional avatar. Deliberately no role/membership
+ * fields: membership, auth and the members model stay in the closed
+ * application layer (this leaks the shape, not the mechanism — the libs
+ * precedent). Backends without a members model simply 404 the route.
+ */
+export const collaboratorSchema = z.object({
+  slug: z.string(),
+  name: z.string(),
+  image: z.string().optional(),
+});
+export type Collaborator = z.infer<typeof collaboratorSchema>;
+
 // --- libraries (symbol/footprint libs served to the editor) ---
 // The read surface a backend exposes so the editor can enumerate libraries,
 // list their items, and fetch a single self-contained item body. How a backend
