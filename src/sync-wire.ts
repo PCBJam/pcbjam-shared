@@ -59,6 +59,14 @@ export interface LayerDescriptor {
   token?: string;
   writable?: boolean;
   /**
+   * live: realtime rides a SHARED room socket instead of a per-layer one. The
+   * client opens (at most) one websocket per `channel.url` and multiplexes all
+   * layers that name it, tagging every frame with `channel.lib` (the WS
+   * messages' optional `lib` field). Absent: the layer dials `url` directly,
+   * one socket per layer — the pre-multiplex behavior. HTTP always uses `url`.
+   */
+  channel?: { url: string; lib: string };
+  /**
    * sparse: overrides where a single body is fetched from. `{hash}` and `{path}`
    * expand to the manifest entry's hash and the URL-encoded path — so bodies can
    * live at content-addressed keys shared across snapshots. Default (absent):
@@ -69,26 +77,36 @@ export interface LayerDescriptor {
 
 /* ---------------------------------------------------------------- messages --
  * WebSocket frames, live layers only. JSON over the partysocket connection.
+ *
+ * `lib` (all frames, optional) is the multiplex key of a SHARED room socket
+ * (LayerDescriptor.channel): a scope-wide room hosts one sub-namespace per lib,
+ * and every frame names the one it belongs to. Absent on single-namespace
+ * rooms — a frame without `lib` addresses the room's sole namespace, keeping
+ * old clients/servers interoperable during rollout.
  */
 
 /** Client→server on connect: "I'm at this version; tell me if I'm behind." */
 export interface HelloMsg {
   t: "hello";
   sinceVersion?: number;
+  lib?: string;
 }
 /** Server→client reply to `hello` / heartbeat: current authoritative version. */
 export interface SyncedMsg {
   t: "synced";
   version: number;
+  lib?: string;
 }
 /** Server→client broadcast after a put/del (to every client but the originator). */
 export interface ChangeMsg extends SyncChange {
   t: "change";
+  lib?: string;
 }
 /** Server→client hint: you may be behind, run `sync()`. */
 export interface ManifestMsg {
   t: "manifest";
   version: number;
+  lib?: string;
 }
 
 export type ClientMsg = HelloMsg;

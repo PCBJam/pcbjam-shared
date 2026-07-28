@@ -45,9 +45,16 @@ export class SyncStack {
 
     this.layers = opts.layers.map((d) => {
       const http = httpLayer(d.url, d.token, fetchImpl, d.kind);
+      // Realtime dials the shared room socket when the descriptor names one
+      // (d.channel — multiplexed by lib); HTTP always stays on the layer url.
       const channel =
         d.kind === "live"
-          ? channelFactory({ url: d.url, namespace: d.namespace, token: d.token })
+          ? channelFactory({
+              url: d.channel?.url ?? d.url,
+              namespace: d.namespace,
+              token: d.token,
+              lib: d.channel?.lib,
+            })
           : undefined;
       return new SyncLayer({
         namespace: d.namespace,

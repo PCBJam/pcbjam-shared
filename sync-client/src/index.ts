@@ -13,6 +13,7 @@ export type { SyncLayerDeps } from "./layer.js";
 export { idbStore, memStore } from "./store.js";
 export type { LayerStore } from "./store.js";
 export {
+  createMuxChannelFactory,
   defaultChannelFactory,
   httpLayer,
 } from "./transport.js";

@@ -133,11 +133,110 @@ export type ChannelFactory = (opts: {
   url: string;
   namespace: string;
   token?: string;
+  /**
+   * Multiplex key (LayerDescriptor.channel.lib): share ONE socket per `url`
+   * across every layer that names it, tagging frames with this id. Absent:
+   * a dedicated socket per layer (single-namespace rooms).
+   */
+  lib?: string;
 }) => RealtimeChannel;
 
-/** Default channel: a reconnecting native WebSocket (no partysocket dependency). */
-export const defaultChannelFactory: ChannelFactory = ({ url, token }) =>
-  webSocketChannel(url, token);
+/**
+ * Default channel: a reconnecting native WebSocket (no partysocket dependency).
+ * Layers carrying a `lib` multiplex key share one socket per (url, token) —
+ * this is what keeps a project session at ONE connection for all of its
+ * per-lib mirror overlays instead of one websocket per library.
+ */
+export const defaultChannelFactory: ChannelFactory = createMuxChannelFactory(
+  webSocketChannel,
+);
+
+/**
+ * Build a {@link ChannelFactory} that multiplexes lib-tagged layers over shared
+ * raw channels (one per url+token, refcounted; closed when the last facade
+ * closes). `openRaw` supplies the underlying transport — the real factory
+ * passes `webSocketChannel`; tests inject an in-memory channel.
+ */
+export function createMuxChannelFactory(
+  openRaw: (url: string, token?: string) => RealtimeChannel,
+): ChannelFactory {
+  const shared = new Map<string, { raw: MuxRawChannel; refs: number }>();
+
+  return ({ url, token, lib }) => {
+    if (lib === undefined) return openRaw(url, token);
+
+    const key = `${url}|${token ?? ""}`;
+    let entry = shared.get(key);
+    if (!entry) {
+      entry = { raw: new MuxRawChannel(openRaw(url, token)), refs: 0 };
+      shared.set(key, entry);
+    }
+    entry.refs += 1;
+    const e = entry;
+    return e.raw.facade(lib, () => {
+      e.refs -= 1;
+      if (e.refs === 0) {
+        shared.delete(key);
+        e.raw.close();
+      }
+    });
+  };
+}
+
+/**
+ * One shared raw channel fanning out to per-lib facades. Outbound frames are
+ * stamped with the facade's `lib`; inbound frames route to the facade whose
+ * `lib` matches exactly (a frame without `lib` matches no facade — facades
+ * only exist for multiplexed rooms, where the server tags every frame).
+ * `onOpen` fans out to every facade — each layer re-hellos on (re)connect,
+ * same as with a dedicated socket.
+ */
+class MuxRawChannel {
+  private readonly facades = new Map<
+    string,
+    { openCbs: Array<() => void>; msgCbs: Array<(m: ServerMsg) => void> }
+  >();
+
+  constructor(private readonly raw: RealtimeChannel) {
+    raw.onOpen(() => {
+      for (const f of this.facades.values()) for (const cb of f.openCbs) cb();
+    });
+    raw.onMessage((m) => {
+      const target = this.facades.get((m as { lib?: string }).lib ?? "");
+      if (target) for (const cb of target.msgCbs) cb(m);
+    });
+  }
+
+  facade(lib: string, onClose: () => void): RealtimeChannel {
+    // One facade per lib per shared channel: a SyncStack opens each layer once,
+    // and distinct stacks resolving the same lib share the stack itself
+    // upstream (per-lib source caches), so a collision indicates a caller bug —
+    // last one wins, mirroring a fresh dedicated socket.
+    const state = {
+      openCbs: [] as Array<() => void>,
+      msgCbs: [] as Array<(m: ServerMsg) => void>,
+    };
+    this.facades.set(lib, state);
+    let closed = false;
+    return {
+      onOpen: (cb) => state.openCbs.push(cb),
+      onMessage: (cb) => state.msgCbs.push(cb),
+      send: (msg) => this.raw.send({ ...msg, lib }),
+      close: () => {
+        if (closed) return;
+        closed = true;
+        // Only unregister our own state — a later facade for the same lib may
+        // have replaced us in the map (last-wins), and must keep receiving.
+        if (this.facades.get(lib) === state) this.facades.delete(lib);
+        onClose();
+      },
+    };
+  }
+
+  close(): void {
+    this.raw.close();
+  }
+}
 
 function toWsUrl(base: string, token?: string): string {
   const ws = base.replace(/^http/, "ws");
