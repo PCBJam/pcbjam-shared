@@ -336,14 +336,83 @@ export const collabConnectParams = z.object({
 export type CollabConnectParams = z.infer<typeof collabConnectParams>;
 
 /**
- * Make a `docPath` safe to embed in an R2 key while preserving its POSIX shape
- * (slashes kept, `..` collapsed, leading slashes dropped, exotic chars folded).
+ * Make a `docPath` safe to embed in an R2 key while preserving its POSIX shape:
+ * leading/empty segments dropped, every segment percent-encoded. The encoding
+ * is INJECTIVE over normalized relative paths — two distinct doc paths can
+ * never share a key (`my board` vs `my_board`), and it round-trips exactly
+ * through {@link parseCollabKey}. Clean paths (letters, digits, `._-/`) encode
+ * to themselves, so keys for such docs are byte-identical to the pre-fix
+ * scheme and need no migration. Bare `.`/`..` segments are force-encoded so a
+ * key can never traverse a filesystem-backed storage adapter (local dev).
  */
 function sanitizeDocPath(docPath: string): string {
   return docPath
+    .split("/")
+    .filter((seg) => seg.length > 0)
+    .map(encodeDocSegment)
+    .join("/");
+}
+
+function encodeDocSegment(seg: string): string {
+  const enc = encodeURIComponent(seg);
+  return enc === "." || enc === ".." ? enc.replace(/\./g, "%2E") : enc;
+}
+
+/** Inverse of {@link sanitizeDocPath}; a segment that fails to decode (legacy
+ *  fold-scheme keys contain no `%`, so they pass through verbatim) is kept as
+ *  written rather than dropped — listings must never lose a blob. */
+function decodeDocPath(encoded: string): string {
+  return encoded
+    .split("/")
+    .map((seg) => {
+      try {
+        return decodeURIComponent(seg);
+      } catch {
+        return seg;
+      }
+    })
+    .join("/");
+}
+
+/**
+ * The pre-2026-07-29 key scheme, kept ONLY so the sync DO can find and migrate
+ * blobs it wrote before {@link sanitizeDocPath} became injective. Two lossy
+ * steps reproduce what actually happened back then:
+ *
+ * 1. The room id travelled to the worker as a raw URL path segment, so the
+ *    browser (WHATWG URL parser) percent-encoded part of the docPath — and
+ *    the pre-fix worker never decoded it (`my board` arrived `my%20board`).
+ * 2. The old sanitizer folded every char outside `[A-Za-z0-9._/-]` to `_`
+ *    (`my%20board` → `my_20board`).
+ *
+ * For clean paths both steps are the identity — {@link legacyCollabKeys}
+ * returns null then, and there is nothing to migrate.
+ */
+function legacySanitizeDocPath(docPath: string): string {
+  return legacyWireEncode(docPath)
     .replace(/\.\.+/g, ".")
     .replace(/^\/+/, "")
     .replace(/[^A-Za-z0-9._/-]/g, "_");
+}
+
+/** The WHATWG URL path percent-encode set, as a browser applied it to a room
+ *  id spliced raw into a `ws:` URL: C0 controls, DEL, non-ASCII (as UTF-8
+ *  bytes), space, `"`, `<`, `>`, backtick, `{`, `}`. Everything else — incl.
+ *  `(`, `)`, `+`, `'` — passed through raw (and then hit the legacy fold). */
+function legacyWireEncode(docPath: string): string {
+  let out = "";
+  for (const ch of docPath) {
+    const cp = ch.codePointAt(0) ?? 0;
+    const inSet = cp <= 0x1f || cp >= 0x7f || '" <>`{}'.includes(ch);
+    if (inSet) {
+      for (const byte of new TextEncoder().encode(ch)) {
+        out += `%${byte.toString(16).toUpperCase().padStart(2, "0")}`;
+      }
+    } else {
+      out += ch;
+    }
+  }
+  return out;
 }
 
 /** Team-scoped prefix every collab blob for a project lives under. */
@@ -420,14 +489,38 @@ export function collabDocGoodKey(
 }
 
 /**
+ * The R2 keys the PRE-FIX scheme produced for this doc (see
+ * {@link legacySanitizeDocPath}), or null when they equal the canonical keys
+ * (clean path — nothing was lost, nothing to migrate). The sync DO checks
+ * these once per room open and moves any blob found there to the canonical
+ * key — the lazy, open-triggered migration for filenames with spaces.
+ */
+export function legacyCollabKeys(
+  scopeId: string,
+  projectId: string,
+  docPath: string,
+): { doc: string; good: string; live: string } | null {
+  const legacy = legacySanitizeDocPath(docPath);
+  if (legacy === sanitizeDocPath(docPath)) return null;
+  const prefix = collabKeyPrefix(scopeId, projectId);
+  const doc = `${prefix}${legacy}${COLLAB_DOC_SUFFIX}`;
+  return {
+    doc,
+    good: `${doc}.good`,
+    live: `${prefix}${legacy}${COLLAB_LIVE_SUFFIX}`,
+  };
+}
+
+/**
  * Inverse of {@link collabDocKey} / {@link collabLiveKey}: recover the doc path and
  * blob kind from an R2 key, or null if `key` isn't a collab blob under this project's
  * prefix. Keeps the key scheme (prefix + `.ydoc`/`.live` suffix) defined in ONE place
  * so the backend can list collab-only docs without re-deriving it by hand.
  *
- * NOTE: {@link collabDocKey} runs `docPath` through a lossy {@link sanitizeDocPath},
- * so the recovered path equals the original only for already-clean POSIX paths — which
- * is exactly the case that matters here (paths that came from the file list / editor).
+ * Keys written by current builds round-trip exactly ({@link sanitizeDocPath} is
+ * injective and percent-decoded here). A not-yet-migrated legacy key contains no
+ * `%` escapes and is recovered verbatim — i.e. as its folded path — until the
+ * room's next open migrates it.
  */
 export function parseCollabKey(
   scopeId: string,
@@ -442,7 +535,7 @@ export function parseCollabKey(
       ? COLLAB_LIVE_SUFFIX
       : null;
   if (!suffix) return null;
-  const path = key.slice(prefix.length, -suffix.length);
+  const path = decodeDocPath(key.slice(prefix.length, -suffix.length));
   if (!path) return null;
   return { path, kind: suffix === COLLAB_DOC_SUFFIX ? "ydoc" : "live" };
 }
