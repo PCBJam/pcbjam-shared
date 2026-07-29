@@ -12,6 +12,8 @@ export { SyncLayer } from "./layer.js";
 export type { SyncLayerDeps } from "./layer.js";
 export { idbStore, memStore } from "./store.js";
 export type { LayerStore } from "./store.js";
+export { peekNamespaces } from "./peek.js";
+export type { NamespacePeek } from "./peek.js";
 export {
   createMuxChannelFactory,
   defaultChannelFactory,

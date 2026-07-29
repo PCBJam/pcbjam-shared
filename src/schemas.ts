@@ -206,6 +206,20 @@ export const libSchema = z.object({
   visibility: z.string().optional(),
   description: z.string().nullish(),
   itemCount: z.number().int().nonnegative().optional(),
+  // The lib's r2-idb-sync cache identity (standalone-load-ux 0002): `namespace`
+  // is the primary sync layer's namespace — the key of the client-side
+  // IndexedDB cache a cold open hydrates — so the editor's download-consent
+  // gate can probe "already cached?" WITHOUT resolving/opening the lib's sync
+  // stack. `bytes` is the expected cold-download size (the origin snapshot's
+  // synced payload), null when unknown (live/unversioned layers, or a backend
+  // that hasn't stamped sizes yet). Omitted entirely by backends without a
+  // client-side sync cache (per-item example backend).
+  sync: z
+    .object({
+      namespace: z.string(),
+      bytes: z.number().int().nonnegative().nullish(),
+    })
+    .nullish(),
 });
 export type Lib = z.infer<typeof libSchema>;
 

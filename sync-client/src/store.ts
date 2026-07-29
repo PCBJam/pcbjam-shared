@@ -73,7 +73,10 @@ function txDone(tx: IDBTransaction): Promise<void> {
   });
 }
 
-function openDb(name: string): Promise<IDBDatabase> {
+/** Open (or create at the current schema) one namespace's DB. Internal to the
+ *  store — exported only for the read-only `peekNamespaces` probe (peek.ts),
+ *  which must share this exact schema/version. */
+export function openStoreDb(name: string): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(name, DB_VERSION);
     req.onupgradeneeded = () => {
@@ -91,13 +94,23 @@ function openDb(name: string): Promise<IDBDatabase> {
   });
 }
 
+/** Read the cached manifest off an already-open store DB (peek.ts companion). */
+export async function readStoredManifest(
+  db: IDBDatabase,
+): Promise<SyncManifest | null> {
+  const v = await reqDone(
+    db.transaction(META, "readonly").objectStore(META).get(MANIFEST_KEY),
+  );
+  return (v as SyncManifest | undefined) ?? null;
+}
+
 /**
  * IndexedDB-backed store. One DB per namespace (`${idbPrefix}${namespace}`). A
  * thin hand-rolled wrapper (no `idb` dependency — the surface we need is small).
  */
 export function idbStore(dbName: string): LayerStore {
   let dbp: Promise<IDBDatabase> | null = null;
-  const db = () => (dbp ??= openDb(dbName));
+  const db = () => (dbp ??= openStoreDb(dbName));
 
   return {
     async getManifest() {
