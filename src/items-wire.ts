@@ -131,20 +131,40 @@ export function unwrapWireItem(text: string): string {
   return printSexpr(candidates[0]!);
 }
 
+/** Reports a wire entry a conversion could not resolve to an item and skipped. */
+export type WireSkipHandler = (w: WireItem, err: unknown) => void;
+
 /**
  * Convert a bridge items-wire delta into a `KicadDelta` against the `current`
  * item set (typically the Y.Doc's items). Pure; exact subtree reconciliation:
  * a changed footprint whose pad disappeared yields `removed: [that pad]`.
+ *
+ * An entry that cannot be resolved to an item is SKIPPED (reported via
+ * `onSkip`), never allowed to abort the batch: pcbnew's board writer emits
+ * nothing for a standalone child (`case PCB_FIELD_T: break;` — a field is its
+ * footprint's content, and `default:` is a release no-op wxFAIL_MSG), so an
+ * unlifted child reaching the sender's serializer yields an item-less board
+ * envelope. Throwing on it discarded every OTHER entry in the message — after
+ * the sender had already rebaselined, so the lost items could never be re-sent.
+ * The empty envelope itself carries nothing, so skipping it is lossless.
  */
 export function itemsWireToDelta(
   wire: ItemsWireDelta,
   current: Record<string, KicadItem>,
+  onSkip?: WireSkipHandler,
 ): KicadDelta {
   const delta = emptyKicadDelta();
   const children = childrenIndex(current); // once per conversion, not per item (opt 12)
 
   const upsert = (w: WireItem): void => {
-    const { uuid, items } = sexprToItems(unwrapWireItem(w.sexpr), w.parent);
+    let flat: ReturnType<typeof sexprToItems>;
+    try {
+      flat = sexprToItems(unwrapWireItem(w.sexpr), w.parent);
+    } catch (err) {
+      onSkip?.(w, err);
+      return;
+    }
+    const { uuid, items } = flat;
     // Previous subtree members (known to `current`) that the new flatten no
     // longer contains have been deleted inside this item.
     const stale = new Set(
@@ -170,11 +190,21 @@ export function itemsWireToDelta(
 /**
  * Every uuid a wire's added/changed sexprs carry (the items plus their nested
  * subtrees). The diff-on-rebind adopt uses this to find doc-only items.
+ *
+ * Un-resolvable entries are skipped like `itemsWireToDelta`'s (same wire, same
+ * failure mode); an item-less entry contributes no uuids, which on the adopt
+ * path errs toward doc authority — the safe direction.
  */
-export function wireItemUuids(wire: ItemsWireDelta): Set<string> {
+export function wireItemUuids(wire: ItemsWireDelta, onSkip?: WireSkipHandler): Set<string> {
   const out = new Set<string>();
   for (const w of [...wire.added, ...wire.changed]) {
-    const { items } = sexprToItems(unwrapWireItem(w.sexpr), w.parent);
+    let items: Record<string, KicadItem>;
+    try {
+      items = sexprToItems(unwrapWireItem(w.sexpr), w.parent).items;
+    } catch (err) {
+      onSkip?.(w, err);
+      continue;
+    }
     for (const id of Object.keys(items)) out.add(id);
   }
   return out;

@@ -5,6 +5,7 @@ import {
   isEmptyItemsWireDelta,
   itemsWireToDelta,
   parseItemsWireDelta,
+  wireItemUuids,
 } from "../src/items-wire.js";
 import { fileToDoc } from "../src/kicad-doc.js";
 import { parseSexpr } from "../src/sexpr.js";
@@ -203,13 +204,63 @@ describe("unwrapWireItem (native tool blob shapes)", () => {
     expect(d.added.map((i) => i.uuid)).toEqual(["sym-1"]);
   });
 
-  it("rejects payloads with zero or multiple uuid items", () => {
-    expect(() =>
-      itemsWireToDelta(
-        parseItemsWireDelta(JSON.stringify({ added: [{ sexpr: "(layers (0 \"F.Cu\"))" }] })),
-        {},
+  it("skips payloads with zero or multiple uuid items instead of throwing", () => {
+    // A skipped entry must never abort conversion (the batch-loss bug): the
+    // caller learns about it through onSkip, the delta stays usable.
+    const skipped: Array<{ sexpr: string; err: unknown }> = [];
+    const d = itemsWireToDelta(
+      parseItemsWireDelta(JSON.stringify({ added: [{ sexpr: "(layers (0 \"F.Cu\"))" }] })),
+      {},
+      (w, err) => skipped.push({ sexpr: w.sexpr, err }),
+    );
+    expect(d.added).toEqual([]);
+    expect(d.updated).toEqual([]);
+    expect(d.removed).toEqual([]);
+    expect(skipped).toHaveLength(1);
+    expect(String(skipped[0]!.err)).toMatch(/expected exactly 1/);
+  });
+});
+
+describe("un-resolvable entry does not discard the batch", () => {
+  // The field-blob shape from the field: pcbnew's writer emits NOTHING for a
+  // standalone PCB_FIELD_T, so blobForItem yields a board envelope with no
+  // item in it (`(kicad_pcb … (layers …))` and nothing else).
+  const EMPTY_ENVELOPE =
+    `(kicad_pcb (version 20241229) (generator "pcbnew") (layers (0 "F.Cu" signal)))`;
+
+  it("converts the good entries and reports the bad one (the 67-entry loss)", () => {
+    const movedFp = FP.replace("(at 10 10)", "(at 66.6 55.5)");
+    const skipped: string[] = [];
+    const d = itemsWireToDelta(
+      parseItemsWireDelta(
+        JSON.stringify({
+          changed: [{ sexpr: movedFp }, { sexpr: EMPTY_ENVELOPE }],
+        }),
       ),
-    ).toThrow(/expected exactly 1/);
+      current(),
+      (w) => skipped.push(w.sexpr),
+    );
+    expect(d.updated.map((i) => i.uuid)).toEqual(["fp-1"]); // the move survived
+    expect(d.removed).toEqual([]); // the skip removed nothing
+    expect(skipped).toEqual([EMPTY_ENVELOPE]);
+  });
+
+  it("without an onSkip handler the bad entry is dropped silently", () => {
+    const d = itemsWireToDelta(
+      parseItemsWireDelta(JSON.stringify({ changed: [{ sexpr: EMPTY_ENVELOPE }, { sexpr: FP }] })),
+      {},
+    );
+    expect(d.added.map((i) => i.uuid).sort()).toEqual(["fld-1", "fp-1", "pad-1", "pad-2"]);
+  });
+
+  it("wireItemUuids skips the same way (adopt path)", () => {
+    const skipped: string[] = [];
+    const uuids = wireItemUuids(
+      parseItemsWireDelta(JSON.stringify({ added: [{ sexpr: EMPTY_ENVELOPE }, { sexpr: FP }] })),
+      (w) => skipped.push(w.sexpr),
+    );
+    expect([...uuids].sort()).toEqual(["fld-1", "fp-1", "pad-1", "pad-2"]);
+    expect(skipped).toEqual([EMPTY_ENVELOPE]);
   });
 });
 
