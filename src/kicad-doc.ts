@@ -77,6 +77,75 @@ export const kicadDocSchema = z.object({
 });
 export type KicadDoc = z.infer<typeof kicadDocSchema>;
 
+// ── Fast structural validation ───────────────────────────────────────────────
+// Hand-rolled equivalent of `kicadDocSchema.parse` for the conversion hot
+// paths: the zod walk of the recursive slot union costs ~800ms on a 3k-item
+// board (~50× the actual render), which is what blew the Workers CPU limit on
+// GET /files/*. Same shape checks, no copy; zod stays at the wire boundaries.
+
+function assertSlots(slots: unknown, path: string): void {
+  if (!Array.isArray(slots)) {
+    throw new Error(`invalid KicadDoc: ${path} is not a slot array`);
+  }
+  for (let i = 0; i < slots.length; i++) {
+    const s = slots[i] as Record<string, unknown> | null;
+    if (typeof s !== "object" || s === null) {
+      throw new Error(`invalid KicadDoc: ${path}[${i}] is not a slot object`);
+    }
+    if ("atom" in s) {
+      if (typeof s.atom !== "string") {
+        throw new Error(`invalid KicadDoc: ${path}[${i}].atom is not a string`);
+      }
+    } else if ("item" in s) {
+      if (typeof s.item !== "string") {
+        throw new Error(`invalid KicadDoc: ${path}[${i}].item is not a string`);
+      }
+    } else if ("k" in s) {
+      if (typeof s.k !== "string") {
+        throw new Error(`invalid KicadDoc: ${path}[${i}].k is not a string`);
+      }
+      assertSlots(s.v, `${path}[${i}].v`);
+    } else {
+      throw new Error(`invalid KicadDoc: ${path}[${i}] is not an atom/field/item slot`);
+    }
+  }
+}
+
+/** Validate one item's structure (same checks as `kicadItemSchema.parse`, no copy). */
+export function assertKicadItem(item: KicadItem, path = "item"): void {
+  if (typeof item !== "object" || item === null) {
+    throw new Error(`invalid KicadDoc: ${path} is not an object`);
+  }
+  if (typeof item.type !== "string") {
+    throw new Error(`invalid KicadDoc: ${path}.type is not a string`);
+  }
+  if (item.parent !== null && typeof item.parent !== "string") {
+    throw new Error(`invalid KicadDoc: ${path}.parent is not string|null`);
+  }
+  assertSlots(item.body, `${path}.body`);
+}
+
+/**
+ * Validate a whole doc's structure (same checks as `kicadDocSchema.parse`, no
+ * copy — returns `doc` itself). Throws with a path on the first violation.
+ */
+export function assertKicadDoc(doc: KicadDoc): KicadDoc {
+  if (typeof doc !== "object" || doc === null) {
+    throw new Error("invalid KicadDoc: not an object");
+  }
+  if (typeof doc.root !== "string") {
+    throw new Error("invalid KicadDoc: root is not a string");
+  }
+  if (typeof doc.items !== "object" || doc.items === null || Array.isArray(doc.items)) {
+    throw new Error("invalid KicadDoc: items is not a record");
+  }
+  for (const uuid of Object.keys(doc.items)) {
+    assertKicadItem(doc.items[uuid]!, `items[${uuid}]`);
+  }
+  assertSlots(doc.layout, "layout");
+  return doc;
+}
+
 // ── Parse: file text → KicadDoc ──────────────────────────────────────────────
 
 /** uuid of a list `(<keyword> … (uuid "X") …)`, else null. */
@@ -153,7 +222,7 @@ export function fileToDoc(text: string): KicadDoc {
   const items: Record<string, KicadItem> = {};
   const layout = parseSlots(root.slice(1), null, items);
 
-  return kicadDocSchema.parse({ root: name, items, layout });
+  return assertKicadDoc({ root: name, items, layout });
 }
 
 /**
@@ -224,7 +293,7 @@ export function renderItem(doc: Pick<KicadDoc, "items">, uuid: string): string {
 
 /** Reassemble KiCad s-expr text from a `KicadDoc`, in `layout` order. */
 export function docToFile(doc: KicadDoc): string {
-  kicadDocSchema.parse(doc);
+  assertKicadDoc(doc);
   const inner = renderSlots(doc.layout, doc.items, new Set());
   return inner.length ? `(${doc.root} ${inner})` : `(${doc.root})`;
 }

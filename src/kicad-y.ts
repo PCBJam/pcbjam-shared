@@ -34,7 +34,7 @@
 
 import * as Y from "yjs";
 import {
-  kicadDocSchema,
+  assertKicadDoc,
   kicadItemSchema,
   libSymbolsFromLayout,
   slotFromSexpr,
@@ -198,7 +198,7 @@ function upsertYItem(
  * runtime's observers can recognize the write as their own.
  */
 export function docToY(doc: KicadDoc, ydoc: Y.Doc, origin?: unknown): void {
-  kicadDocSchema.parse(doc);
+  assertKicadDoc(doc);
   ydoc.transact(() => {
     const version = resolveWriteVersion(ydoc); // before the root write marks the doc non-empty
     ydoc.getMap(Y_KDOC_META).set("root", doc.root);
@@ -306,7 +306,7 @@ export const Y_KDOC_REVERT_AT = "revertedAt";
  * revert needs (kicad-validity 0001 §4.4).
  */
 export function upsertDocToY(doc: KicadDoc, ydoc: Y.Doc, origin?: unknown): void {
-  kicadDocSchema.parse(doc);
+  assertKicadDoc(doc);
   ydoc.transact(() => {
     const version = resolveWriteVersion(ydoc);
     const meta = ydoc.getMap(Y_KDOC_META);
@@ -409,10 +409,13 @@ export function ydocHasState(ydoc: Y.Doc): boolean {
 
 /** Read the full `KicadDoc` back out of a Y.Doc (validated). */
 export function yToDoc(ydoc: Y.Doc): KicadDoc {
-  const root = ydoc.getMap(Y_KDOC_META).get("root");
+  const root = ydoc.getMap(Y_KDOC_META).get("root") as string;
   const items: Record<string, KicadItem> = {};
+  // Unchecked per-item read: the whole-doc structural check at the end walks
+  // every item anyway — the per-item zod parse here was a redundant second
+  // full-document walk (~800ms on a 3k-item board).
   kicadItemsMap(ydoc).forEach((ym, uuid) => {
-    items[uuid] = yToItem(ym);
+    items[uuid] = yToItemUnchecked(ym);
   });
   const layout = ydoc.getArray<Slot>(Y_KDOC_LAYOUT).toArray();
 
@@ -434,7 +437,7 @@ export function yToDoc(ydoc: Y.Doc): KicadDoc {
     }
   }
 
-  return kicadDocSchema.parse({ root, items, layout });
+  return assertKicadDoc({ root, items, layout });
 }
 
 /**
@@ -652,7 +655,7 @@ export function applyDeltaToY(ydoc: Y.Doc, delta: KicadDelta, origin?: unknown):
  * Returns true when anything changed.
  */
 export function syncLayoutToY(fileDoc: KicadDoc, ydoc: Y.Doc, origin?: unknown): boolean {
-  kicadDocSchema.parse(fileDoc);
+  assertKicadDoc(fileDoc);
   const FROZEN = new Set(["net", "lib_symbols"]);
   let changed = false;
 
