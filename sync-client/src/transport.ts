@@ -269,8 +269,11 @@ function webSocketChannel(base: string, token?: string): RealtimeChannel {
     };
     ws.onclose = () => {
       if (closed) return;
-      backoff = Math.min(backoff * 2, 10_000);
-      setTimeout(connect, backoff);
+      // Every reconnect costs the server an authorize round trip before the
+      // socket even speaks, so a persistently-down room must back off far —
+      // and jitter, so a fleet of layers doesn't thundering-herd the worker.
+      backoff = Math.min(backoff * 2, 30_000);
+      setTimeout(connect, backoff + Math.random() * backoff * 0.3);
     };
     ws.onerror = () => ws?.close();
   };

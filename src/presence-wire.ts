@@ -26,9 +26,12 @@ export const presenceStateSchema = z.object({
   /** The editor tool this client runs (pcbnew / eeschema / pl_editor). */
   tool: z.string().min(1),
   /**
-   * eeschema only: project-relative path of the sheet the user is actively
-   * editing. Rooms are per-sheet, but the warm pool keeps clients connected
-   * to rooms they are not looking at — this marks the one they are.
+   * Project-relative path of the DOCUMENT the user is actively editing. Two
+   * consumers: per-sheet rooms (eeschema's warm pool keeps clients connected
+   * to rooms they are not looking at — this marks the one they are), and the
+   * project presence room, where every tab announces its open document so
+   * peers can scope work to files that are actually open somewhere (pcbnew's
+   * presence-driven sibling restage).
    */
   sheetPath: z.string().optional(),
   /** Pointer position in world coordinates (KiCad internal units, nm);

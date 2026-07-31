@@ -23,6 +23,16 @@ export interface SyncStackOptions {
   channelFactory?: ChannelFactory;
   /** Override store creation (tests inject memStore); default = idbStore. */
   storeFactory?: (namespace: string) => LayerStore;
+  /**
+   * Which live layers dial a realtime channel. `"all"` (default) connects every
+   * live layer. `"shared-only"` connects only layers carrying a multiplex key
+   * (`d.channel.lib` — they ride one shared socket per room); a live layer
+   * WITHOUT one would cost a dedicated WebSocket of its own, so it stays
+   * HTTP-only and reconciles on `open()`/`sync()` instead. Bulk consumers
+   * (a board session warming 150+ libs) pass this; a focused consumer (the
+   * lib editor on its one lib) keeps `"all"` for realtime peer edits.
+   */
+  realtime?: "all" | "shared-only";
 }
 
 /**
@@ -47,8 +57,13 @@ export class SyncStack {
       const http = httpLayer(d.url, d.token, fetchImpl, d.kind);
       // Realtime dials the shared room socket when the descriptor names one
       // (d.channel — multiplexed by lib); HTTP always stays on the layer url.
+      // Under "shared-only", a live layer with no multiplex key gets no channel
+      // at all — it would otherwise open a dedicated socket per layer.
+      const wantsChannel =
+        d.kind === "live" &&
+        (opts.realtime !== "shared-only" || d.channel?.lib !== undefined);
       const channel =
-        d.kind === "live"
+        wantsChannel
           ? channelFactory({
               url: d.channel?.url ?? d.url,
               namespace: d.namespace,

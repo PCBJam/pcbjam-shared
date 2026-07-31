@@ -66,11 +66,20 @@ export class SyncLayer {
 
   /** Hydrate from cache then reconcile; wire realtime for `live` layers. */
   async open(): Promise<void> {
-    this.manifest = (await this.store.getManifest()) ?? emptyManifest();
+    // "Never synced" is the ABSENCE of a stored manifest, not an empty one — a
+    // legitimately empty layer (an untouched mirror overlay, a bare org lib)
+    // stores an entry-less manifest, and re-bundling it on every open turned
+    // each empty layer into one cold GET per page load, forever.
+    const stored = await this.store.getManifest();
+    this.manifest = stored ?? emptyManifest();
     // Sparse layers never bundle: only the manifest syncs; bodies come per read.
     if (this.kind === "sparse") await this.sync();
-    else if (Object.keys(this.manifest.entries).length === 0) await this.init();
-    else await this.sync();
+    else if (!stored) await this.init();
+    // A warm channel-bearing layer reconciles over the hello handshake below
+    // (the server's `synced` reply names its version; onMessage syncs when it
+    // differs) — an eager HTTP sync here would duplicate that per layer, which
+    // on a 150-lib mux room is 150 manifest GETs per load for nothing.
+    else if (!this.channel) await this.sync();
 
     if (this.channel) {
       this.channel.onOpen(() => void this.onReconnect());
@@ -126,13 +135,18 @@ export class SyncLayer {
   }
 
   private async onReconnect(): Promise<void> {
+    // Hello-only: the server's `synced` reply carries its version and
+    // onMessage syncs on mismatch. An unconditional sync here multiplied into
+    // one manifest GET per layer on EVERY (re)connect of a shared mux socket.
     this.channel?.send({ t: "hello", sinceVersion: this.manifest.version });
-    await this.sync();
   }
 
   private async onMessage(m: ServerMsg): Promise<void> {
     if (m.t === "synced" || m.t === "manifest") {
-      if (m.version > this.manifest.version) await this.sync();
+      // `!==`, not `>`: a rebuilt server manifest can restart its version
+      // counter below ours (rebuildManifest uses the entry count); content
+      // correctness rides the hash diff inside sync(), not the version.
+      if (m.version !== this.manifest.version) await this.sync();
     } else if (m.t === "change") {
       await this.applyChange(m);
     }
