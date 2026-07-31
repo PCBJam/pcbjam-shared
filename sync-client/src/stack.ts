@@ -45,10 +45,15 @@ export class SyncStack {
   /** bottom → top */
   private readonly layers: SyncLayer[];
   private readonly subs = new Set<(c: MergedChange) => void>();
+  /** For the deferred-realtime upgrade ({@link connectRealtime}). */
+  private readonly descriptors: LayerDescriptor[];
+  private readonly channelFactory: ChannelFactory;
 
   constructor(opts: SyncStackOptions) {
     const fetchImpl = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
     const channelFactory = opts.channelFactory ?? defaultChannelFactory;
+    this.descriptors = opts.layers;
+    this.channelFactory = channelFactory;
     const idbPrefix = opts.idbPrefix ?? "sync:";
     const makeStore =
       opts.storeFactory ?? ((ns: string) => idbStore(`${idbPrefix}${ns}`));
@@ -79,6 +84,7 @@ export class SyncStack {
         http,
         channel,
         bodyUrlTemplate: d.bodyUrlTemplate,
+        digest: d.digest,
         onChange: (c) => void this.onLayerChange(c),
       });
     });
@@ -141,6 +147,29 @@ export class SyncStack {
   subscribe(cb: (c: MergedChange) => void): () => void {
     this.subs.add(cb);
     return () => this.subs.delete(cb);
+  }
+
+  /**
+   * Promote live layers opened channel-less (`realtime: "shared-only"`) to
+   * realtime NOW — the second half of the deferred-realtime upgrade. Called
+   * when the consumer learns this stack's namespaces actually matter (e.g.
+   * the open document references this lib, so a peer's edit should reach the
+   * session live, not on the next load). Idempotent; layers that already hold
+   * a channel are untouched.
+   */
+  connectRealtime(): void {
+    this.layers.forEach((layer, i) => {
+      const d = this.descriptors[i]!;
+      if (d.kind !== "live" || layer.hasChannel) return;
+      layer.attachChannel(
+        this.channelFactory({
+          url: d.channel?.url ?? d.url,
+          namespace: d.namespace,
+          token: d.token,
+          lib: d.channel?.lib,
+        }),
+      );
+    });
   }
 
   close(): void {

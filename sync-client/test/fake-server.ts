@@ -21,6 +21,7 @@ export class FakeServer {
   /** Per-body fetches via POST /bodies or GET /body — i.e. NON-bundle reads. */
   bodyFetches = 0;
   bundleFetches = 0;
+  manifestFetches = 0;
   putCount = 0;
   /** Content-addressed GET /blob/<hash> fetches (sparse bodyUrlTemplate path). */
   blobFetches = 0;
@@ -36,7 +37,10 @@ export class FakeServer {
   async route(req: Request): Promise<Response> {
     const u = new URL(req.url);
     const p = u.pathname;
-    if (req.method === "GET" && p === "/manifest") return json(this.snapshot());
+    if (req.method === "GET" && p === "/manifest") {
+      this.manifestFetches += 1;
+      return json(this.snapshot());
+    }
     if (req.method === "GET" && p === "/bundle") {
       this.bundleFetches += 1;
       return bin(encodeBundle(this.snapshot(), [...this.bodies.entries()]));

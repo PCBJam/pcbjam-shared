@@ -1,5 +1,6 @@
 import {
   diffManifest,
+  manifestDigest,
   type ServerMsg,
   type SyncChange,
   type SyncEntry,
@@ -18,6 +19,9 @@ export interface SyncLayerDeps {
   channel?: RealtimeChannel;
   /** sparse only: content-addressed body location ({hash}/{path} placeholders) */
   bodyUrlTemplate?: string;
+  /** backend-stamped digest of the layer's current manifest (advisory — see
+   *  LayerDescriptor.digest); lets a warm open skip the manifest round-trip */
+  digest?: string;
   /** notify the stack of a low-level change (path-scoped) */
   onChange?: (c: SyncChange) => void;
 }
@@ -41,8 +45,9 @@ export class SyncLayer {
 
   private readonly store: LayerStore;
   private readonly http: LayerHttp;
-  private readonly channel?: RealtimeChannel;
+  private channel?: RealtimeChannel;
   private readonly bodyUrlTemplate?: string;
+  private readonly digest?: string;
   private readonly onChange?: (c: SyncChange) => void;
 
   private manifest: SyncManifest = emptyManifest();
@@ -61,6 +66,7 @@ export class SyncLayer {
     this.http = d.http;
     this.channel = d.channel;
     this.bodyUrlTemplate = d.bodyUrlTemplate;
+    this.digest = d.digest;
     this.onChange = d.onChange;
   }
 
@@ -79,14 +85,46 @@ export class SyncLayer {
     // (the server's `synced` reply names its version; onMessage syncs when it
     // differs) — an eager HTTP sync here would duplicate that per layer, which
     // on a 150-lib mux room is 150 manifest GETs per load for nothing.
-    else if (!this.channel) await this.sync();
-
-    if (this.channel) {
-      this.channel.onOpen(() => void this.onReconnect());
-      this.channel.onMessage((m) => void this.onMessage(m));
-      // First connect: announce where we are so the server can tell us if behind.
-      this.channel.send({ t: "hello", sinceVersion: this.manifest.version });
+    // A backend-stamped digest matching our cached manifest proves the layer
+    // current with ZERO requests; anything else falls back to the manifest
+    // sync (which is also what re-stamps the server's digest row).
+    else if (
+      !this.channel &&
+      !(this.digest && (await manifestDigest(this.manifest)) === this.digest)
+    ) {
+      await this.sync();
     }
+
+    if (this.channel) this.wireChannel(this.channel);
+  }
+
+  /**
+   * Attach a realtime channel AFTER open — the deferred-realtime upgrade: a
+   * bulk consumer opens its layers channel-less (`realtime: "shared-only"`)
+   * and later promotes the few namespaces that turn out to matter (e.g. libs
+   * the open document actually references). No-op if a channel is already
+   * wired. The hello announces our version; the server's `synced` reply
+   * drives a catch-up sync if we're behind.
+   */
+  attachChannel(channel: RealtimeChannel): void {
+    if (this.channel) {
+      channel.close(); // caller-created; don't leak a second socket/facade
+      return;
+    }
+    this.channel = channel;
+    this.wireChannel(channel);
+  }
+
+  /** Whether a realtime channel is wired (see {@link attachChannel}). */
+  get hasChannel(): boolean {
+    return this.channel !== undefined;
+  }
+
+  private wireChannel(channel: RealtimeChannel): void {
+    channel.onOpen(() => void this.onReconnect());
+    channel.onMessage((m) => void this.onMessage(m));
+    // First connect: announce where we are so the server can tell us if behind.
+    channel.send({ t: "hello", sinceVersion: this.manifest.version });
   }
 
   /** Cold bulk hydrate — one bundle fetch. */

@@ -1,4 +1,4 @@
-import type { LayerDescriptor } from "@pcbjam/shared";
+import { manifestDigest, type LayerDescriptor } from "@pcbjam/shared";
 import { beforeEach, describe, expect, it } from "vitest";
 import { memStore, SyncStack, type LayerStore } from "../src/index.js";
 import { FakeCloud, settle } from "./fake-server.js";
@@ -71,6 +71,50 @@ describe("cold init", () => {
     expect(text(await reopened.read("symbol/R"))).toBe("(R)");
     expect(cloud.server(MIRROR).bundleFetches).toBe(1); // not 2
     expect(cloud.server(MIRROR).bodyFetches).toBe(0);
+  });
+});
+
+describe("digest-stamped descriptors", () => {
+  let cloud: FakeCloud;
+  beforeEach(async () => {
+    cloud = new FakeCloud();
+    await cloud.server(ORIGIN).seed("symbol/R", body("origin-R"));
+  });
+
+  it("a matching digest proves the warm layer current — zero requests", async () => {
+    const b = browser();
+    await b.stack(cloud, [staticOrigin()]).open(); // cold: one bundle
+
+    const digest = await manifestDigest(cloud.server(ORIGIN).manifest);
+    const reopened = b.stack(cloud, [{ ...staticOrigin(), digest }]);
+    await reopened.open();
+
+    expect(text(await reopened.read("symbol/R"))).toBe("origin-R");
+    expect(cloud.server(ORIGIN).manifestFetches).toBe(0);
+    expect(cloud.server(ORIGIN).bundleFetches).toBe(1);
+  });
+
+  it("a mismatched digest falls back to the manifest sync", async () => {
+    const b = browser();
+    await b.stack(cloud, [staticOrigin()]).open();
+    // Server content moved after our cold open — the descriptor now carries
+    // the NEW digest, which no longer matches our cached manifest.
+    await cloud.server(ORIGIN).seed("symbol/R", body("origin-R2"));
+
+    const digest = await manifestDigest(cloud.server(ORIGIN).manifest);
+    const reopened = b.stack(cloud, [{ ...staticOrigin(), digest }]);
+    await reopened.open();
+
+    expect(cloud.server(ORIGIN).manifestFetches).toBe(1);
+    expect(text(await reopened.read("symbol/R"))).toBe("origin-R2");
+  });
+
+  it("no digest (older backend) keeps today's manifest sync", async () => {
+    const b = browser();
+    await b.stack(cloud, [staticOrigin()]).open();
+    const reopened = b.stack(cloud, [staticOrigin()]);
+    await reopened.open();
+    expect(cloud.server(ORIGIN).manifestFetches).toBe(1);
   });
 });
 
