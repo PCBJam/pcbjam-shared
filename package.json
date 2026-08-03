@@ -5,7 +5,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/emergence-engineering/pcbjam-shared.git"
+    "url": "git+https://github.com/PCBJam/pcbjam-shared.git"
   },
   "type": "module",
   "exports": {

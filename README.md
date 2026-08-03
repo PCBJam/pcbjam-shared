@@ -1,6 +1,6 @@
 # @pcbjam/shared
 
-The **contract** between the [PCBJam](https://github.com/emergence-engineering/pcbjam)
+The **contract** between the [PCBJam](https://github.com/PCBJam/pcbjam)
 wasm-frontend (the GPL standalone KiCad editor) and **any** backend that serves
 projects to it.
 
