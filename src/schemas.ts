@@ -117,6 +117,9 @@ export const projectSchema = z.object({
 });
 export type Project = z.infer<typeof projectSchema>;
 
+/** Request/response header for a project file's opaque CAS generation. */
+export const PROJECT_FILE_REVISION_HEADER = "x-pcbjam-file-revision";
+
 export const projectFileSchema = z.object({
   id: z.string().uuid(),
   projectId: z.string().uuid(),
@@ -124,6 +127,12 @@ export const projectFileSchema = z.object({
   path: z.string(),
   size: z.number().int().nonnegative(),
   contentType: z.string(),
+  /**
+   * Opaque, server-authoritative body generation used for conditional saves.
+   * Revision 0 means no published file row. Optional because static, local and
+   * minimal GPL backends can remain writable without implementing CAS.
+   */
+  revision: z.number().int().nonnegative().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
   /**

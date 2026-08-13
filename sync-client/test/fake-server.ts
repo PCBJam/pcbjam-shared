@@ -7,7 +7,11 @@ import {
   type SyncChange,
   type SyncManifest,
 } from "@pcbjam/shared";
-import type { ChannelFactory, RealtimeChannel } from "../src/transport.js";
+import {
+  MUTATION_ID_HEADER,
+  type ChannelFactory,
+  type RealtimeChannel,
+} from "../src/transport.js";
 
 /**
  * One in-memory namespace, reachable both as an HTTP origin (routed `fetch`) and
@@ -46,11 +50,17 @@ export class FakeServer {
       return bin(encodeBundle(this.snapshot(), [...this.bodies.entries()]));
     }
     if (req.method === "POST" && p === "/bodies") {
-      const { paths } = (await req.json()) as { paths: string[] };
-      this.bodyFetches += paths.length;
+      const { entries } = (await req.json()) as {
+        entries: Array<{ path: string; hash: string }>;
+      };
+      this.bodyFetches += entries.length;
       return bin(
         encodeFrames(
-          paths.map((path) => [path, this.bodies.get(path) ?? new Uint8Array()]),
+          entries.flatMap(({ path, hash }) =>
+            this.manifest.entries[path]?.hash === hash && this.bodies.has(path)
+              ? [[path, this.bodies.get(path)!] as [string, Uint8Array]]
+              : [],
+          ),
         ),
       );
     }
@@ -72,9 +82,13 @@ export class FakeServer {
       }
       if (req.method === "PUT") {
         const body = new Uint8Array(await req.arrayBuffer());
-        return json(await this.put(path, body));
+        return json(
+          await this.put(path, body, req.headers.get(MUTATION_ID_HEADER) ?? undefined),
+        );
       }
-      if (req.method === "DELETE") return json(this.del(path));
+      if (req.method === "DELETE") {
+        return json(this.del(path, req.headers.get(MUTATION_ID_HEADER) ?? undefined));
+      }
     }
     return new Response(null, { status: 404 });
   }
@@ -82,13 +96,21 @@ export class FakeServer {
   async put(
     path: string,
     body: Uint8Array,
+    mutationId?: string,
   ): Promise<{ version: number; hash: string; size: number }> {
     const hash = await sha256Hex(body);
     this.bodies.set(path, body);
     this.manifest.version += 1;
     this.manifest.entries[path] = { hash, size: body.length, mtime: 0 };
     this.putCount += 1;
-    this.broadcast({ op: "put", path, hash, size: body.length, version: this.manifest.version });
+    this.broadcast({
+      op: "put",
+      path,
+      hash,
+      size: body.length,
+      version: this.manifest.version,
+      mutationId,
+    });
     return { version: this.manifest.version, hash, size: body.length };
   }
 
@@ -101,11 +123,11 @@ export class FakeServer {
     this.manifest.entries[path] = { hash, size: body.length, mtime: 0 };
   }
 
-  del(path: string): { version: number } {
+  del(path: string, mutationId?: string): { version: number } {
     this.bodies.delete(path);
     delete this.manifest.entries[path];
     this.manifest.version += 1;
-    this.broadcast({ op: "del", path, version: this.manifest.version });
+    this.broadcast({ op: "del", path, version: this.manifest.version, mutationId });
     return { version: this.manifest.version };
   }
 
@@ -126,7 +148,10 @@ export class FakeServer {
 
   private broadcast(c: SyncChange): void {
     const msg: ServerMsg = { t: "change", ...c };
-    for (const ch of this.channels) ch._deliver(msg);
+    // A browser cannot synchronously re-enter websocket handlers from inside a
+    // fetch implementation. Deliver on the next task so HTTP and websocket race
+    // with realistic transport ordering while remaining deterministic.
+    for (const ch of this.channels) setTimeout(() => ch._deliver(msg), 0);
   }
 
   private snapshot(): SyncManifest {

@@ -136,4 +136,44 @@ describe("mux channel factory", () => {
     rawsFor(ROOM)[0]!.deliver({ t: "synced", version: 1, lib: "libA" });
     expect(got).toEqual([]);
   });
+
+  it("supports sibling facades for the same lib without close disrupting routing", () => {
+    const { factory, rawsFor } = harness();
+    const first = factory({ url: ROOM, namespace: "nsA-1", lib: "libA" });
+    const sibling = factory({ url: ROOM, namespace: "nsA-2", lib: "libA" });
+    const firstMessages: ServerMsg[] = [];
+    const siblingMessages: ServerMsg[] = [];
+    first.onMessage((message) => firstMessages.push(message));
+    sibling.onMessage((message) => siblingMessages.push(message));
+    const raw = rawsFor(ROOM)[0]!;
+
+    const beforeClose: ServerMsg = {
+      t: "synced",
+      version: 1,
+      lib: "libA",
+    };
+    raw.deliver(beforeClose);
+    expect(firstMessages).toEqual([beforeClose]);
+    expect(siblingMessages).toEqual([beforeClose]);
+
+    first.close();
+    expect(raw.closed).toBe(false);
+    const afterClose: ServerMsg = {
+      t: "synced",
+      version: 2,
+      lib: "libA",
+    };
+    raw.deliver(afterClose);
+
+    expect(firstMessages).toEqual([beforeClose]);
+    expect(siblingMessages).toEqual([beforeClose, afterClose]);
+    sibling.send({ t: "hello", sinceVersion: 2 });
+    expect(raw.sent.at(-1)).toEqual({
+      t: "hello",
+      sinceVersion: 2,
+      lib: "libA",
+    });
+    sibling.close();
+    expect(raw.closed).toBe(true);
+  });
 });

@@ -1,5 +1,5 @@
-import type { LayerDescriptor, SyncChange } from "@pcbjam/shared";
-import { SyncLayer } from "./layer.js";
+import type { LayerDescriptor } from "@pcbjam/shared";
+import { SyncLayer, type LayerChange } from "./layer.js";
 import { idbStore, type LayerStore } from "./store.js";
 import {
   defaultChannelFactory,
@@ -12,6 +12,8 @@ export interface MergedChange {
   path: string;
   /** true if some layer still provides the path after the merge; false = gone. */
   present: boolean;
+  /** Local HTTP mutation receipt, or remote websocket/full-sync reconciliation. */
+  origin: "local" | "remote";
 }
 
 export interface SyncStackOptions {
@@ -48,6 +50,9 @@ export class SyncStack {
   /** For the deferred-realtime upgrade ({@link connectRealtime}). */
   private readonly descriptors: LayerDescriptor[];
   private readonly channelFactory: ChannelFactory;
+  private notificationTail: Promise<void> = Promise.resolve();
+  private notificationGeneration = 0;
+  private closed = false;
 
   constructor(opts: SyncStackOptions) {
     const fetchImpl = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
@@ -85,14 +90,19 @@ export class SyncStack {
         channel,
         bodyUrlTemplate: d.bodyUrlTemplate,
         digest: d.digest,
-        onChange: (c) => void this.onLayerChange(c),
+        onChange: (change) => this.enqueueLayerChange(change),
       });
     });
   }
 
   /** Open (init-or-sync) every layer; connect live channels. */
   async open(): Promise<void> {
-    await Promise.all(this.layers.map((l) => l.open()));
+    try {
+      await Promise.all(this.layers.map((l) => l.open()));
+    } catch (error) {
+      this.close();
+      throw error;
+    }
   }
 
   /** Re-reconcile every layer against its remote. */
@@ -102,10 +112,16 @@ export class SyncStack {
 
   /** Merged body for a path: the topmost layer that provides it wins. */
   async read(path: string): Promise<Uint8Array | null> {
+    const generation = this.captureLifecycle();
     for (let i = this.layers.length - 1; i >= 0; i--) {
       const l = this.layers[i]!;
-      if (l.hasPath(path)) return l.getBody(path);
+      if (l.hasPath(path)) {
+        const body = await l.getBody(path);
+        this.assertLifecycle(generation);
+        return body;
+      }
     }
+    this.assertLifecycle(generation);
     return null;
   }
 
@@ -117,22 +133,27 @@ export class SyncStack {
    * whole namespace (e.g. a KiCad library) without N per-item round-trips.
    */
   async readAll(): Promise<Map<string, Uint8Array>> {
+    const generation = this.captureLifecycle();
     const perLayer = await Promise.all(this.layers.map((l) => l.readAll()));
+    this.assertLifecycle(generation);
     const merged = new Map<string, Uint8Array>();
     for (const layerBodies of perLayer) {
       for (const [path, body] of layerBodies) merged.set(path, body);
     }
+    this.assertLifecycle(generation);
     return merged;
   }
 
   /** Merged listing: top layers override lower ones by path. */
   async list(): Promise<Array<{ path: string; hash: string; size: number }>> {
+    const generation = this.captureLifecycle();
     const merged = new Map<string, { hash: string; size: number }>();
     for (const l of this.layers) {
       for (const [path, e] of Object.entries(l.entries())) {
         merged.set(path, { hash: e.hash, size: e.size });
       }
     }
+    this.assertLifecycle(generation);
     return [...merged].map(([path, e]) => ({ path, ...e }));
   }
 
@@ -145,6 +166,7 @@ export class SyncStack {
   }
 
   subscribe(cb: (c: MergedChange) => void): () => void {
+    if (this.closed) return () => {};
     this.subs.add(cb);
     return () => this.subs.delete(cb);
   }
@@ -158,6 +180,7 @@ export class SyncStack {
    * a channel are untouched.
    */
   connectRealtime(): void {
+    if (this.closed) return;
     this.layers.forEach((layer, i) => {
       const d = this.descriptors[i]!;
       if (d.kind !== "live" || layer.hasChannel) return;
@@ -173,6 +196,10 @@ export class SyncStack {
   }
 
   close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.notificationGeneration++;
+    this.subs.clear();
     for (const l of this.layers) l.close();
   }
 
@@ -183,9 +210,47 @@ export class SyncStack {
     throw new Error("no writable layer in stack");
   }
 
-  private async onLayerChange(c: SyncChange): Promise<void> {
-    const merged = await this.read(c.path);
-    const ev: MergedChange = { path: c.path, present: merged !== null };
-    for (const cb of this.subs) cb(ev);
+  /** Capture the exact stack lifetime which owns an asynchronous read. */
+  private captureLifecycle(): number {
+    if (this.closed) throw new Error("sync stack is closed");
+    return this.notificationGeneration;
+  }
+
+  /** A result from an expired stack must not escape into a replacement owner. */
+  private assertLifecycle(generation: number): void {
+    if (this.closed || generation !== this.notificationGeneration) {
+      throw new Error("sync stack is closed");
+    }
+  }
+
+  private deliverLayerChange(event: MergedChange, generation: number): void {
+    if (this.closed || generation !== this.notificationGeneration) return;
+    for (const cb of this.subs) {
+      try {
+        cb(event);
+      } catch {
+        // One subscriber cannot break source-order delivery to the others.
+      }
+    }
+  }
+
+  private enqueueLayerChange(change: LayerChange): void {
+    if (this.closed) return;
+    const generation = this.notificationGeneration;
+    // Snapshot top-wins presence now. Waiting for an asynchronous body read can
+    // otherwise attach an older source's origin to a newer merged state.
+    const event: MergedChange = {
+      path: change.path,
+      present: this.layers.some((layer) => layer.hasPath(change.path)),
+      origin: change.origin,
+    };
+    const notification = this.notificationTail.then(
+      () => this.deliverLayerChange(event, generation),
+      () => this.deliverLayerChange(event, generation),
+    );
+    this.notificationTail = notification.then(
+      () => {},
+      () => {},
+    );
   }
 }

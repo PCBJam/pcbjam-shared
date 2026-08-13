@@ -8,10 +8,23 @@
  */
 export { SyncStack } from "./stack.js";
 export type { MergedChange, SyncStackOptions } from "./stack.js";
-export { SyncLayer } from "./layer.js";
-export type { SyncLayerDeps } from "./layer.js";
+export {
+  DEFAULT_SYNC_MUTATION_QUEUE_LIMITS,
+  SyncLayer,
+  SyncMutationQueueFullError,
+} from "./layer.js";
+export type {
+  LayerChange,
+  SyncLayerDeps,
+  SyncMutationQueueFullReason,
+  SyncMutationQueueLimits,
+} from "./layer.js";
 export { idbStore, memStore } from "./store.js";
-export type { LayerStore } from "./store.js";
+export type {
+  LayerStore,
+  LayerStoreCommit,
+  LayerStoreSnapshotResult,
+} from "./store.js";
 export { peekNamespaces } from "./peek.js";
 export type { NamespacePeek } from "./peek.js";
 export {
@@ -21,6 +34,7 @@ export {
 } from "./transport.js";
 export type {
   ChannelFactory,
+  BodyRequest,
   LayerHttp,
   PutResult,
   RealtimeChannel,

@@ -1,6 +1,12 @@
 import { manifestDigest, type LayerDescriptor } from "@pcbjam/shared";
-import { beforeEach, describe, expect, it } from "vitest";
-import { memStore, SyncStack, type LayerStore } from "../src/index.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  memStore,
+  SyncStack,
+  type LayerChange,
+  type LayerStore,
+  type RealtimeChannel,
+} from "../src/index.js";
 import { FakeCloud, settle } from "./fake-server.js";
 
 const enc = new TextEncoder();
@@ -116,6 +122,33 @@ describe("digest-stamped descriptors", () => {
     await reopened.open();
     expect(cloud.server(ORIGIN).manifestFetches).toBe(1);
   });
+
+  it("never trusts a digest for a channel-less live layer", async () => {
+    await cloud.server(MIRROR).seed("symbol/R", body("live-R"));
+    const b = browser();
+    const first = b.stack(cloud, [liveMirror()]);
+    await first.open();
+    first.close();
+
+    const server = cloud.server(MIRROR);
+    const digest = await manifestDigest(server.manifest);
+    server.manifestFetches = 0;
+    const store = b.stores.get("mirror:p1")!;
+    const reopened = new SyncStack({
+      layers: [{ ...liveMirror(), digest }],
+      fetchImpl: cloud.fetchImpl,
+      channelFactory: cloud.channelFactory,
+      storeFactory: () => store,
+      realtime: "shared-only",
+    });
+    await reopened.open();
+
+    // Loading a live manifest is also the server-side dirty-state recovery
+    // trigger, so an external digest must never suppress this request.
+    expect(server.manifestFetches).toBe(1);
+    expect(text(await reopened.read("symbol/R"))).toBe("live-R");
+    reopened.close();
+  });
 });
 
 describe("writes (LWW, optimistic)", () => {
@@ -148,6 +181,166 @@ describe("writes (LWW, optimistic)", () => {
     expect(text(await bC.read("symbol/R"))).toBe("(R')");
     // Exactly the second client fetched the one changed body.
     expect(cloud.server(MIRROR).bodyFetches).toBe(1);
+  });
+
+  it("snapshots ordered merged notifications without waiting for body reads", async () => {
+    const backing = memStore();
+    const never = new Promise<Uint8Array | null>(() => {});
+    const unreadable: LayerStore = {
+      ...backing,
+      getBody: () => never,
+    };
+    const s = new SyncStack({
+      layers: [liveMirror()],
+      fetchImpl: cloud.fetchImpl,
+      channelFactory: cloud.channelFactory,
+      storeFactory: () => unreadable,
+    });
+    await s.open();
+    const changes: Array<{ present: boolean; origin: string }> = [];
+    s.subscribe((change) => changes.push(change));
+
+    await s.push("symbol/R", body("R"));
+    await s.delete("symbol/R");
+    await vi.waitFor(() => expect(changes).toHaveLength(2));
+
+    expect(changes).toEqual([
+      { path: "symbol/R", present: true, origin: "local" },
+      { path: "symbol/R", present: false, origin: "local" },
+    ]);
+    s.close();
+  });
+});
+
+describe("stack lifecycle", () => {
+  it("closes every acquired channel and store when open fails", async () => {
+    let released = 0;
+    let channelClosed = 0;
+    const backing = memStore();
+    const failingStore: LayerStore = {
+      ...backing,
+      acquire: () => () => {
+        released++;
+      },
+      getManifest: async () => {
+        throw new Error("open failed");
+      },
+    };
+    const channel: RealtimeChannel = {
+      onOpen: () => {},
+      onMessage: () => {},
+      send: () => {},
+      close: () => {
+        channelClosed++;
+      },
+    };
+    const stack = new SyncStack({
+      layers: [liveMirror()],
+      fetchImpl: async () => {
+        throw new Error("unexpected fetch");
+      },
+      channelFactory: () => channel,
+      storeFactory: () => failingStore,
+    });
+
+    await expect(stack.open()).rejects.toThrow("open failed");
+    expect(released).toBe(1);
+    expect(channelClosed).toBe(1);
+  });
+
+  it("invalidates a queued notification when close wins", async () => {
+    const cloud = new FakeCloud();
+    const stack = browser().stack(cloud, [liveMirror()]);
+    await stack.open();
+    const delivered: unknown[] = [];
+    stack.subscribe((change) => delivered.push(change));
+
+    const internal = stack as unknown as {
+      enqueueLayerChange(change: LayerChange): void;
+    };
+    internal.enqueueLayerChange({
+      op: "put",
+      path: "symbol/R",
+      hash: "h",
+      size: 1,
+      version: 1,
+      origin: "remote",
+    });
+    stack.close();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(delivered).toEqual([]);
+  });
+
+  it("rejects cached read results when close expires their stack lifetime", async () => {
+    const cloud = new FakeCloud();
+    await cloud.server(MIRROR).seed("symbol/R", body("old-R"));
+
+    const backing = memStore();
+    let delayReads = false;
+    let releaseBody!: () => void;
+    let releaseAll!: () => void;
+    const bodyGate = new Promise<void>((resolve) => {
+      releaseBody = resolve;
+    });
+    const allGate = new Promise<void>((resolve) => {
+      releaseAll = resolve;
+    });
+    const delayedStore: LayerStore = {
+      ...backing,
+      getBody: async (path) => {
+        if (delayReads) await bodyGate;
+        return backing.getBody(path);
+      },
+      getAllBodies: async () => {
+        if (delayReads) await allGate;
+        return backing.getAllBodies();
+      },
+    };
+    const stack = new SyncStack({
+      layers: [liveMirror()],
+      fetchImpl: cloud.fetchImpl,
+      channelFactory: cloud.channelFactory,
+      storeFactory: () => delayedStore,
+    });
+    await stack.open();
+    delayReads = true;
+
+    const one = stack.read("symbol/R");
+    const all = stack.readAll();
+    const oneRejected = expect(one).rejects.toThrow("sync stack is closed");
+    const allRejected = expect(all).rejects.toThrow("sync stack is closed");
+
+    stack.close();
+    releaseBody();
+    releaseAll();
+
+    await oneRejected;
+    await allRejected;
+    await expect(stack.read("symbol/R")).rejects.toThrow("sync stack is closed");
+    await expect(stack.list()).rejects.toThrow("sync stack is closed");
+  });
+
+  it("does not create a realtime channel after the stack is closed", () => {
+    const channelFactory = vi.fn((): RealtimeChannel => ({
+      onOpen: () => {},
+      onMessage: () => {},
+      send: () => {},
+      close: () => {},
+    }));
+    const stack = new SyncStack({
+      layers: [liveMirror()],
+      realtime: "shared-only",
+      fetchImpl: vi.fn(),
+      channelFactory,
+      storeFactory: () => memStore(),
+    });
+
+    expect(channelFactory).not.toHaveBeenCalled();
+    stack.close();
+    stack.connectRealtime();
+    expect(channelFactory).not.toHaveBeenCalled();
   });
 });
 
