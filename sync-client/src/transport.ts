@@ -48,10 +48,17 @@ export interface LayerHttp {
     path: string,
     mutationId?: string,
     signal?: AbortSignal,
+    expectedHash?: string,
   ): Promise<{ version: number }>;
 }
 
 export const MUTATION_ID_HEADER = "x-pcbjam-mutation-id";
+/**
+ * DELETE precondition: the manifest hash the client believes it is deleting.
+ * The server refuses (412) when the stored body differs — a delayed/replayed
+ * delete cannot erase a newer body. Optional for rolling upgrades.
+ */
+export const EXPECTED_HASH_HEADER = "x-pcbjam-expected-hash";
 
 /**
  * `fetch`-backed HTTP transport. `mode` picks the body-fetch strategy: a `live`
@@ -137,12 +144,15 @@ export function httpLayer(
     deleteBody:
       mode !== "live"
         ? (readOnly("delete") as LayerHttp["deleteBody"])
-        : async (path, mutationId, signal) => {
+        : async (path, mutationId, signal, expectedHash) => {
             const r = await fetchImpl(bodyUrl(path), {
               method: "DELETE",
               headers: {
                 ...authH,
                 ...(mutationId ? { [MUTATION_ID_HEADER]: mutationId } : {}),
+                ...(expectedHash
+                  ? { [EXPECTED_HASH_HEADER]: expectedHash }
+                  : {}),
               },
               signal,
             });

@@ -1025,10 +1025,22 @@ export class SyncLayer {
             mutation.collided = true;
           }
         } else {
+          // Precondition: the hash this client believes it is deleting (its
+          // current manifest view — the local lane is serial per path, so a
+          // queued delete sees its predecessors' committed receipts). The
+          // server refuses a mismatch (412 → generic failure → authoritative
+          // sync below) instead of erasing a body this client never saw. An
+          // absent entry sends no precondition — legacy unconditional delete.
+          const expectedHash = this.manifest.entries[mutation.path]?.hash;
           const result = await this.waitForMutationReceipt(
             mutation,
             (signal) =>
-              this.http.deleteBody(mutation.path, mutation.id, signal),
+              this.http.deleteBody(
+                mutation.path,
+                mutation.id,
+                signal,
+                expectedHash,
+              ),
           );
           receipt = { op: "del", version: result.version };
         }

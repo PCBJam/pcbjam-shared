@@ -1466,6 +1466,52 @@ describe("SyncLayer source sequencing", () => {
     expect(changes.map((change) => change.origin)).toEqual(["local", "remote"]);
   });
 
+  // B-5: a delete carries the hash the client believes it is deleting; a 412
+  // refusal (the server holds a newer body) must reject the delete and adopt
+  // the server's truth instead of erasing it.
+  it("sends the manifest hash as the delete precondition and adopts the winner on refusal", async () => {
+    const stored: SyncManifest = {
+      version: 3,
+      entries: { "symbol/R": { hash: "h-mine", size: 4, mtime: 0 } },
+    };
+    const sentPreconditions: Array<string | undefined> = [];
+    const http = fakeHttp({
+      deleteBody: async (_path, _mutationId, _signal, expectedHash) => {
+        sentPreconditions.push(expectedHash);
+        throw new Error("deleteBody 412");
+      },
+      // Authoritative truth after the refusal: a peer replaced the body.
+      getManifest: async () => ({
+        version: 5,
+        entries: { "symbol/R": { hash: "h-peer", size: 4, mtime: 0 } },
+      }),
+      getBodies: async (entries) =>
+        entries.map(({ path }) => [path, bytes("peer")] as [string, Uint8Array]),
+    });
+    const { layer } = await openLayer(http, undefined, memStore(), stored);
+
+    await expect(layer.delete("symbol/R")).rejects.toThrow("deleteBody 412");
+
+    expect(sentPreconditions).toEqual(["h-mine"]);
+    // The refused delete reconciled to the peer's newer body, not a deletion.
+    expect(layer.entries()["symbol/R"]?.hash).toBe("h-peer");
+    expect(text(await layer.getBody("symbol/R"))).toBe("peer");
+  });
+
+  it("sends no precondition when deleting a path absent from its manifest", async () => {
+    const sentPreconditions: Array<string | undefined> = [];
+    const http = fakeHttp({
+      deleteBody: async (_path, _mutationId, _signal, expectedHash) => {
+        sentPreconditions.push(expectedHash);
+        return { version: 1 };
+      },
+    });
+    const { layer } = await openLayer(http);
+
+    await layer.delete("symbol/unknown");
+    expect(sentPreconditions).toEqual([undefined]);
+  });
+
   it("retains no receipt or path state for no-op deletes without echoes", async () => {
     const count = 300;
     let version = 0;
@@ -1490,6 +1536,26 @@ describe("SyncLayer source sequencing", () => {
     expect(internals.paths.size).toBe(0);
     expect(internals.localPathLanes.size).toBe(0);
     expect(internals.optimistic.size).toBe(0);
+  });
+
+  // B-11 invariant: a SYNCHRONOUS throw from the transport must become a
+  // rejection (layer.ts wraps the request in Promise.resolve().then()) and the
+  // per-path lane must stay usable — not wedge with `running` stuck true.
+  it("survives a synchronously-throwing transport and keeps the lane usable", async () => {
+    let attempt = 0;
+    const http = fakeHttp({
+      putBody: ((_path: string, body: Uint8Array) => {
+        if (++attempt === 1) throw new Error("sync throw from transport");
+        return Promise.resolve({ version: 1, hash: "ok", size: body.length });
+      }) as LayerHttp["putBody"],
+    });
+    const { layer } = await openLayer(http);
+
+    await expect(layer.push("symbol/R", bytes("bad"))).rejects.toThrow(
+      "sync throw from transport",
+    );
+    await layer.push("symbol/R", bytes("good"));
+    expect(text(await layer.getBody("symbol/R"))).toBe("good");
   });
 
   it("cleans a failed mutation and keeps its same-path tail usable", async () => {
