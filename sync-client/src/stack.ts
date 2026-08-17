@@ -90,6 +90,7 @@ export class SyncStack {
         channel,
         bodyUrlTemplate: d.bodyUrlTemplate,
         digest: d.digest,
+        immutable: d.immutable,
         onChange: (change) => this.enqueueLayerChange(change),
       });
     });

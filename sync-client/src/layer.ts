@@ -20,6 +20,7 @@ export interface SyncLayerDeps {
   channel?: RealtimeChannel;
   bodyUrlTemplate?: string;
   digest?: string;
+  immutable?: boolean;
   onChange?: (change: LayerChange) => void;
   /** Optional lower ceilings for constrained hosts and deterministic tests. */
   mutationQueueLimits?: Partial<SyncMutationQueueLimits>;
@@ -287,6 +288,7 @@ export class SyncLayer {
   private channelReady = false;
   private readonly bodyUrlTemplate?: string;
   private readonly digest?: string;
+  private readonly immutable?: boolean;
   private readonly onChange?: (change: LayerChange) => void;
 
   private manifest: SyncManifest = emptyManifest();
@@ -340,6 +342,7 @@ export class SyncLayer {
     this.channel = deps.channel;
     this.bodyUrlTemplate = deps.bodyUrlTemplate;
     this.digest = deps.digest;
+    this.immutable = deps.immutable;
     this.onChange = deps.onChange;
     this.mutationQueueLimits = {
       maxPerPath: positiveIntegerLimit(
@@ -385,12 +388,17 @@ export class SyncLayer {
       else if (
         stored &&
         (this.kind === "live" ||
-          !(this.digest && (await manifestDigest(this.manifest)) === this.digest))
+          !(
+            this.immutable ||
+            (this.digest && (await manifestDigest(this.manifest)) === this.digest)
+          ))
       ) {
         // A live room can have a durable dirty marker whose recovery runs only
         // when its manifest is loaded. Digest bookkeeping is outside that
         // Durable Object/R2 transaction, so it cannot prove a live cache
-        // current. Channel-less live layers must always perform the GET.
+        // current. Channel-less live layers must always perform the GET —
+        // `immutable` is likewise ignored for them (guarded by the `live`
+        // branch above), it is only meaningful for version-pinned statics.
         await this.sync();
       }
     }

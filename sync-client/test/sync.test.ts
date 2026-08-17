@@ -151,6 +151,77 @@ describe("digest-stamped descriptors", () => {
   });
 });
 
+describe("immutable descriptors (version-pinned statics)", () => {
+  let cloud: FakeCloud;
+  beforeEach(async () => {
+    cloud = new FakeCloud();
+    await cloud.server(ORIGIN).seed("symbol/R", body("origin-R"));
+  });
+
+  it("a stored snapshot proves the warm layer current — zero requests, no digest", async () => {
+    const b = browser();
+    await b.stack(cloud, [{ ...staticOrigin(), immutable: true }]).open(); // cold: one bundle
+
+    const reopened = b.stack(cloud, [{ ...staticOrigin(), immutable: true }]);
+    await reopened.open();
+
+    expect(text(await reopened.read("symbol/R"))).toBe("origin-R");
+    expect(cloud.server(ORIGIN).manifestFetches).toBe(0);
+    expect(cloud.server(ORIGIN).bundleFetches).toBe(1);
+  });
+
+  it("cold open still fetches the bundle", async () => {
+    const b = browser();
+    const s = b.stack(cloud, [{ ...staticOrigin(), immutable: true }]);
+    await s.open();
+    expect(cloud.server(ORIGIN).bundleFetches).toBe(1);
+    expect(text(await s.read("symbol/R"))).toBe("origin-R");
+  });
+
+  it("never suppresses the manifest GET for a channel-less live layer", async () => {
+    await cloud.server(MIRROR).seed("symbol/R", body("live-R"));
+    const b = browser();
+    const first = b.stack(cloud, [liveMirror()]);
+    await first.open();
+    first.close();
+
+    const server = cloud.server(MIRROR);
+    server.manifestFetches = 0;
+    const store = b.stores.get("mirror:p1")!;
+    const reopened = new SyncStack({
+      layers: [{ ...liveMirror(), immutable: true }],
+      fetchImpl: cloud.fetchImpl,
+      channelFactory: cloud.channelFactory,
+      storeFactory: () => store,
+      realtime: "shared-only",
+    });
+    await reopened.open();
+
+    // Same rationale as `digest`: loading a live manifest doubles as the
+    // server-side dirty-state recovery trigger.
+    expect(server.manifestFetches).toBe(1);
+    reopened.close();
+  });
+
+  it("is ignored for sparse layers — their manifest still syncs on open", async () => {
+    const MODELS = "http://models-immutable";
+    await cloud.server(MODELS).seed("model3d/a.step", body("STEP-A"));
+    const sparse = (): LayerDescriptor => ({
+      namespace: "models:R@v1",
+      kind: "sparse",
+      url: MODELS,
+      immutable: true,
+    });
+    const b = browser();
+    await b.stack(cloud, [sparse()]).open();
+    const reopened = b.stack(cloud, [sparse()]);
+    await reopened.open();
+    // One manifest GET per open: the eager sync is what discovers entry
+    // hashes for the lazy per-body fetches.
+    expect(cloud.server(MODELS).manifestFetches).toBe(2);
+  });
+});
+
 describe("writes (LWW, optimistic)", () => {
   let cloud: FakeCloud;
   beforeEach(() => {
