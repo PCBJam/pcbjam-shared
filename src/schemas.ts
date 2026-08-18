@@ -151,6 +151,16 @@ export const projectFileSchema = z.object({
   isLive: z.boolean().optional(),
   /** max(file updatedAt, ydoc last-modified), ISO 8601 — for "last changed". */
   lastChanged: z.string().optional(),
+  /**
+   * Opaque content fingerprint of the persisted `.ydoc` blob (storage etag or
+   * an equivalent). While the room is COLD (`isLive` absent) the served bytes
+   * are a pure function of that blob, so this is a cache validator for
+   * ydoc-backed files — the one thing `revision:updatedAt` can never be for
+   * them, because collab edits move the blob without touching the file row.
+   * The blob is guaranteed fresh when cold: the room's last-close flush
+   * completes BEFORE the live marker is deleted.
+   */
+  ydocTag: z.string().optional(),
 });
 export type ProjectFile = z.infer<typeof projectFileSchema>;
 
