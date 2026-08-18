@@ -1,6 +1,10 @@
-import { encodeFrames } from "@pcbjam/shared";
+import { encodeFrames, SYNC_ACTION_HEADER, SYNC_ACTION_RELOAD } from "@pcbjam/shared";
 import { describe, expect, it, vi } from "vitest";
-import { defaultChannelFactory, httpLayer } from "../src/transport.js";
+import {
+  defaultChannelFactory,
+  httpLayer,
+  SyncRoomMovedError,
+} from "../src/transport.js";
 
 describe("httpLayer rolling body requests", () => {
   it("sends hash-bound entries and the legacy path list together", async () => {
@@ -35,6 +39,41 @@ describe("httpLayer rolling body requests", () => {
     await http.getManifest(controller.signal);
 
     expect(received).toBe(controller.signal);
+  });
+});
+
+describe("cutover 409 (x-pcbjam-sync-action: reload)", () => {
+  const moved = () =>
+    new Response(JSON.stringify({ message: "room moved" }), {
+      status: 409,
+      headers: { [SYNC_ACTION_HEADER]: SYNC_ACTION_RELOAD },
+    });
+
+  it("PUT and DELETE surface a typed SyncRoomMovedError", async () => {
+    const http = httpLayer(
+      "https://sync.test",
+      undefined,
+      (async () => moved()) as typeof fetch,
+      "live",
+    );
+    await expect(http.putBody("symbol/R", new Uint8Array([1]))).rejects.toBeInstanceOf(
+      SyncRoomMovedError,
+    );
+    await expect(http.deleteBody("symbol/R")).rejects.toBeInstanceOf(
+      SyncRoomMovedError,
+    );
+  });
+
+  it("a 409 WITHOUT the action header stays a generic failure", async () => {
+    const http = httpLayer(
+      "https://sync.test",
+      undefined,
+      (async () => new Response(null, { status: 409 })) as typeof fetch,
+      "live",
+    );
+    const err = await http.putBody("symbol/R", new Uint8Array([1])).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(SyncRoomMovedError);
   });
 });
 

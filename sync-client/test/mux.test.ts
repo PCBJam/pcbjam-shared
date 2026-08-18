@@ -99,6 +99,65 @@ describe("mux channel factory", () => {
     expect(got.b).toEqual([{ t: "synced", version: 2, lib: "libB" }]);
   });
 
+  it("a room-level registry frame fans out to every facade it mentions", () => {
+    const { factory, rawsFor } = harness();
+    const a = factory({ url: ROOM, namespace: "nsA", lib: "libA" });
+    const b = factory({ url: ROOM, namespace: "nsB", lib: "libB" });
+    const c = factory({ url: ROOM, namespace: "nsC", lib: "libC" });
+    const got: Record<string, ServerMsg[]> = { a: [], b: [], c: [] };
+    a.onMessage((m) => got.a!.push(m));
+    b.onMessage((m) => got.b!.push(m));
+    c.onMessage((m) => got.c!.push(m));
+
+    const frame: ServerMsg = {
+      t: "registry",
+      libs: { libA: { v: 3, digest: "dA" }, libB: { v: 5, digest: "dB" } },
+    };
+    rawsFor(ROOM)[0]!.deliver(frame);
+
+    // Untagged, yet routed: each mentioned facade gets the ONE shared frame
+    // (layers pick their own entry by namespace); an unmentioned facade
+    // (dirty/unknown sub-namespace) hears nothing.
+    expect(got.a).toEqual([frame]);
+    expect(got.b).toEqual([frame]);
+    expect(got.c).toEqual([]);
+  });
+
+  it("replays the registry snapshot to a facade created after the frame", async () => {
+    const { factory, rawsFor } = harness();
+    factory({ url: ROOM, namespace: "nsA", lib: "libA" }); // opens the raw socket
+    const frame: ServerMsg = {
+      t: "registry",
+      libs: { libA: { v: 1, digest: "dA" }, libB: { v: 2, digest: "dB" } },
+    };
+    rawsFor(ROOM)[0]!.deliver(frame);
+
+    // A boot's presync creates facades over time — a late layer must still
+    // receive the connect-time snapshot (state, not event), delivered on the
+    // next task so its onMessage handler is wired first.
+    const late = factory({ url: ROOM, namespace: "nsB", lib: "libB" });
+    const got: ServerMsg[] = [];
+    late.onMessage((m) => got.push(m));
+    expect(got).toEqual([]); // not synchronously
+    await new Promise((r) => setTimeout(r, 0));
+    expect(got).toEqual([frame]);
+
+    // A facade whose lib the snapshot does not mention gets no replay.
+    const unmentioned = factory({ url: ROOM, namespace: "nsC", lib: "libC" });
+    const gotC: ServerMsg[] = [];
+    unmentioned.onMessage((m) => gotC.push(m));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(gotC).toEqual([]);
+
+    // A reconnect invalidates the snapshot — no stale replay afterwards.
+    rawsFor(ROOM)[0]!.fireOpen();
+    const postReconnect = factory({ url: ROOM, namespace: "nsB2", lib: "libB" });
+    const gotB2: ServerMsg[] = [];
+    postReconnect.onMessage((m) => gotB2.push(m));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(gotB2).toEqual([]);
+  });
+
   it("onOpen fans out to every facade (each layer re-hellos on reconnect)", () => {
     const { factory, rawsFor } = harness();
     const a = factory({ url: ROOM, namespace: "nsA", lib: "libA" });

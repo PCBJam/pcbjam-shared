@@ -1,10 +1,35 @@
 import {
   decodeBundle,
   decodeFrames,
+  SYNC_ACTION_HEADER,
+  SYNC_ACTION_RELOAD,
   type ClientMsg,
   type ServerMsg,
   type SyncManifest,
 } from "@pcbjam/shared";
+
+/**
+ * A mutation was refused because the addressed room is no longer this
+ * namespace's writer (409 + `x-pcbjam-sync-action: reload` — the scope-room
+ * cutover, load-path-rework 0002 §4). The caller's recovery is: drop the
+ * cached stack descriptor, re-resolve, retry the write once against the room
+ * the fresh descriptor names.
+ */
+export class SyncRoomMovedError extends Error {
+  constructor(op: string, path: string) {
+    super(`${op} ${path}: room no longer accepts writes (re-resolve the stack)`);
+    this.name = "SyncRoomMovedError";
+  }
+}
+
+function roomMoved(r: Response): boolean {
+  // Defensive on headers: injected test fetches may answer with bare
+  // `{ok, status}` objects that have no headers at all.
+  return (
+    r.status === 409 &&
+    r.headers?.get?.(SYNC_ACTION_HEADER) === SYNC_ACTION_RELOAD
+  );
+}
 
 /** Server's reply to a write — the authoritative version + content hash. */
 export interface PutResult {
@@ -138,6 +163,7 @@ export function httpLayer(
               body: body as BodyInit,
               signal,
             });
+            if (roomMoved(r)) throw new SyncRoomMovedError("putBody", path);
             if (!r.ok) throw new Error(`putBody ${r.status}`);
             return (await r.json()) as PutResult;
           },
@@ -156,6 +182,7 @@ export function httpLayer(
               },
               signal,
             });
+            if (roomMoved(r)) throw new SyncRoomMovedError("deleteBody", path);
             if (!r.ok) throw new Error(`deleteBody ${r.status}`);
             return (await r.json()) as { version: number };
           },
@@ -247,9 +274,20 @@ class MuxRawChannel {
       closed: boolean;
     }>
   >();
+  /**
+   * The last room-level registry frame, replayed to facades created after it
+   * arrived. The frame is a STATE snapshot, not an event: the room sends it
+   * once per connect, while a boot's presync creates facades over hundreds of
+   * milliseconds — without replay every late layer would miss its verdict and
+   * pay the deadline-fallback sync the registry exists to remove.
+   */
+  private lastRegistry: (ServerMsg & { t: "registry" }) | null = null;
 
   constructor(private readonly raw: RealtimeChannel) {
     raw.onOpen(() => {
+      // A (re)connect invalidates the previous snapshot: the room re-sends its
+      // current one, and replaying a pre-disconnect frame could affirm stale.
+      this.lastRegistry = null;
       for (const group of this.facades.values()) {
         for (const facade of [...group]) {
           for (const cb of [...facade.openCbs]) {
@@ -260,6 +298,23 @@ class MuxRawChannel {
       }
     });
     raw.onMessage((m) => {
+      // Room-level registry frames are never lib-tagged: fan the ONE frame out
+      // to every facade whose mux key it mentions (each layer picks its own
+      // entry by namespace — the mux key IS the sub-namespace name).
+      if (m.t === "registry") {
+        this.lastRegistry = m;
+        for (const lib of Object.keys(m.libs ?? {})) {
+          const group = this.facades.get(lib);
+          if (!group) continue;
+          for (const facade of [...group]) {
+            for (const cb of [...facade.msgCbs]) {
+              if (facade.closed) break;
+              cb(m);
+            }
+          }
+        }
+        return;
+      }
       const group = this.facades.get((m as { lib?: string }).lib ?? "");
       if (!group) return;
       for (const facade of [...group]) {
@@ -283,6 +338,19 @@ class MuxRawChannel {
       this.facades.set(lib, group);
     }
     group.add(state);
+    // Replay the current registry snapshot to a late-created facade — on the
+    // next task, so the caller has wired onMessage first (SyncLayer attaches
+    // handlers right after the factory returns).
+    if (this.lastRegistry && lib in (this.lastRegistry.libs ?? {})) {
+      const replay = this.lastRegistry;
+      setTimeout(() => {
+        if (state.closed || this.lastRegistry !== replay) return;
+        for (const cb of [...state.msgCbs]) {
+          if (state.closed) break;
+          cb(replay);
+        }
+      }, 0);
+    }
     return {
       onOpen: (cb) => state.openCbs.push(cb),
       onMessage: (cb) => state.msgCbs.push(cb),

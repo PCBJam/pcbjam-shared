@@ -35,6 +35,11 @@ export interface SyncStackOptions {
    * lib editor on its one lib) keeps `"all"` for realtime peer edits.
    */
   realtime?: "all" | "shared-only";
+  /**
+   * Deadline for the registry verdict of mux-keyed live layers (see
+   * SyncLayerDeps.registryEligible); default in layer.ts. Tests lower it.
+   */
+  registryDeadlineMs?: number;
 }
 
 /**
@@ -91,6 +96,11 @@ export class SyncStack {
         bodyUrlTemplate: d.bodyUrlTemplate,
         digest: d.digest,
         immutable: d.immutable,
+        // Only mux-keyed layers may skip their eager sync on a registry
+        // verdict: the mux key names a registry-bearing room (0002 §3.3);
+        // dedicated single-namespace sockets keep today's eager sync.
+        registryEligible: channel !== undefined && d.channel?.lib !== undefined,
+        registryDeadlineMs: opts.registryDeadlineMs,
         onChange: (change) => this.enqueueLayerChange(change),
       });
     });

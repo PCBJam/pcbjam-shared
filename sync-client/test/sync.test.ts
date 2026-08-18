@@ -151,6 +151,105 @@ describe("digest-stamped descriptors", () => {
   });
 });
 
+describe("registry-bearing rooms (scope socket, load-path-rework 0002)", () => {
+  // A live layer riding a mux key on a room that affirms sub-namespace digests
+  // on connect. The mux key doubles as the sub-namespace name (0002 §3.3).
+  const NS = "mirror:p1";
+  const muxMirror = (): LayerDescriptor => ({
+    ...liveMirror(),
+    channel: { url: MIRROR, lib: NS },
+  });
+
+  let cloud: FakeCloud;
+  beforeEach(async () => {
+    cloud = new FakeCloud();
+    await cloud.server(MIRROR).seed("symbol/R", body("live-R"));
+  });
+
+  it("registry affirm — warm reopen makes ZERO manifest GETs", async () => {
+    const b = browser();
+    const first = b.stack(cloud, [muxMirror()]);
+    await first.open();
+    await settle();
+    first.close();
+
+    const server = cloud.server(MIRROR);
+    server.sendRegistryOnConnect(NS);
+    server.manifestFetches = 0;
+    const reopened = b.stack(cloud, [muxMirror()]);
+    await reopened.open();
+    await settle();
+
+    expect(server.manifestFetches).toBe(0);
+    expect(text(await reopened.read("symbol/R"))).toBe("live-R");
+    reopened.close();
+  });
+
+  it("registry mismatch — server moved while we were away → syncs", async () => {
+    const b = browser();
+    const first = b.stack(cloud, [muxMirror()]);
+    await first.open();
+    await settle();
+    first.close();
+
+    const server = cloud.server(MIRROR);
+    await server.seed("symbol/C", body("live-C")); // no broadcast — we were gone
+    server.sendRegistryOnConnect(NS);
+    server.manifestFetches = 0;
+    const reopened = b.stack(cloud, [muxMirror()]);
+    await reopened.open();
+    await settle();
+
+    // The mismatch forces at least one manifest GET (the hello reply's version
+    // mismatch may coalesce into the same drain or add one more — either way
+    // the content must arrive).
+    expect(server.manifestFetches).toBeGreaterThan(0);
+    expect(text(await reopened.read("symbol/C"))).toBe("live-C");
+    reopened.close();
+  });
+
+  it("silent room (old server, no registry) — the deadline falls back to sync", async () => {
+    const b = browser();
+    const first = b.stack(cloud, [muxMirror()]);
+    await first.open();
+    await settle();
+    first.close();
+
+    const server = cloud.server(MIRROR);
+    server.manifestFetches = 0;
+    // FakeChannel's hello reply answers with the matching version, so only the
+    // deadline can trigger this sync — which is exactly what we're testing.
+    const reopened = new SyncStack({
+      layers: [muxMirror()],
+      fetchImpl: cloud.fetchImpl,
+      channelFactory: cloud.channelFactory,
+      storeFactory: (ns) => b.stores.get(ns) ?? b.stores.set(ns, memStore()).get(ns)!,
+      registryDeadlineMs: 10,
+    });
+    await reopened.open();
+    await vi.waitFor(() => expect(server.manifestFetches).toBe(1));
+    reopened.close();
+  });
+
+  it("a dedicated (non-mux) live channel keeps today's eager sync", async () => {
+    const b = browser();
+    const first = b.stack(cloud, [liveMirror()]);
+    await first.open();
+    await settle();
+    first.close();
+
+    const server = cloud.server(MIRROR);
+    server.sendRegistryOnConnect(NS); // even an affirming room does not matter here
+    server.manifestFetches = 0;
+    const reopened = b.stack(cloud, [liveMirror()]);
+    await reopened.open();
+    await settle();
+
+    expect(server.manifestFetches).toBe(1);
+    reopened.close();
+  });
+});
+
 describe("immutable descriptors (version-pinned statics)", () => {
   let cloud: FakeCloud;
   beforeEach(async () => {

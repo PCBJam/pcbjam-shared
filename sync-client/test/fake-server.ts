@@ -1,7 +1,10 @@
 import {
   encodeBundle,
   encodeFrames,
+  manifestDigest,
   sha256Hex,
+  SYNC_ACTION_HEADER,
+  SYNC_ACTION_RELOAD,
   type ClientMsg,
   type ServerMsg,
   type SyncChange,
@@ -29,6 +32,15 @@ export class FakeServer {
   putCount = 0;
   /** Content-addressed GET /blob/<hash> fetches (sparse bodyUrlTemplate path). */
   blobFetches = 0;
+  /** Cutover mode: every write answers 409 + x-pcbjam-sync-action: reload. */
+  refuseWritesMoved = false;
+  /**
+   * Registry-bearing room (load-path-rework 0002): namespaces whose digest the
+   * room affirms on connect via a `registry` frame. `sendRegistryOnConnect(ns)`
+   * arms it; the frame is delivered on the next task so the stack's handlers
+   * are wired first — same delayed delivery as `broadcast`.
+   */
+  private registryNamespaces: string[] | null = null;
 
   /** Seed an item with no change broadcast (initial server state). */
   async seed(path: string, body: Uint8Array): Promise<void> {
@@ -79,6 +91,14 @@ export class FakeServer {
         this.bodyFetches += 1;
         const b = this.bodies.get(path);
         return b ? bin(b) : new Response(null, { status: 404 });
+      }
+      if (req.method === "PUT" || req.method === "DELETE") {
+        if (this.refuseWritesMoved) {
+          return new Response(JSON.stringify({ message: "room moved" }), {
+            status: 409,
+            headers: { [SYNC_ACTION_HEADER]: SYNC_ACTION_RELOAD },
+          });
+        }
       }
       if (req.method === "PUT") {
         const body = new Uint8Array(await req.arrayBuffer());
@@ -134,7 +154,24 @@ export class FakeServer {
   connect(): FakeChannel {
     const ch = new FakeChannel(this);
     this.channels.add(ch);
+    if (this.registryNamespaces) {
+      const namespaces = [...this.registryNamespaces];
+      setTimeout(() => {
+        void (async () => {
+          const digest = await manifestDigest(this.manifest);
+          const libs = Object.fromEntries(
+            namespaces.map((ns) => [ns, { v: this.manifest.version, digest }]),
+          );
+          ch._deliver({ t: "registry", libs });
+        })();
+      }, 0);
+    }
     return ch;
+  }
+
+  /** Arm the room to send a `registry` frame (for `namespaces`) on connect. */
+  sendRegistryOnConnect(...namespaces: string[]): void {
+    this.registryNamespaces = namespaces;
   }
 
   /** Simulate a transport reconnect: fire onOpen on every live channel. */

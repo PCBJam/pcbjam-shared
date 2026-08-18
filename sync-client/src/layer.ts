@@ -21,6 +21,15 @@ export interface SyncLayerDeps {
   bodyUrlTemplate?: string;
   digest?: string;
   immutable?: boolean;
+  /**
+   * The channel is a mux facade on a registry-bearing room (descriptor carried
+   * `channel.lib`): open() may skip the eager manifest sync and instead await
+   * the room's registry verdict — affirm (digest match) keeps the skip; a
+   * mismatch, an omitted entry (dirty), or silence past `registryDeadlineMs`
+   * falls back to sync(). See load-path-rework 0002 §3.3.
+   */
+  registryEligible?: boolean;
+  registryDeadlineMs?: number;
   onChange?: (change: LayerChange) => void;
   /** Optional lower ceilings for constrained hosts and deterministic tests. */
   mutationQueueLimits?: Partial<SyncMutationQueueLimits>;
@@ -123,6 +132,13 @@ function sameReceipt(
 const MAX_COMPLETED_MUTATION_IDS = 4_096;
 const MAX_REMOTE_PATHS = 256;
 const DEFAULT_MUTATION_RECEIPT_DEADLINE_MS = 30_000;
+/**
+ * How long a registry-skipped open waits for the room's registry frame before
+ * falling back to the manifest sync. Short on purpose: the frame rides the
+ * just-opened socket, so silence past this window means an old server or a
+ * down socket — both of which must degrade to exactly today's behavior.
+ */
+const DEFAULT_REGISTRY_DEADLINE_MS = 1_500;
 const INITIAL_REPAIR_DELAY_MS = 100;
 const MAX_REPAIR_DELAY_MS = 30_000;
 
@@ -289,6 +305,12 @@ export class SyncLayer {
   private readonly bodyUrlTemplate?: string;
   private readonly digest?: string;
   private readonly immutable?: boolean;
+  private readonly registryEligible: boolean;
+  private readonly registryDeadlineMs: number;
+  /** Armed between a registry-skipped open and its verdict (frame or deadline). */
+  private registryWatch: { timer: ReturnType<typeof setTimeout> } | null = null;
+  /** undefined = no registry frame yet; null = frame arrived without our entry. */
+  private registryEntry: { v: number; digest: string } | null | undefined;
   private readonly onChange?: (change: LayerChange) => void;
 
   private manifest: SyncManifest = emptyManifest();
@@ -343,6 +365,12 @@ export class SyncLayer {
     this.bodyUrlTemplate = deps.bodyUrlTemplate;
     this.digest = deps.digest;
     this.immutable = deps.immutable;
+    this.registryEligible = deps.registryEligible ?? false;
+    this.registryDeadlineMs = positiveIntegerLimit(
+      deps.registryDeadlineMs,
+      DEFAULT_REGISTRY_DEADLINE_MS,
+      "registryDeadlineMs",
+    );
     this.onChange = deps.onChange;
     this.mutationQueueLimits = {
       maxPerPath: positiveIntegerLimit(
@@ -384,8 +412,17 @@ export class SyncLayer {
       await this.sync();
     } else {
       if (!stored) await this.init(stored);
-      if (this.channel) await this.sync();
-      else if (
+      if (this.channel) {
+        if (this.kind === "live" && this.registryEligible) {
+          // Registry-bearing room: skip the eager GET and let the room's
+          // registry frame affirm the stored snapshot (or force the sync).
+          // open() completes immediately — reads serve the stored snapshot
+          // until the verdict, the same staleness window realtime already has.
+          this.armRegistryWatch(generation);
+        } else {
+          await this.sync();
+        }
+      } else if (
         stored &&
         (this.kind === "live" ||
           !(
@@ -408,6 +445,35 @@ export class SyncLayer {
       this.sendHello(this.channel, generation);
     }
     if (this.isCurrentGeneration(generation)) this.openComplete = true;
+  }
+
+  /**
+   * Await the room's registry verdict instead of eagerly syncing. A frame that
+   * already arrived (wireChannel runs before the open decision) settles
+   * immediately; otherwise the deadline guarantees an eventual sync when the
+   * room stays silent (old server, down socket) — availability never regresses
+   * below today's always-GET behavior.
+   */
+  private armRegistryWatch(generation: number): void {
+    if (this.registryEntry !== undefined) {
+      void this.settleRegistryVerdict();
+      return;
+    }
+    this.registryWatch = {
+      timer: setTimeout(() => {
+        if (!this.isCurrentGeneration(generation) || !this.registryWatch) return;
+        this.registryWatch = null;
+        void this.sync();
+      }, this.registryDeadlineMs),
+    };
+  }
+
+  /** Digest match keeps the skipped sync skipped; anything else syncs. */
+  private async settleRegistryVerdict(): Promise<void> {
+    const entry = this.registryEntry;
+    const affirmed =
+      entry != null && (await manifestDigest(this.manifest)) === entry.digest;
+    if (!affirmed) await this.sync();
   }
 
   attachChannel(channel: RealtimeChannel): void {
@@ -668,6 +734,20 @@ export class SyncLayer {
     }
     if (message.t === "synced") {
       if (message.version !== this.manifest.version) await this.sync();
+      return;
+    }
+    if (message.t === "registry") {
+      // Room-level frame; our entry (or its absence) is the verdict for the
+      // open-time watch. Outside the watch it is ignored — steady-state
+      // freshness rides change/synced/manifest frames, and reacting to every
+      // registry frame would race the async application of the change that
+      // triggered it.
+      this.registryEntry = message.libs?.[this.namespace] ?? null;
+      if (this.registryWatch) {
+        clearTimeout(this.registryWatch.timer);
+        this.registryWatch = null;
+        await this.settleRegistryVerdict();
+      }
       return;
     }
 
@@ -1457,6 +1537,10 @@ export class SyncLayer {
     this.httpAbort.abort(closed);
     this.openComplete = false;
     this.channelReady = false;
+    if (this.registryWatch) {
+      clearTimeout(this.registryWatch.timer);
+      this.registryWatch = null;
+    }
     this.syncRequested = false;
     this.repairRequested = false;
     this.optimistic.clear();
