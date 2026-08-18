@@ -282,9 +282,15 @@ class MuxRawChannel {
    * pay the deadline-fallback sync the registry exists to remove.
    */
   private lastRegistry: (ServerMsg & { t: "registry" }) | null = null;
+  /** The raw socket has opened at least once. Like the registry snapshot,
+   *  open-ness is STATE for a mux: a facade created after the socket opened
+   *  gets a synthetic open event, or its layer would never arm the deadline
+   *  that guards the silent-room fallback. */
+  private rawEverOpened = false;
 
   constructor(private readonly raw: RealtimeChannel) {
     raw.onOpen(() => {
+      this.rawEverOpened = true;
       // A (re)connect invalidates the previous snapshot: the room re-sends its
       // current one, and replaying a pre-disconnect frame could affirm stale.
       this.lastRegistry = null;
@@ -338,16 +344,31 @@ class MuxRawChannel {
       this.facades.set(lib, group);
     }
     group.add(state);
-    // Replay the current registry snapshot to a late-created facade — on the
-    // next task, so the caller has wired onMessage first (SyncLayer attaches
-    // handlers right after the factory returns).
-    if (this.lastRegistry && lib in (this.lastRegistry.libs ?? {})) {
+    // Replay channel STATE to a late-created facade — on the next task, so
+    // the caller has wired its handlers first (SyncLayer attaches them right
+    // after the factory returns). Open-ness first, then the registry
+    // snapshot: the same order a real connection delivers them.
+    if (this.rawEverOpened || this.lastRegistry) {
       const replay = this.lastRegistry;
+      const wasOpen = this.rawEverOpened;
       setTimeout(() => {
-        if (state.closed || this.lastRegistry !== replay) return;
-        for (const cb of [...state.msgCbs]) {
-          if (state.closed) break;
-          cb(replay);
+        if (state.closed) return;
+        if (wasOpen) {
+          for (const cb of [...state.openCbs]) {
+            if (state.closed) break;
+            cb();
+          }
+        }
+        if (
+          !state.closed &&
+          replay &&
+          this.lastRegistry === replay &&
+          lib in (replay.libs ?? {})
+        ) {
+          for (const cb of [...state.msgCbs]) {
+            if (state.closed) break;
+            cb(replay);
+          }
         }
       }, 0);
     }

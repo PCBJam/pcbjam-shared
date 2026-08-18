@@ -307,8 +307,11 @@ export class SyncLayer {
   private readonly immutable?: boolean;
   private readonly registryEligible: boolean;
   private readonly registryDeadlineMs: number;
-  /** Armed between a registry-skipped open and its verdict (frame or deadline). */
-  private registryWatch: { timer: ReturnType<typeof setTimeout> } | null = null;
+  /** Armed between a registry-skipped open and its verdict (frame or deadline).
+   *  `timer` is null while the watch is PASSIVE — armed before the channel has
+   *  ever opened, where a deadline would only race the socket dial. */
+  private registryWatch: { timer: ReturnType<typeof setTimeout> | null } | null =
+    null;
   /** undefined = no registry frame yet; null = frame arrived without our entry. */
   private registryEntry: { v: number; digest: string } | null | undefined;
   private readonly onChange?: (change: LayerChange) => void;
@@ -418,7 +421,8 @@ export class SyncLayer {
           // registry frame affirm the stored snapshot (or force the sync).
           // open() completes immediately — reads serve the stored snapshot
           // until the verdict, the same staleness window realtime already has.
-          this.armRegistryWatch(generation);
+          // Passive (no deadline) until the channel's open event re-arms it.
+          this.armRegistryWatch(generation, false);
         } else {
           await this.sync();
         }
@@ -450,21 +454,30 @@ export class SyncLayer {
   /**
    * Await the room's registry verdict instead of eagerly syncing. A frame that
    * already arrived (wireChannel runs before the open decision) settles
-   * immediately; otherwise the deadline guarantees an eventual sync when the
-   * room stays silent (old server, down socket) — availability never regresses
-   * below today's always-GET behavior.
+   * immediately. `withDeadline` guards the silent-room fallback (old server,
+   * half-dead socket): it is armed only from the channel's OPEN handler —
+   * counting down before the socket has even connected would just race the
+   * dial (worker authorize + DO wake can exceed any sane deadline) and burst
+   * pointless GETs, which is exactly what the registry exists to remove. A
+   * passive (pre-open) watch resolves via the frame, or is re-armed WITH the
+   * deadline when the open event lands (every mux facade gets one — the mux
+   * synthesizes it for facades created after the raw socket opened).
    */
-  private armRegistryWatch(generation: number): void {
+  private armRegistryWatch(generation: number, withDeadline: boolean): void {
     if (this.registryEntry !== undefined) {
       void this.settleRegistryVerdict();
       return;
     }
     this.registryWatch = {
-      timer: setTimeout(() => {
-        if (!this.isCurrentGeneration(generation) || !this.registryWatch) return;
-        this.registryWatch = null;
-        void this.sync();
-      }, this.registryDeadlineMs),
+      timer: withDeadline
+        ? setTimeout(() => {
+            if (!this.isCurrentGeneration(generation) || !this.registryWatch) {
+              return;
+            }
+            this.registryWatch = null;
+            void this.sync();
+          }, this.registryDeadlineMs)
+        : null,
     };
   }
 
@@ -516,6 +529,25 @@ export class SyncLayer {
 
   private refreshThenHello(channel: RealtimeChannel, generation: number): void {
     if (!this.isCurrentGeneration(generation) || this.channelRefresh) return;
+    if (this.kind === "live" && this.registryEligible) {
+      // Registry-bearing room: it re-sends its snapshot on EVERY connect, so
+      // let the verdict decide whether this (re)connect needs a resync. An
+      // unconditional sync here would re-create the very warm-load GET burst
+      // the registry exists to remove — `onOpen` fires on the FIRST connect
+      // too, which in a real browser lands right after open() completed and
+      // would have synced every mux'd layer on every page load. Staleness is
+      // covered: a pre-reconnect verdict is discarded (below and in the mux's
+      // snapshot invalidation), a mismatching or missing frame syncs, and the
+      // deadline syncs when the room stays silent.
+      this.registryEntry = undefined;
+      if (this.registryWatch) {
+        if (this.registryWatch.timer !== null) clearTimeout(this.registryWatch.timer);
+        this.registryWatch = null;
+      }
+      this.armRegistryWatch(generation, true);
+      this.sendHello(channel, generation);
+      return;
+    }
     this.channelRefresh = this.sync()
       .then(() => this.sendHello(channel, generation))
       .catch(() => this.requestRepair())
@@ -744,7 +776,7 @@ export class SyncLayer {
       // triggered it.
       this.registryEntry = message.libs?.[this.namespace] ?? null;
       if (this.registryWatch) {
-        clearTimeout(this.registryWatch.timer);
+        if (this.registryWatch.timer !== null) clearTimeout(this.registryWatch.timer);
         this.registryWatch = null;
         await this.settleRegistryVerdict();
       }
@@ -1538,7 +1570,7 @@ export class SyncLayer {
     this.openComplete = false;
     this.channelReady = false;
     if (this.registryWatch) {
-      clearTimeout(this.registryWatch.timer);
+      if (this.registryWatch.timer !== null) clearTimeout(this.registryWatch.timer);
       this.registryWatch = null;
     }
     this.syncRequested = false;

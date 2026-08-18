@@ -158,6 +158,27 @@ describe("mux channel factory", () => {
     expect(gotB2).toEqual([]);
   });
 
+  it("synthesizes an open event for a facade created after the raw opened", async () => {
+    // Open-ness is state, like the registry snapshot: without the synthetic
+    // event a late layer would never arm the deadline that guards the
+    // silent-room fallback. Order: open first, then the registry replay.
+    const { factory, rawsFor } = harness();
+    factory({ url: ROOM, namespace: "nsA", lib: "libA" });
+    rawsFor(ROOM)[0]!.fireOpen();
+    rawsFor(ROOM)[0]!.deliver({
+      t: "registry",
+      libs: { libB: { v: 1, digest: "dB" } },
+    });
+
+    const order: string[] = [];
+    const late = factory({ url: ROOM, namespace: "nsB", lib: "libB" });
+    late.onOpen(() => order.push("open"));
+    late.onMessage((m) => order.push(m.t));
+    expect(order).toEqual([]); // next task, after handlers are wired
+    await new Promise((r) => setTimeout(r, 0));
+    expect(order).toEqual(["open", "registry"]);
+  });
+
   it("onOpen fans out to every facade (each layer re-hellos on reconnect)", () => {
     const { factory, rawsFor } = harness();
     const a = factory({ url: ROOM, namespace: "nsA", lib: "libA" });

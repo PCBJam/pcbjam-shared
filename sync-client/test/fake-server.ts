@@ -151,32 +151,72 @@ export class FakeServer {
     return { version: this.manifest.version };
   }
 
+  /**
+   * Model the real transport's connect sequence: the socket's `open` event
+   * fires first (a REAL first connect always lands after the stack finished
+   * `open()` — the page-load-burst regression hid exactly there), then the
+   * room's per-connection registry frame. Off by default so legacy tests keep
+   * their never-opened initial channels.
+   */
+  realisticOpen = false;
+
   connect(): FakeChannel {
     const ch = new FakeChannel(this);
     this.channels.add(ch);
-    if (this.registryNamespaces) {
-      const namespaces = [...this.registryNamespaces];
+    if (this.realisticOpen || this.registryNamespaces) {
       setTimeout(() => {
-        void (async () => {
-          const digest = await manifestDigest(this.manifest);
-          const libs = Object.fromEntries(
-            namespaces.map((ns) => [ns, { v: this.manifest.version, digest }]),
-          );
-          ch._deliver({ t: "registry", libs });
-        })();
+        if (this.realisticOpen) ch._open();
+        this.trackRegistry(this.deliverRegistry(ch));
       }, 0);
     }
     return ch;
   }
 
-  /** Arm the room to send a `registry` frame (for `namespaces`) on connect. */
-  sendRegistryOnConnect(...namespaces: string[]): void {
-    this.registryNamespaces = namespaces;
+  /**
+   * Await every in-flight registry delivery (the async digest makes them span
+   * tasks). A REAL socket's frames cannot cross a reconnect boundary — tests
+   * that reconnect must flush first, or a late connect-time frame can settle a
+   * post-reconnect watch and turn the test into a coin flip.
+   */
+  async registryFlushed(): Promise<void> {
+    do {
+      // Leading task flush: connect()/fireReconnect() only ENQUEUE their
+      // delivery on the next task, so the pending list may still be empty.
+      await new Promise((r) => setTimeout(r, 0));
+      await Promise.all(this.pendingRegistry.splice(0));
+      await new Promise((r) => setTimeout(r, 0)); // let the frames dispatch
+    } while (this.pendingRegistry.length);
   }
 
-  /** Simulate a transport reconnect: fire onOpen on every live channel. */
+  private readonly pendingRegistry: Promise<void>[] = [];
+  private trackRegistry(p: Promise<void>): void {
+    this.pendingRegistry.push(p);
+  }
+
+  /** Arm the room to send a `registry` frame (for `namespaces`) on connect;
+   *  zero namespaces disarms it (a room that has gone silent). */
+  sendRegistryOnConnect(...namespaces: string[]): void {
+    this.registryNamespaces = namespaces.length ? namespaces : null;
+  }
+
+  private async deliverRegistry(ch: FakeChannel): Promise<void> {
+    // Capture before the await: a test may disarm the registry mid-delivery.
+    const namespaces = this.registryNamespaces;
+    if (!namespaces) return;
+    const digest = await manifestDigest(this.manifest);
+    const libs = Object.fromEntries(
+      namespaces.map((ns) => [ns, { v: this.manifest.version, digest }]),
+    );
+    ch._deliver({ t: "registry", libs });
+  }
+
+  /** Simulate a transport reconnect: fire onOpen on every live channel, then
+   *  re-send the registry frame (the real room's onConnect runs per connect). */
   fireReconnect(): void {
-    for (const ch of this.channels) ch._open();
+    for (const ch of this.channels) {
+      ch._open();
+      setTimeout(() => this.trackRegistry(this.deliverRegistry(ch)), 0);
+    }
   }
 
   replyHello(ch: FakeChannel): void {

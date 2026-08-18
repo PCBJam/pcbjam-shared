@@ -216,6 +216,9 @@ describe("registry-bearing rooms (scope socket, load-path-rework 0002)", () => {
     first.close();
 
     const server = cloud.server(MIRROR);
+    // The deadline only starts counting once the socket has OPENED (before
+    // that it would just race the dial); the room then never sends a frame.
+    server.realisticOpen = true;
     server.manifestFetches = 0;
     // FakeChannel's hello reply answers with the matching version, so only the
     // deadline can trigger this sync — which is exactly what we're testing.
@@ -229,6 +232,115 @@ describe("registry-bearing rooms (scope socket, load-path-rework 0002)", () => {
     await reopened.open();
     await vi.waitFor(() => expect(server.manifestFetches).toBe(1));
     reopened.close();
+  });
+
+  it("a slow socket dial does NOT deadline-sync an armed layer (the 49-GET race)", async () => {
+    // Layers arm their watches the moment stack.open() runs, but a real
+    // socket can take seconds to dial (worker authorize + DO wake). The
+    // pre-open watch is PASSIVE: no deadline may fire before the open event,
+    // and the frame that follows the eventual open affirms with zero GETs.
+    const b = browser();
+    const first = b.stack(cloud, [muxMirror()]);
+    await first.open();
+    await settle();
+    first.close();
+
+    const server = cloud.server(MIRROR);
+    server.sendRegistryOnConnect(NS);
+    server.manifestFetches = 0;
+    const reopened = new SyncStack({
+      layers: [muxMirror()],
+      fetchImpl: cloud.fetchImpl,
+      channelFactory: cloud.channelFactory,
+      storeFactory: (ns) => b.stores.get(ns) ?? b.stores.set(ns, memStore()).get(ns)!,
+      registryDeadlineMs: 10, // would fire long before the "dial" below
+    });
+    await reopened.open();
+    await new Promise((r) => setTimeout(r, 50)); // socket still dialing…
+    expect(server.manifestFetches).toBe(0); // passive watch: no deadline burst
+
+    server.fireReconnect(); // …the socket finally opens; the frame follows
+    await settle();
+    expect(server.manifestFetches).toBe(0);
+    reopened.close();
+  });
+
+  it("the socket's FIRST open does not resync an affirmed layer (page-load burst)", async () => {
+    // A real socket's open event lands AFTER stack.open() finished, when
+    // channelReady is already true — the on-open refresh used to sync every
+    // mux'd layer on every page load, exactly the burst the registry removes.
+    const b = browser();
+    const first = b.stack(cloud, [muxMirror()]);
+    await first.open();
+    await settle();
+    first.close();
+
+    const server = cloud.server(MIRROR);
+    server.sendRegistryOnConnect(NS);
+    server.realisticOpen = true;
+    server.manifestFetches = 0;
+    const reopened = b.stack(cloud, [muxMirror()]);
+    await reopened.open();
+    await settle();
+
+    expect(server.manifestFetches).toBe(0);
+    reopened.close();
+  });
+
+  it("reconnect re-arms the verdict: unchanged stays at zero GETs, a change syncs", async () => {
+    const b = browser();
+    const server = cloud.server(MIRROR);
+    server.sendRegistryOnConnect(NS);
+    server.realisticOpen = true;
+    const s = b.stack(cloud, [muxMirror()]);
+    await s.open();
+    await server.registryFlushed();
+    await settle();
+    server.manifestFetches = 0;
+
+    // Unchanged room, dropped socket: the re-sent snapshot affirms — no GET.
+    server.fireReconnect();
+    await server.registryFlushed();
+    await settle();
+    expect(server.manifestFetches).toBe(0);
+
+    // The room moved while we were disconnected (no broadcast reached us):
+    // the reconnect frame mismatches and forces the resync.
+    await server.seed("symbol/C", body("live-C"));
+    server.fireReconnect();
+    await server.registryFlushed();
+    await settle();
+    expect(server.manifestFetches).toBeGreaterThan(0);
+    expect(text(await s.read("symbol/C"))).toBe("live-C");
+    s.close();
+  });
+
+  it("a silent reconnect (no registry frame) still resyncs via the deadline", async () => {
+    const b = browser();
+    const server = cloud.server(MIRROR);
+    server.sendRegistryOnConnect(NS);
+    server.realisticOpen = true;
+    const s = new SyncStack({
+      layers: [muxMirror()],
+      fetchImpl: cloud.fetchImpl,
+      channelFactory: cloud.channelFactory,
+      storeFactory: (ns) => b.stores.get(ns) ?? b.stores.set(ns, memStore()).get(ns)!,
+      registryDeadlineMs: 10,
+    });
+    await s.open();
+    // Flush the connect-time frame BEFORE disarming: a real socket's frames
+    // cannot cross a reconnect, so neither may the fake's in-flight delivery
+    // (it would affirm the post-reconnect watch and cancel the deadline).
+    await server.registryFlushed();
+    await settle();
+    server.manifestFetches = 0;
+
+    // Room stops sending registry frames (e.g. rolled back server): the
+    // reconnect-resync guarantee must survive via the deadline fallback.
+    server.sendRegistryOnConnect(); // disarm — no frame at all
+    server.fireReconnect();
+    await vi.waitFor(() => expect(server.manifestFetches).toBe(1));
+    s.close();
   });
 
   it("a dedicated (non-mux) live channel keeps today's eager sync", async () => {
