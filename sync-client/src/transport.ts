@@ -242,7 +242,7 @@ export function createMuxChannelFactory(
     const key = `${url}|${token ?? ""}`;
     let entry = shared.get(key);
     if (!entry) {
-      entry = { raw: new MuxRawChannel(openRaw(url, token)), refs: 0 };
+      entry = { raw: new MuxRawChannel(openRaw(url, token), url), refs: 0 };
       shared.set(key, entry);
     }
     entry.refs += 1;
@@ -255,6 +255,35 @@ export function createMuxChannelFactory(
       }
     });
   };
+}
+
+/**
+ * Room-level frame taps on the shared mux channels: every inbound frame of
+ * every {@link MuxRawChannel} is also delivered here, tagged with the room
+ * URL. This is the ONLY place a client can hear about things it holds no
+ * facade for — a `registry` delta for a sub-namespace it never resolved (a
+ * teammate's first-ever override), or a room-level `libset` event (a new org
+ * lib / pin). Consumers filter by `msg.t`; frames are data, not verdicts —
+ * the per-layer registry semantics stay in SyncLayer.
+ */
+const roomFrameListeners = new Set<(roomUrl: string, msg: ServerMsg) => void>();
+
+/** Subscribe to room-level frames on all mux'd sync sockets; returns unsubscribe. */
+export function onSyncRoomFrame(
+  cb: (roomUrl: string, msg: ServerMsg) => void,
+): () => void {
+  roomFrameListeners.add(cb);
+  return () => roomFrameListeners.delete(cb);
+}
+
+function emitRoomFrame(roomUrl: string, msg: ServerMsg): void {
+  for (const cb of [...roomFrameListeners]) {
+    try {
+      cb(roomUrl, msg);
+    } catch {
+      // A listener's failure must never break frame routing to layers.
+    }
+  }
 }
 
 /**
@@ -288,7 +317,10 @@ class MuxRawChannel {
    *  that guards the silent-room fallback. */
   private rawEverOpened = false;
 
-  constructor(private readonly raw: RealtimeChannel) {
+  constructor(
+    private readonly raw: RealtimeChannel,
+    private readonly roomUrl: string,
+  ) {
     raw.onOpen(() => {
       this.rawEverOpened = true;
       // A (re)connect invalidates the previous snapshot: the room re-sends its
@@ -304,11 +336,25 @@ class MuxRawChannel {
       }
     });
     raw.onMessage((m) => {
+      // Every inbound frame also reaches the room-level taps — the only path
+      // to a client for sub-namespaces it has no facade for, and for
+      // room-level `libset` events (which carry no `lib` at all).
+      emitRoomFrame(this.roomUrl, m);
       // Room-level registry frames are never lib-tagged: fan the ONE frame out
       // to every facade whose mux key it mentions (each layer picks its own
       // entry by namespace — the mux key IS the sub-namespace name).
       if (m.t === "registry") {
-        this.lastRegistry = m;
+        // A per-publish DELTA (`partial`) merges into the connect snapshot;
+        // replacing it would shrink the replayed verdict set for facades
+        // created later. A delta with no snapshot yet stands alone (its
+        // `partial` flag keeps layers from reading absence as a verdict).
+        this.lastRegistry =
+          m.partial && this.lastRegistry
+            ? {
+                ...this.lastRegistry,
+                libs: { ...this.lastRegistry.libs, ...m.libs },
+              }
+            : m;
         for (const lib of Object.keys(m.libs ?? {})) {
           const group = this.facades.get(lib);
           if (!group) continue;
@@ -349,22 +395,19 @@ class MuxRawChannel {
     // after the factory returns). Open-ness first, then the registry
     // snapshot: the same order a real connection delivers them.
     if (this.rawEverOpened || this.lastRegistry) {
-      const replay = this.lastRegistry;
-      const wasOpen = this.rawEverOpened;
       setTimeout(() => {
         if (state.closed) return;
-        if (wasOpen) {
+        if (this.rawEverOpened) {
           for (const cb of [...state.openCbs]) {
             if (state.closed) break;
             cb();
           }
         }
-        if (
-          !state.closed &&
-          replay &&
-          this.lastRegistry === replay &&
-          lib in (replay.libs ?? {})
-        ) {
+        // Replay the CURRENT snapshot state (not the one captured at facade
+        // creation): after a partial-frame merge or a reconnect's fresh
+        // snapshot, "now" is strictly the safer verdict source.
+        const replay = this.lastRegistry;
+        if (!state.closed && replay && lib in (replay.libs ?? {})) {
           for (const cb of [...state.msgCbs]) {
             if (state.closed) break;
             cb(replay);

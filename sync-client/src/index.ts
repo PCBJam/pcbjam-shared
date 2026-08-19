@@ -31,6 +31,7 @@ export {
   createMuxChannelFactory,
   defaultChannelFactory,
   httpLayer,
+  onSyncRoomFrame,
   SyncRoomMovedError,
 } from "./transport.js";
 export type {

@@ -768,12 +768,23 @@ export class SyncLayer {
       if (message.version !== this.manifest.version) await this.sync();
       return;
     }
+    if (message.t === "libset") {
+      // Room-level lib-SET event (a peer created/pinned a lib) — consumed by
+      // the transport's room-frame taps, never by a per-namespace layer.
+      return;
+    }
     if (message.t === "registry") {
       // Room-level frame; our entry (or its absence) is the verdict for the
       // open-time watch. Outside the watch it is ignored — steady-state
       // freshness rides change/synced/manifest frames, and reacting to every
       // registry frame would race the async application of the change that
       // triggered it.
+      // A per-publish DELTA (`partial`) that doesn't name us carries no
+      // verdict at all: only the FULL connect-time snapshot encodes
+      // "not listed ⇒ dirty/unknown".
+      if (message.partial && !(message.libs && this.namespace in message.libs)) {
+        return;
+      }
       this.registryEntry = message.libs?.[this.namespace] ?? null;
       if (this.registryWatch) {
         if (this.registryWatch.timer !== null) clearTimeout(this.registryWatch.timer);
