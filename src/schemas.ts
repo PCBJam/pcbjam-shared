@@ -218,6 +218,13 @@ export const libSchema = z.object({
   // on the wire for sources that don't model scopes (built-in/static examples).
   scope: z.string().optional(),
   name: z.string(),
+  // The MOUNTED lib-table nickname the backend assigned: equals `name` unless
+  // two visible same-name libs collide, then a deterministic `name--<suffix>`
+  // (KiCad lib tables resolve nicknames first-match-wins, so duplicates would
+  // silently shadow). Clients building sym/fp-lib-tables MUST prefer this
+  // over `name` when present. Optional: backends without collision handling
+  // simply omit it.
+  nickname: z.string().optional(),
   // 'origin' | 'mirror' | 'org'
   type: z.string(),
   // 'public' | 'private' — origins are always public. Optional for sources that
