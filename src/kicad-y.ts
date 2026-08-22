@@ -97,6 +97,18 @@ export function activeKicadState(ydoc: Y.Doc): KicadYState | null {
   // the application requests it; getMap performs that safe materialization.
   const root = ydoc.getMap<unknown>(Y_KDOC_STATE);
   if (!root.has(Y_KDOC_STATE_ACTIVE)) {
+    // Observers are allowed to request the future v3 root before the first
+    // seed. Y.Doc registers that empty top-level type in `share`, even though
+    // it contains no authored state. It is indistinguishable from absence and
+    // must remain seedable. Once v3's durable compatibility marker exists (or
+    // the root has any authored key), a missing active pointer is corruption
+    // and still fails closed.
+    const compatibilityMeta = ydoc.share.get(Y_KDOC_META);
+    const declaredVersion =
+      compatibilityMeta instanceof Y.Map
+        ? compatibilityMeta.get(Y_KDOC_SEXPR_VERSION)
+        : undefined;
+    if (root.size === 0 && declaredVersion !== SEXPR_VERSION_CURRENT) return null;
     throw new Error("invalid kdoc v3 state: active epoch is missing");
   }
   const active = root.get(Y_KDOC_STATE_ACTIVE);
@@ -788,7 +800,14 @@ export function compactYdocUpdate(
       return null;
     }
     if (!SEXPR_VERSION_SUPPORTED.includes(version)) return null;
-    if (kicadMetaMap(src).get("root") === undefined) return null;
+    try {
+      if (kicadMetaMap(src).get("root") === undefined) return null;
+    } catch {
+      // A stamped v3 envelope without a valid active epoch is corrupt. Keep
+      // the original update authoritative; compaction must never turn a
+      // malformed document into a fresh, apparently valid one.
+      return null;
+    }
     // Rebuilding only the roots this schema understands would silently erase
     // plugin/future data. Unknown roots make compaction ineligible; the exact
     // original update remains authoritative and can be handled by a newer app.
