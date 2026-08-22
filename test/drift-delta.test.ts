@@ -63,6 +63,12 @@ describe("compareSlots", () => {
     const p2 = pts(k("xy", a("5"), a("0")), k("xy", a("0"), a("0")));
     expect(compareSlots([p1], [p2])).toBe("different");
   });
+
+  it("keeps anonymous repeated heads in authored order", () => {
+    const first = k("xy", a("0"), a("0"));
+    const second = k("xy", a("5"), a("0"));
+    expect(compareSlots([first, second], [second, first])).toBe("different");
+  });
 });
 
 describe("compareKicadItems", () => {
