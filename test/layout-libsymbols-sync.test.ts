@@ -254,20 +254,101 @@ describe("layout save-sync (miss 08B)", () => {
     }
   });
 
-  it("deletes a saved-away library definition after its last Y consumer is gone", () => {
-    const sch = seeded();
-    applyDeltaToY(
-      sch,
-      { added: [], updated: [], removed: ["sym-1", "fld-1"], reordered: [] },
-      "native-items",
-    );
-    const saved = SCH
+  const withoutRConsumer = (): string =>
+    SCH
       .replace(`  (lib_symbols ${SYM_DEF})\n`, "  (lib_symbols)\n")
       .replace(/  \(symbol \(lib_id "Device:R"\)[\s\S]*?\n  \(wire /, "  (wire ");
 
-    expect(syncLayoutToY(fileToDoc(saved), sch, "save")).toBe(true);
-    expect(kicadLibSymbolsMap(sch).has("Device:R")).toBe(false);
+  const removeRConsumer = (sch: Y.Doc, origin: unknown): void => {
+    applyDeltaToY(
+      sch,
+      { added: [], updated: [], removed: ["sym-1", "fld-1"], reordered: [] },
+      origin,
+    );
+  };
+
+  it("retains orphan definition knowledge internally but filters it from native materialization", () => {
+    const sch = seeded();
+    removeRConsumer(sch, "native-items");
+
+    expect(syncLayoutToY(fileToDoc(withoutRConsumer()), sch, "save")).toBe(false);
+    expect(kicadLibSymbolsMap(sch).get("Device:R")).toBe(SYM_DEF);
     expect(docToFile(yToDoc(sch))).not.toContain(`(symbol "Device:R"`);
+  });
+
+  it("an unseen concurrent consumer cannot merge with a dangling definition", () => {
+    const seed = seeded();
+    const base = Y.encodeStateAsUpdate(seed);
+    const vector = Y.encodeStateVector(seed);
+
+    const orphan = new Y.Doc();
+    Y.applyUpdate(orphan, base);
+    orphan.clientID = 720_001;
+    removeRConsumer(orphan, "orphan-native-items");
+    syncLayoutToY(fileToDoc(withoutRConsumer()), orphan, "orphan-save");
+    const orphanUpdate = Y.encodeStateAsUpdate(orphan, vector);
+
+    const consumer = new Y.Doc();
+    Y.applyUpdate(consumer, base);
+    consumer.clientID = 720_002;
+    const peerWire = {
+      added: [
+        {
+          sexpr: `(lib_symbols ${SYM_DEF}) (symbol (lib_id "Device:R") (at 130 60 0) (uuid "sym-peer"))`,
+          parent: null,
+        },
+      ],
+      changed: [],
+      removed: [],
+    };
+    consumer.transact(() => {
+      // This is deliberately a no-op for the already-known definition. The
+      // consumer update must remain safe without relying on a concurrent
+      // same-value Y.Map rewrite winning over a delete.
+      upsertLibSymbolsToY(consumer, wireLibSymbols(peerWire), "peer");
+      applyDeltaToY(consumer, itemsWireToDelta(peerWire, {}), "peer");
+    }, "peer");
+    const consumerUpdate = Y.encodeStateAsUpdate(consumer, vector);
+
+    for (const order of [
+      [orphanUpdate, consumerUpdate],
+      [consumerUpdate, orphanUpdate],
+      [orphanUpdate, orphanUpdate, consumerUpdate, consumerUpdate],
+      [Y.mergeUpdates([consumerUpdate, orphanUpdate, consumerUpdate])],
+    ]) {
+      const merged = new Y.Doc();
+      Y.applyUpdate(merged, base);
+      for (const update of order) Y.applyUpdate(merged, update);
+      expect(kicadLibSymbolsMap(merged).get("Device:R")).toBe(SYM_DEF);
+      const rendered = docToFile(yToDoc(merged));
+      expect(rendered).toContain(`(symbol "Device:R"`);
+      expect(rendered).toContain(`(lib_id "Device:R")`);
+      expect(rendered).toContain(`sym-peer`);
+    }
+  });
+
+  it("a later consumer reactivates retained definition knowledge", () => {
+    const sch = seeded();
+    removeRConsumer(sch, "native-items");
+    syncLayoutToY(fileToDoc(withoutRConsumer()), sch, "save");
+    expect(docToFile(yToDoc(sch))).not.toContain(`(symbol "Device:R"`);
+
+    const laterWire = {
+      added: [
+        {
+          sexpr: `(symbol (lib_id "Device:R") (at 140 60 0) (uuid "sym-later"))`,
+          parent: null,
+        },
+      ],
+      changed: [],
+      removed: [],
+    };
+    applyDeltaToY(sch, itemsWireToDelta(laterWire, {}), "later-consumer");
+
+    expect(kicadLibSymbolsMap(sch).get("Device:R")).toBe(SYM_DEF);
+    const rendered = docToFile(yToDoc(sch));
+    expect(rendered).toContain(`(symbol "Device:R"`);
+    expect(rendered).toContain(`sym-later`);
   });
 
   it("preserves a definition omitted by a stale native save while Y has a peer consumer", () => {
