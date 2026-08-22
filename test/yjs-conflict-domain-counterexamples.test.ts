@@ -39,10 +39,50 @@ function expectOneAuthoredValue(
 ): void {
   const actual = merged.map(docToFile);
   expect(new Set(actual).size).toBe(1);
-  expect(authored.map(docToFile)).toContain(actual[0]);
+  const authoredFiles = authored.map(docToFile);
+  if (!authoredFiles.includes(actual[0]!)) {
+    throw new Error(
+      `hybrid=${actual[0]}\nmodel=${JSON.stringify(merged[0])}`
+      + `\nauthored=${authoredFiles.join("\n---\n")}`,
+    );
+  }
 }
 
 describe("v3 conflict domains never manufacture a native snapshot hybrid", () => {
+  it("resolves concurrent creation of one UUID to one complete authored item", () => {
+    const base = fileToDoc(`(kicad_pcb (version 20241229))`);
+    const left = fileToDoc(
+      `(kicad_pcb (version 20241229)
+        (segment (start 1 1) (end 2 2) (width 0.2) (layer "F.Cu") (uuid "same")))`,
+    );
+    const right = fileToDoc(
+      `(kicad_pcb (version 20241229)
+        (via (at 9 9) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (uuid "same")))`,
+    );
+
+    expectOneAuthoredValue(concurrentMerge(base, left, right), [left, right]);
+  });
+
+  it("uses delete-wins for edit-versus-delete regardless of delivery order", () => {
+    const base = fileToDoc(
+      `(kicad_pcb (version 20241229)
+        (segment (start 0 0) (end 1 1) (width 0.2) (uuid "item-1")))`,
+    );
+    const edited = fileToDoc(
+      `(kicad_pcb (version 20241229)
+        (segment (start 0 0) (end 1 1) (width 0.8) (uuid "item-1")))`,
+    );
+    const deleted = fileToDoc(`(kicad_pcb (version 20241229))`);
+
+    for (const merged of [
+      ...concurrentMerge(base, edited, deleted),
+      ...concurrentMerge(base, deleted, edited),
+    ]) {
+      expect(merged.items["item-1"]).toBeUndefined();
+      expect(merged.layout.some((slot) => "item" in slot && slot.item === "item-1")).toBe(false);
+    }
+  });
+
   it("keeps a direct anonymous repeated sequence atomic under insert-vs-edit", () => {
     const base = fileToDoc(
       `(kicad_pcb (mystery (xy 0 0) (xy 1 1) (uuid "item-1")))`,
