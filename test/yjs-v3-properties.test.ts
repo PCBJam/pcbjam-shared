@@ -286,6 +286,18 @@ describe("the active v3 envelope fails closed", () => {
     ],
   ];
 
+  it("does not confuse a locally observed empty state root with a broken v3 epoch", () => {
+    const ydoc = new Y.Doc();
+    const observed = ydoc.getMap<unknown>(Y_KDOC_STATE);
+    observed.observe(() => {});
+
+    expect(activeKicadState(ydoc)).toBeNull();
+    expect(ydocSexprVersion(ydoc)).toBe(1);
+    expect(() => docToY(source, ydoc, "first-seed")).not.toThrow();
+    expect(activeKicadState(ydoc)).not.toBeNull();
+    expect(ydocSexprVersion(ydoc)).toBe(SEXPR_VERSION_CURRENT);
+  });
+
   it.each([1, 2] as const)("every writer refuses an active epoch declaring v%d", (version) => {
     for (const [name, write] of writers) {
       const ydoc = withInvalidActiveVersion(version);
