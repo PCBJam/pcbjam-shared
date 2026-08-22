@@ -45,7 +45,7 @@ describe("gateway binary framing", () => {
 describe("gateway control messages", () => {
   it("round-trips every client message shape", () => {
     const msgs = [
-      { t: "sub", ch: 0, doc: "boards/a.kicad_sch", mode: "passive" },
+      { t: "sub", ch: 0, doc: "boards/a.kicad_sch", mode: "passive", schema: 3 },
       { t: "sub", ch: 3, doc: "~presence", mode: "active" },
       { t: "act", ch: 3 },
       { t: "unsub", ch: 0 },
@@ -53,6 +53,20 @@ describe("gateway control messages", () => {
     for (const m of msgs) {
       expect(parseGatewayClientMsg(JSON.stringify(m))).toEqual(m);
     }
+  });
+
+  it("preserves an old client's missing schema so the server can reject it explicitly", () => {
+    expect(parseGatewayClientMsg(JSON.stringify({
+      t: "sub",
+      ch: 1,
+      doc: "board.kicad_pcb",
+      mode: "active",
+    }))).toEqual({
+      t: "sub",
+      ch: 1,
+      doc: "board.kicad_pcb",
+      mode: "active",
+    });
   });
 
   it("rejects malformed client messages", () => {

@@ -124,18 +124,32 @@ describe("collabDocArchiveKey (ysync 0009 archived epochs)", () => {
 });
 
 describe("parseCollabRoomId (inverse of collabRoomId/presenceRoomId)", () => {
-  it("round-trips doc and presence rooms, keeping colons in docPath intact", () => {
+  it("names document rooms by codec version while keeping file identity intact", () => {
     for (const docPath of ["board.kicad_pcb", "sub/child.kicad_sch", "weird:name.kicad_pcb"]) {
+      expect(collabRoomId(SID, PID, docPath)).toBe(
+        `${SID}:${PID}:~kdoc-v3~:${docPath}`,
+      );
       expect(parseCollabRoomId(collabRoomId(SID, PID, docPath))).toEqual({
         scopeId: SID,
         projectId: PID,
         docPath,
+        schemaVersion: 3,
       });
     }
     expect(parseCollabRoomId(presenceRoomId(SID, PID))).toEqual({
       scopeId: SID,
       projectId: PID,
       docPath: "~presence",
+      schemaVersion: null,
+    });
+  });
+
+  it("parses a legacy unversioned room explicitly as incompatible", () => {
+    expect(parseCollabRoomId(`${SID}:${PID}:board.kicad_pcb`)).toEqual({
+      scopeId: SID,
+      projectId: PID,
+      docPath: "board.kicad_pcb",
+      schemaVersion: null,
     });
   });
 
