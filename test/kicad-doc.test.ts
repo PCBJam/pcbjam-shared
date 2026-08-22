@@ -115,7 +115,18 @@ describe("fileToDoc / docToFile", () => {
     const doc = fileToDoc(source);
     expect(Object.keys(doc.items)).toEqual(["dimension-1"]);
     expect(doc.items["dimension-1"]!.type).toBe("dimension");
+    expect(keys(doc.items["dimension-1"]!.body)).toContain("gr_text");
     expect(parseSexpr(docToFile(doc))).toEqual(parseSexpr(source));
+  });
+
+  it("still rejects a repeated UUID outside the nearest owning item", () => {
+    expect(() =>
+      fileToDoc(`(kicad_pcb
+        (footprint "lib:A" (uuid "owner-a")
+          (pad "1" smd (uuid "shared-child")))
+        (footprint "lib:B" (uuid "owner-b")
+          (pad "1" smd (uuid "shared-child"))))`),
+    ).toThrow(/duplicate.*uuid/i);
   });
 
   it("rejects text that is not a single top-level form", () => {

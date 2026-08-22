@@ -4,9 +4,11 @@
  * A `KicadDoc` is the canonical, CRDT-friendly decomposition of a KiCad s-expr
  * document. Two transforms compose:
  *
- *  1. FLATTEN — every uuid-bearing node, at any depth (a footprint AND each pad /
- *     field, a symbol AND each pin), is hoisted into a flat `items` map keyed by
- *     uuid, with `parent` set to the nearest enclosing item (null at the root).
+ *  1. FLATTEN — every identity-bearing uuid node, at any depth (a footprint AND
+ *     each pad / field, a symbol AND each pin), is hoisted into a flat `items`
+ *     map keyed by uuid, with `parent` set to the nearest enclosing item (null at
+ *     the root). KiCad writer-owned descendants that repeat that nearest owner's
+ *     uuid are fields of the owner, not separate identities, so they stay inline.
  *     This is the containment the live wasm bridge drops.
  *
  *  2. STRUCTURE — a node's content becomes an ordered list of `Slot`s instead of an
@@ -89,7 +91,7 @@ export type KicadItem = z.infer<typeof kicadItemSchema>;
 export const kicadDocSchema = z.object({
   /** Top-level form name, e.g. "kicad_pcb" / "kicad_sch" / "kicad_wks". */
   root: z.string(),
-  /** uuid → item. Every uuid in the file, flattened. */
+  /** uuid → item. Every independently addressable item UUID in the file, flattened. */
   items: z.record(z.string(), kicadItemSchema),
   /** Ordered content slots of the document root form. */
   layout: z.array(slotSchema),
@@ -186,7 +188,13 @@ function parseSlots(
       continue;
     }
     const id = itemUuid(child);
-    if (id !== null) {
+    // Some KiCad writers give an owned, nested representation (notably a
+    // dimension's generated gr_text) the exact UUID of its nearest item. It is
+    // not a second independently addressable item: keeping it inline preserves
+    // the writer's structure without creating two map entries for one identity.
+    // This exemption is deliberately nearest-owner-only. Any other repeated UUID
+    // still reaches the global duplicate check below and is rejected.
+    if (id !== null && id !== parent) {
       if (Object.hasOwn(items, id)) {
         throw new Error(`parseSlots: duplicate item uuid ${JSON.stringify(id)}`);
       }
@@ -247,9 +255,11 @@ export function fileToDoc(text: string): KicadDoc {
 
 /**
  * Parse ONE item's s-expr — e.g. what the live bridge emits for a changed
- * footprint — into its flattened items: the item itself plus every nested uuid
- * descendant (pads, fields, pins), each with correct `parent` links. `parent` is
- * the uuid of the enclosing item in the target doc (null for a root-level item).
+ * footprint — into its flattened items: the item itself plus every independently
+ * addressable nested uuid descendant (pads, fields, pins), each with correct
+ * `parent` links. Writer-owned descendants that reuse their nearest owner's UUID
+ * stay inline. `parent` is the uuid of the enclosing item in the target doc (null
+ * for a root-level item).
  *
  * Inverse of `renderItem`: `renderItem({ items }, uuid)` reproduces the s-expr
  * structurally.
@@ -347,9 +357,9 @@ export function renderSlotText(
 }
 
 /**
- * Parse ONE `(k …)` form into a field slot. Any uuid-bearing descendants hoist
- * into `items` exactly like `fileToDoc` would (library definitions carry none in
- * practice, but losslessness must not depend on that).
+ * Parse ONE `(k …)` form into a field slot. Identity-bearing uuid descendants
+ * hoist into `items` exactly like `fileToDoc` would (library definitions carry
+ * none in practice, but losslessness must not depend on that).
  */
 export function slotFromSexpr(text: string, items: Record<string, KicadItem>): Slot {
   const forms = parseSexpr(text);
