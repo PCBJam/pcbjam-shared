@@ -871,6 +871,53 @@ const KDOC_KNOWN_ROOTS = new Set([
   ...KDOC_EXTRA_ROOT_MAPS,
 ]);
 
+const KDOC_V3_ROOT_FIELDS = new Set([Y_KDOC_STATE_ACTIVE]);
+const KDOC_V3_ACTIVE_FIELDS = new Set([
+  V3_META,
+  V3_ITEMS,
+  V3_LAYOUT_BASE,
+  V3_LAYOUT_OVERRIDES,
+  V3_LIBSYMBOLS,
+]);
+const KDOC_ITEM_FIELDS = new Set(["type", "parent", "body"]);
+
+function mapHasOnlyKnownFields(
+  map: Y.Map<unknown>,
+  known: ReadonlySet<string>,
+): boolean {
+  let understood = true;
+  map.forEach((_value, key) => {
+    if (!known.has(key)) understood = false;
+  });
+  return understood;
+}
+
+/**
+ * Reseeding is allowed only when this build can account for every structural
+ * field it would replace. Dynamic content maps (metadata, layout-head
+ * overrides, definitions) are either copied or materialized losslessly;
+ * envelope/item fields are a closed vocabulary for this protocol version.
+ * A newer client must bump the protocol or leave an unknown field here, in
+ * which case the original update remains authoritative.
+ */
+function compactionSchemaIsKnown(ydoc: Y.Doc): boolean {
+  const active = activeKicadState(ydoc);
+  if (active) {
+    const stateRoot = ydoc.getMap<unknown>(Y_KDOC_STATE);
+    if (!mapHasOnlyKnownFields(stateRoot, KDOC_V3_ROOT_FIELDS)) return false;
+    if (!mapHasOnlyKnownFields(active, KDOC_V3_ACTIVE_FIELDS)) return false;
+  }
+
+  const items = kicadItemsMap(ydoc);
+  let understood = true;
+  items.forEach((item) => {
+    if (!(item instanceof Y.Map) || !mapHasOnlyKnownFields(item, KDOC_ITEM_FIELDS)) {
+      understood = false;
+    }
+  });
+  return understood;
+}
+
 export interface YdocCompaction {
   /** The replacement state update (a fresh doc — new epoch, new clientIDs). */
   update: Uint8Array;
@@ -926,6 +973,14 @@ export function compactYdocUpdate(
     // original update remains authoritative and can be handled by a newer app.
     for (const key of src.share.keys()) {
       if (!KDOC_KNOWN_ROOTS.has(key)) return null;
+    }
+    try {
+      if (!compactionSchemaIsKnown(src)) return null;
+    } catch {
+      // Structural uncertainty is never permission to reseed. The normal
+      // hydration path retains the exact original update for a newer build or
+      // an explicit recovery flow.
+      return null;
     }
 
     let kdoc: KicadDoc;

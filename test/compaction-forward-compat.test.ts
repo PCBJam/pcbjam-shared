@@ -20,6 +20,15 @@ function seeded(): Y.Doc {
 }
 
 describe("compaction forward-compatibility fence", () => {
+  it("refuses to erase an unknown field beside the active-epoch pointer", () => {
+    const ydoc = seeded();
+    ydoc.getMap("kdoc_state").set("futureEpochIndex", {
+      mustSurvive: true,
+    });
+
+    expect(compactYdocUpdate(Y.encodeStateAsUpdate(ydoc), { ratio: 0 })).toBeNull();
+  });
+
   it("refuses to erase an unknown field inside the active v3 epoch", () => {
     const ydoc = seeded();
     const future = new Y.Map<unknown>();
