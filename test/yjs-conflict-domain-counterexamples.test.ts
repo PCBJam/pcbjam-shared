@@ -21,7 +21,10 @@ function concurrentMerge(base: KicadDoc, left: KicadDoc, right: KicadDoc): Kicad
     upsertDocToY(value, replica, `writer-${clientID}`);
     return Y.encodeStateAsUpdate(replica, baseVector);
   };
-  const updates = [change(900_001, left), change(900_002, right)];
+  // Give the edit branch the higher Y.Map tie-break id. In the unsafe v2
+  // positional encoding this selects its replacement of the first element
+  // while still retaining the insert branch's extra elements: a forced hybrid.
+  const updates = [change(900_002, left), change(900_001, right)];
 
   return [[0, 1], [1, 0]].map((order) => {
     const merged = hydrate(baseUpdate);
