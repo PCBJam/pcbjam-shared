@@ -574,19 +574,17 @@ export function docToY(doc: KicadDoc, ydoc: Y.Doc, origin?: unknown): void {
 }
 
 /**
- * Seed a Y.Doc from a `KicadDoc` with DOUBLE-SEED ARBITRATION (bug 06). The
- * seed-vs-adopt decision is a client-side check-then-act, so two clients opening
- * the same fresh room can both observe "empty" and both seed. `kdoc_meta` and
- * `kdoc_items` converge per key (Y.Map LWW), but `kdoc_layout` is a Y.Array:
- * both insert sequences survive the merge and every root renders twice, forever.
+ * Seed a Y.Doc from a `KicadDoc` with DOUBLE-SEED ARBITRATION (bug 06).
  *
- * This writes `nonce` into `kdoc_meta.seedNonce` in the same transaction as the
- * seed and returns a RETRACTOR that surgically deletes exactly the layout slots
- * this seed inserted (identified by insertion id — this client, this clock
- * window — so slots appended by later edits are untouched). The runtime watches
- * `seedNonce`: when the merged value is a FOREIGN nonce, this client's seed lost
- * the LWW race and it calls the retractor; the winner's sequence remains as the
- * single clean layout.
+ * V3 builds one detached, complete state and assigns it through the single
+ * `kdoc_state.active` register. Concurrent first writers therefore select one
+ * whole authored epoch; the returned compatibility callback has no content to
+ * retract.
+ *
+ * The legacy v1/v2 branch below predates that representation. Its layout is a
+ * Y.Array, so concurrent seed insertions can both survive. It records this
+ * client's insertion clock range and returns a retractor that removes only the
+ * losing seed's own layout structs while retaining later edits.
  */
 export function seedDocToY(
   doc: KicadDoc,
@@ -599,8 +597,8 @@ export function seedDocToY(
     installV3State(ydoc, v3StateFromDoc(doc, nonce), origin, nonce);
     return () => {
       // The active pointer itself arbitrates the complete state. Keep the
-      // compatibility marker aligned for old readers; there is no content to
-      // retract and this remains safe if every racing seeder calls it.
+      // compatibility marker aligned for old readers; there is no v3 content
+      // to retract and this remains safe if every racing seeder calls it.
       const winner = kicadMetaMap(ydoc).get(Y_KDOC_SEED_NONCE);
       if (winner !== undefined) {
         ydoc.getMap(Y_KDOC_META).set(Y_KDOC_SEED_NONCE, winner);

@@ -38,8 +38,11 @@
  * else → node map. Force-atomic override table for heads where element mixing
  * is dangerous (`filled_polygon`) or pointless (`net`). An EXISTING slot's
  * representation is sticky — the classifier only shapes newly created slots —
- * so table/version skew between clients is churn-free. Misclassification is
- * never a correctness bug: losslessness and convergence hold for any cut.
+ * so table/version skew between clients is churn-free. The classifier remains
+ * a trusted semantic boundary: a wrong cut can still converge and serialize
+ * losslessly while violating the stronger "one authored value, never a hybrid"
+ * intention policy. Changes therefore require an audited grammar case plus
+ * conflict-history and native-refinement fixtures.
  */
 
 import * as Y from "yjs";
