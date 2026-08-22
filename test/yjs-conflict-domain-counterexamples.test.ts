@@ -26,9 +26,16 @@ function concurrentMerge(base: KicadDoc, left: KicadDoc, right: KicadDoc): Kicad
   // while still retaining the insert branch's extra elements: a forced hybrid.
   const updates = [change(900_002, left), change(900_001, right)];
 
-  return [[0, 1], [1, 0]].map((order) => {
+  const deliveries: Uint8Array[][] = [
+    [updates[0]!, updates[1]!],
+    [updates[1]!, updates[0]!],
+    // Re-delivery and batching must not change the visible conflict winner.
+    [updates[0]!, updates[0]!, updates[1]!, updates[1]!],
+    [Y.mergeUpdates([updates[1]!, updates[0]!, updates[1]!])],
+  ];
+  return deliveries.map((delivery) => {
     const merged = hydrate(baseUpdate);
-    for (const index of order) Y.applyUpdate(merged, updates[index]!);
+    for (const update of delivery) Y.applyUpdate(merged, update);
     return yToDoc(merged);
   });
 }
