@@ -106,9 +106,11 @@ export const SEMANTIC_ID_HEADS: ReadonlySet<string> = new Set(["property"]);
 
 /**
  * Force-atomic heads: element mixing is dangerous (`filled_polygon` is
- * regenerated wholesale — merging fragments of two fills is actively wrong) or
- * pointless (`net`: the root table is FROZEN from sync — `syncLayoutToY`).
- * Lives here next to that precedent; add tuning rows as measurements demand.
+ * regenerated wholesale — merging fragments of two fills is actively wrong;
+ * `net` tuples are writer-authored identities and values that must not split).
+ * Root net tables additionally travel as one complete v3 layout-head register
+ * in `syncLayoutToY`; this row protects nested net tuples wherever they occur.
+ * Add tuning rows as measurements demand.
  */
 export const FORCE_ATOMIC_HEADS: ReadonlySet<string> = new Set(["filled_polygon", "net"]);
 
