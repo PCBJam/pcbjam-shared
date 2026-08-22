@@ -100,6 +100,24 @@ describe("fileToDoc / docToFile", () => {
     expect(parseSexpr(docToFile(fileToDoc(NESTED)))).toEqual(parseSexpr(NESTED));
   });
 
+  it("keeps a dimension's generated text inline when KiCad reuses the owner UUID", () => {
+    const source = `(kicad_pcb
+      (dimension
+        (type aligned)
+        (layer "Dwgs.User")
+        (uuid "dimension-1")
+        (pts (xy 1 2) (xy 3 4))
+        (gr_text "2.0000 mm"
+          (at 2 3)
+          (layer "Dwgs.User")
+          (uuid "dimension-1"))))`;
+
+    const doc = fileToDoc(source);
+    expect(Object.keys(doc.items)).toEqual(["dimension-1"]);
+    expect(doc.items["dimension-1"]!.type).toBe("dimension");
+    expect(parseSexpr(docToFile(doc))).toEqual(parseSexpr(source));
+  });
+
   it("rejects text that is not a single top-level form", () => {
     expect(() => fileToDoc("(a) (b)")).toThrow(/one top-level/);
   });
