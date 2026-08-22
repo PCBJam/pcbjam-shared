@@ -49,6 +49,25 @@ export type Slot =
   | { k: string; v: Slot[] } // a (k …) child field, recursively
   | { item: string }; // a hoisted uuid item, referenced by uuid
 
+/**
+ * Copy a plain Slot tree across the Yjs boundary. Yjs stores JSON values by
+ * reference in-process, so returning or inserting a caller-owned tree would
+ * let ordinary JavaScript mutation change one replica without producing a
+ * CRDT update.
+ */
+export function cloneSlots(slots: readonly Slot[]): Slot[] {
+  return slots.map((slot): Slot => {
+    if ("atom" in slot) return { atom: slot.atom };
+    if ("item" in slot) return { item: slot.item };
+    return { k: slot.k, v: cloneSlots(slot.v) };
+  });
+}
+
+/** A record that is safe for every string key, including `__proto__`. */
+export function emptyKicadItems(): Record<string, KicadItem> {
+  return Object.create(null) as Record<string, KicadItem>;
+}
+
 export const slotSchema: z.ZodType<Slot> = z.lazy(() =>
   z.union([
     z.object({ atom: z.string() }),
@@ -167,9 +186,10 @@ function parseSlots(
       continue;
     }
     const id = itemUuid(child);
-    // Hoist a uuid node — unless its uuid is already taken (a malformed duplicate /
-    // self-reference), in which case keep it inline as a field, preserving losslessness.
-    if (id !== null && !(id in items)) {
+    if (id !== null) {
+      if (Object.hasOwn(items, id)) {
+        throw new Error(`parseSlots: duplicate item uuid ${JSON.stringify(id)}`);
+      }
       extractItem(child, id, parent, items);
       slots.push({ item: id });
       continue;
@@ -219,7 +239,7 @@ export function fileToDoc(text: string): KicadDoc {
     throw new Error("fileToDoc: root form has no leading name atom");
   }
 
-  const items: Record<string, KicadItem> = {};
+  const items = emptyKicadItems();
   const layout = parseSlots(root.slice(1), null, items);
 
   return assertKicadDoc({ root: name, items, layout });
@@ -242,12 +262,23 @@ export function sexprToItems(
   if (forms.length !== 1 || !Array.isArray(forms[0])) {
     throw new Error("sexprToItems: expected exactly one top-level (…) form");
   }
-  const node = forms[0] as SNode[];
+  return itemNodeToItems(forms[0] as SNode[], parent);
+}
+
+/**
+ * Flatten an already-parsed uuid-bearing item node.  Wire conversion uses this
+ * form so an atomic batch can parse and validate every native payload once
+ * before it computes any delta.
+ */
+export function itemNodeToItems(
+  node: SNode[],
+  parent: string | null = null,
+): { uuid: string; items: Record<string, KicadItem> } {
   const uuid = itemUuid(node);
   if (uuid === null) {
-    throw new Error("sexprToItems: form carries no direct (uuid …) — not an item");
+    throw new Error("itemNodeToItems: form carries no direct (uuid …) — not an item");
   }
-  const items: Record<string, KicadItem> = {};
+  const items = emptyKicadItems();
   extractItem(node, uuid, parent, items);
   return { uuid, items };
 }
@@ -310,7 +341,7 @@ export function unquoteAtom(atom: string): string {
 /** Render one slot back to s-expr text ({item} refs resolve through `items`). */
 export function renderSlotText(
   slot: Slot,
-  items: Record<string, KicadItem> = {},
+  items: Record<string, KicadItem> = emptyKicadItems(),
 ): string {
   return renderSlot(slot, items, new Set());
 }
@@ -341,7 +372,7 @@ export function libSymbolsFromLayout(
   layout: Slot[],
   items: Record<string, KicadItem>,
 ): Record<string, string> {
-  const defs: Record<string, string> = {};
+  const defs = Object.create(null) as Record<string, string>;
   for (const slot of layout) {
     if (!("k" in slot) || slot.k !== "lib_symbols") continue;
     for (const def of slot.v) {

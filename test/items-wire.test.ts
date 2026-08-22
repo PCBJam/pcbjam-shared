@@ -25,6 +25,15 @@ describe("descendants", () => {
     expect(descendants(current(), "fp-1").sort()).toEqual(["fld-1", "pad-1", "pad-2"]);
     expect(descendants(current(), "seg-1")).toEqual([]);
   });
+
+  it("terminates on a malformed parent cycle and returns each descendant once", () => {
+    const cyclic = {
+      a: { type: "x", parent: "c", body: [] },
+      b: { type: "x", parent: "a", body: [] },
+      c: { type: "x", parent: "b", body: [] },
+    };
+    expect(descendants(cyclic, "a").sort()).toEqual(["b", "c"]);
+  });
 });
 
 describe("itemsWireToDelta (editor → Y)", () => {
@@ -77,6 +86,50 @@ describe("itemsWireToDelta (editor → Y)", () => {
     );
     expect(d.updated.map((i) => i.uuid)).toEqual(["pad-1"]);
     expect(d.updated[0]!.parent).toBe("fp-1");
+  });
+
+  it("rejects duplicate upserts before returning any delta", () => {
+    const wire = parseItemsWireDelta(
+      JSON.stringify({ added: [{ sexpr: FP }, { sexpr: FP }] }),
+    );
+    expect(() => itemsWireToDelta(wire, {})).toThrow(/duplicate.*operation categories/i);
+  });
+
+  it("rejects an upsert of a descendant of an explicitly removed root", () => {
+    const wire = parseItemsWireDelta(
+      JSON.stringify({
+        changed: [{ sexpr: `(pad "1" smd (at 9 9) (uuid "pad-1"))`, parent: "fp-1" }],
+        removed: ["fp-1"],
+      }),
+    );
+    expect(() => itemsWireToDelta(wire, current())).toThrow(/changed.*removed|removed.*changed/i);
+  });
+
+  it("does not report a successful-prefix skip when a later entry rejects the batch", () => {
+    const skipped: string[] = [];
+    const wire = parseItemsWireDelta(
+      JSON.stringify({
+        added: [
+          { sexpr: `(layers (0 "F.Cu"))` },
+          { sexpr: `(segment (uuid` },
+        ],
+      }),
+    );
+    expect(() => itemsWireToDelta(wire, {}, (entry) => skipped.push(entry.sexpr))).toThrow();
+    expect(skipped).toEqual([]);
+  });
+
+  it("rejects an upsert that contradicts another upsert's subtree deletion", () => {
+    const withoutPad2 = FP.replace(`\n  (pad "2" smd (at 2 0) (uuid "pad-2"))`, "");
+    const wire = parseItemsWireDelta(
+      JSON.stringify({
+        changed: [
+          { sexpr: withoutPad2 },
+          { sexpr: `(pad "2" smd (at 2 0) (uuid "pad-2"))`, parent: "fp-1" },
+        ],
+      }),
+    );
+    expect(() => itemsWireToDelta(wire, current())).toThrow(/changed.*removed/i);
   });
 });
 
@@ -204,20 +257,30 @@ describe("unwrapWireItem (native tool blob shapes)", () => {
     expect(d.added.map((i) => i.uuid)).toEqual(["sym-1"]);
   });
 
-  it("skips payloads with zero or multiple uuid items instead of throwing", () => {
-    // A skipped entry must never abort conversion (the batch-loss bug): the
-    // caller learns about it through onSkip, the delta stays usable.
-    const skipped: Array<{ sexpr: string; err: unknown }> = [];
-    const d = itemsWireToDelta(
+  it("rejects an unknown syntactically valid payload with no uuid item", () => {
+    expect(() => itemsWireToDelta(
       parseItemsWireDelta(JSON.stringify({ added: [{ sexpr: "(layers (0 \"F.Cu\"))" }] })),
       {},
-      (w, err) => skipped.push({ sexpr: w.sexpr, err }),
-    );
-    expect(d.added).toEqual([]);
-    expect(d.updated).toEqual([]);
-    expect(d.removed).toEqual([]);
-    expect(skipped).toHaveLength(1);
-    expect(String(skipped[0]!.err)).toMatch(/expected exactly 1/);
+    )).toThrow(/uuid-bearing item missing/i);
+  });
+
+  it("rejects an ambiguous payload containing multiple uuid items", () => {
+    expect(() =>
+      itemsWireToDelta(
+        parseItemsWireDelta(
+          JSON.stringify({
+            added: [
+              {
+                sexpr: `(kicad_pcb
+                  (segment (uuid "s-1"))
+                  (segment (uuid "s-2")))`,
+              },
+            ],
+          }),
+        ),
+        {},
+      ),
+    ).toThrow(/expected exactly 1.*found 2/i);
   });
 });
 

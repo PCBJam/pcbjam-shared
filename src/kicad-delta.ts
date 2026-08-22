@@ -59,7 +59,7 @@ export function docDelta(
     else if (!sameKicadItem(old, item)) delta.updated.push({ uuid, ...item });
   }
   for (const uuid of Object.keys(prev.items)) {
-    if (!(uuid in next.items)) delta.removed.push(uuid);
+    if (!Object.hasOwn(next.items, uuid)) delta.removed.push(uuid);
   }
   return delta;
 }
@@ -146,7 +146,7 @@ export function driftDocDelta(
     else if (rel === "different") delta.updated.push({ uuid, ...item });
   }
   for (const uuid of Object.keys(prev.items)) {
-    if (!(uuid in next.items)) delta.removed.push(uuid);
+    if (!Object.hasOwn(next.items, uuid)) delta.removed.push(uuid);
   }
   return delta;
 }

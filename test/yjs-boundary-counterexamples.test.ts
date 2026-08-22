@@ -29,14 +29,18 @@ describe("plain JSON values are isolated at the Yjs boundary", () => {
     docToY(source, ydoc, "seed");
     const expected = docToFile(yToDoc(ydoc));
     const vector = Y.encodeStateVector(ydoc);
+    let emittedUpdates = 0;
+    ydoc.on("update", () => emittedUpdates++);
     const peer = new Y.Doc();
     Y.applyUpdate(peer, Y.encodeStateAsUpdate(ydoc));
 
     firstField(source.items["seg-1"]!.body, "start").v[0] = { atom: "99" };
+    firstField(source.layout, "version").v[0] = { atom: "99999999" };
 
     expect(docToFile(yToDoc(ydoc))).toBe(expected);
     expect(docToFile(yToDoc(peer))).toBe(expected);
     expect(Y.encodeStateAsUpdate(ydoc, vector).length).toBeLessThanOrEqual(2);
+    expect(emittedUpdates).toBe(0);
   });
 
   it("does not expose Yjs-owned Slot trees on materialization", () => {
@@ -44,15 +48,19 @@ describe("plain JSON values are isolated at the Yjs boundary", () => {
     docToY(fileToDoc(SEGMENT), ydoc, "seed");
     const expected = docToFile(yToDoc(ydoc));
     const vector = Y.encodeStateVector(ydoc);
+    let emittedUpdates = 0;
+    ydoc.on("update", () => emittedUpdates++);
     const peer = new Y.Doc();
     Y.applyUpdate(peer, Y.encodeStateAsUpdate(ydoc));
 
     const snapshot = yToDoc(ydoc);
     firstField(snapshot.items["seg-1"]!.body, "start").v[0] = { atom: "99" };
+    firstField(snapshot.layout, "version").v[0] = { atom: "99999999" };
 
     expect(docToFile(yToDoc(ydoc))).toBe(expected);
     expect(docToFile(yToDoc(peer))).toBe(expected);
     expect(Y.encodeStateAsUpdate(ydoc, vector).length).toBeLessThanOrEqual(2);
+    expect(emittedUpdates).toBe(0);
   });
 });
 

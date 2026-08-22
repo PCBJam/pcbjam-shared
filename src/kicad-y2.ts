@@ -17,16 +17,13 @@
  * writer throws on a head containing `#` (loud beats key confusion). Ids are
  * never interpreted — position resolves through `#attr_order`, gaps are normal.
  *
- * Identity rules (§3.3, with two guards the locked doc's §3.6 table forces):
+ * Identity rules (§3.3, with conservative native-snapshot guards):
  *   1. `{item}` refs → the child's uuid.
- *   2. keyword child → its UNQUOTED first atom, but ONLY when that atom is
- *      non-numeric AND the kind repeats (≥2 same-kind siblings) AND it is
- *      unique among them (`property#Reference`, stackup `layer#F.Cu`).
- *      Guards rationale: a value-like first atom (`(xy 1 2)`, `(type solid)`)
- *      would make the key change on every edit — concurrent edits of the same
- *      slot would then keep BOTH keys (the duplication anomaly §3.6 designs
- *      out) instead of LWW. A single child of its kind matches positionally,
- *      which is stable under value edits, so identity buys nothing there.
+ *   2. a child of an explicitly schema-audited `SEMANTIC_ID_HEADS` kind → its
+ *      unique, nonnumeric, UNQUOTED first atom (`property#Reference`). The rule
+ *      applies to singletons too, so a later one→many transition never changes
+ *      an existing child's key. Arbitrary first atoms are values, not inferred
+ *      identities; repeated anonymous children are one atomic register.
  *   3. otherwise → smallest positive integer above every numeric id present
  *      for that kind (live keys ∪ `#attr_order` entries). Never renumbered.
  *
@@ -46,15 +43,15 @@
  */
 
 import * as Y from "yjs";
-import type { Slot } from "./kicad-doc.js";
-import { unquoteAtom } from "./kicad-doc.js";
+import { cloneSlots, unquoteAtom, type Slot } from "./kicad-doc.js";
+import { KDOC_COLLAB_PROTOCOL_VERSION } from "./schemas.js";
 
 // ── Version constants (§5) ────────────────────────────────────────────────────
 
 /** `kdoc_meta` key holding the doc's s-expr encoding version. */
 export const Y_KDOC_SEXPR_VERSION = "sexprVersion";
-export const SEXPR_VERSION_CURRENT = 2;
-export const SEXPR_VERSION_SUPPORTED: readonly number[] = [1, 2];
+export const SEXPR_VERSION_CURRENT = KDOC_COLLAB_PROTOCOL_VERSION;
+export const SEXPR_VERSION_SUPPORTED: readonly number[] = [1, 2, 3];
 
 // ── Key vocabulary ────────────────────────────────────────────────────────────
 
@@ -63,6 +60,8 @@ const ATOM_KIND = "#atom";
 const ITEM_KIND = "#item";
 const ATOM_PREFIX = "#atom#";
 const ITEM_PREFIX = "#item#";
+/** v3 register containing the complete leading positional-atom run. */
+const ATOMS_GROUP_KEY = `${ATOM_PREFIX}0`;
 
 /** A v2 body node (item body or nested `(k …)` child stored as a map). */
 export type YNode = Y.Map<unknown>;
@@ -93,6 +92,13 @@ const INTEGER_ID = /^\d+$/;
 /** Numeric-literal shape — atoms that look like values, not identifiers. */
 const NUMERIC_ATOM = /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i;
 
+/**
+ * Heads whose first atom is defined by the KiCad schema as a stable semantic
+ * identity. Never infer identity for arbitrary heads: a value-looking string
+ * can be edited, and snapshot alignment would then manufacture duplicates.
+ */
+export const SEMANTIC_ID_HEADS: ReadonlySet<string> = new Set(["property"]);
+
 // ── Classification (§3.5) ─────────────────────────────────────────────────────
 
 /**
@@ -105,8 +111,78 @@ export const FORCE_ATOMIC_HEADS: ReadonlySet<string> = new Set(["filled_polygon"
 
 const TUPLE_LEAF_MAX_ATOMS = 8;
 
-function isAtomicLeaf(kind: string, v: Slot[], overrides: ReadonlySet<string>): boolean {
+export interface NodeEncodingOptions {
+  /**
+   * v3 safety rule: a repeated child sequence without source-level identities
+   * is one atomic conflict domain.  Native snapshots cannot, in general,
+   * distinguish insertion from replacement for those children; field-wise
+   * positional matching can therefore manufacture a hybrid no client wrote.
+   */
+  atomicAnonymousSequences?: boolean;
+  /** Keep positional atoms as one register so a merge cannot invent a tuple. */
+  atomicPositionalAtoms?: boolean;
+}
+
+export const V3_NODE_ENCODING: Readonly<NodeEncodingOptions> = {
+  atomicAnonymousSequences: true,
+  atomicPositionalAtoms: true,
+};
+
+export function hasAnonymousRepeatedChildren(v: readonly Slot[]): boolean {
+  const byKind = new Map<string, Array<{ first?: string }>>();
+  for (const slot of v) {
+    if (!("k" in slot)) continue;
+    const first = slot.v[0];
+    const raw = first && "atom" in first ? unquoteAtom(first.atom) : undefined;
+    const list = byKind.get(slot.k) ?? [];
+    list.push({ first: raw });
+    byKind.set(slot.k, list);
+  }
+
+  for (const [kind, siblings] of byKind) {
+    if (siblings.length < 2) continue;
+    const ids = siblings.map((s) => s.first);
+    const allSemantic = ids.every(
+      (id): id is string => id !== undefined && id !== "" && !NUMERIC_ATOM.test(id),
+    );
+    if (
+      !SEMANTIC_ID_HEADS.has(kind) ||
+      !allSemantic ||
+      new Set(ids).size !== ids.length
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** True when atoms occur after a keyed child and therefore lack a safe run boundary. */
+export function hasNonLeadingAtom(v: readonly Slot[]): boolean {
+  let sawKeyedChild = false;
+  for (const slot of v) {
+    if ("atom" in slot) {
+      if (sawKeyedChild) return true;
+    } else {
+      sawKeyedChild = true;
+    }
+  }
+  return false;
+}
+
+/** A root node has no parent slot that can carry an atomic representation. */
+export function v3RootSlotsRequireAtomicStorage(v: readonly Slot[]): boolean {
+  return hasAnonymousRepeatedChildren(v) || hasNonLeadingAtom(v);
+}
+
+function isAtomicLeaf(
+  kind: string,
+  v: Slot[],
+  overrides: ReadonlySet<string>,
+  options: Readonly<NodeEncodingOptions>,
+): boolean {
   if (overrides.has(kind)) return true;
+  if (options.atomicAnonymousSequences && hasAnonymousRepeatedChildren(v)) return true;
+  if (options.atomicPositionalAtoms && hasNonLeadingAtom(v)) return true;
   return v.length <= TUPLE_LEAF_MAX_ATOMS && v.every((s) => "atom" in s);
 }
 
@@ -115,6 +191,8 @@ function isAtomicLeaf(kind: string, v: Slot[], overrides: ReadonlySet<string>): 
 interface KeyedSlot {
   key: string;
   slot: Slot;
+  /** v3 groups the complete leading positional-atom run into this one register. */
+  atomicAtoms?: Slot[];
   /** true when this (key, slot) pair matched an existing map entry. */
   matched: boolean;
 }
@@ -139,8 +217,8 @@ function identityIds(slots: Slot[]): Array<string | undefined> {
   });
 
   const ids = new Array<string | undefined>(slots.length);
-  for (const indices of byKind.values()) {
-    if (indices.length < 2) continue; // single child → positional (stable under value edits)
+  for (const [kind, indices] of byKind) {
+    if (!SEMANTIC_ID_HEADS.has(kind)) continue;
     const firstAtoms = indices.map((i) => {
       const s = slots[i]! as { k: string; v: Slot[] };
       const first = s.v[0];
@@ -148,13 +226,14 @@ function identityIds(slots: Slot[]): Array<string | undefined> {
       const id = unquoteAtom(first.atom);
       return id === "" || NUMERIC_ATOM.test(id) ? undefined : id;
     });
-    const counts = new Map<string, number>();
-    for (const a of firstAtoms) {
-      if (a !== undefined) counts.set(a, (counts.get(a) ?? 0) + 1);
+    if (
+      firstAtoms.some((atom) => atom === undefined) ||
+      new Set(firstAtoms).size !== firstAtoms.length
+    ) {
+      continue;
     }
     indices.forEach((slotIdx, j) => {
-      const a = firstAtoms[j];
-      if (a !== undefined && counts.get(a) === 1) ids[slotIdx] = a;
+      ids[slotIdx] = firstAtoms[j];
     });
   }
   return ids;
@@ -201,9 +280,16 @@ function numericAllocator(node: YNode | null): (kind: string) => string {
  * numeric guard — so the pools cannot collide). Unmatched new slots get fresh
  * rule-3 ids. Pass `node = null` for a fresh build (nothing to match).
  */
-function keySlots(slots: Slot[], node: YNode | null): KeyedSlot[] {
+function keySlots(
+  slots: Slot[],
+  node: YNode | null,
+  options: Readonly<NodeEncodingOptions>,
+): KeyedSlot[] {
   const identity = identityIds(slots);
   const alloc = numericAllocator(node);
+  const groupAtoms = options.atomicPositionalAtoms === true && !hasNonLeadingAtom(slots);
+  const atoms = groupAtoms ? slots.filter((slot) => "atom" in slot) : [];
+  let emittedAtoms = false;
 
   // Existing positional pools: kind → integer-id keys in normalized order.
   const pools = new Map<string, string[]>();
@@ -225,45 +311,64 @@ function keySlots(slots: Slot[], node: YNode | null): KeyedSlot[] {
     return pool[at];
   };
 
-  return slots.map((slot, i): KeyedSlot => {
+  return slots.flatMap((slot, i): KeyedSlot[] => {
     if ("item" in slot) {
       const key = itemRefKey(slot.item);
-      return { key, slot, matched: node?.has(key) ?? false };
+      return [{ key, slot, matched: node?.has(key) ?? false }];
     }
     if ("atom" in slot) {
+      if (groupAtoms) {
+        if (emittedAtoms) return [];
+        emittedAtoms = true;
+        return [{
+          key: ATOMS_GROUP_KEY,
+          slot,
+          atomicAtoms: atoms,
+          matched: node?.has(ATOMS_GROUP_KEY) ?? false,
+        }];
+      }
       const existing = takePositional(ATOM_KIND);
-      if (existing) return { key: existing, slot, matched: true };
-      return { key: ATOM_PREFIX + alloc(ATOM_KIND), slot, matched: false };
+      if (existing) return [{ key: existing, slot, matched: true }];
+      return [{ key: ATOM_PREFIX + alloc(ATOM_KIND), slot, matched: false }];
     }
     assertKindSafe(slot.k);
     const id = identity[i];
     if (id !== undefined) {
       const key = `${slot.k}#${id}`;
-      return { key, slot, matched: node?.has(key) ?? false };
+      return [{ key, slot, matched: node?.has(key) ?? false }];
     }
     const existing = takePositional(slot.k);
-    if (existing) return { key: existing, slot, matched: true };
-    return { key: `${slot.k}#${alloc(slot.k)}`, slot, matched: false };
+    if (existing) return [{ key: existing, slot, matched: true }];
+    return [{ key: `${slot.k}#${alloc(slot.k)}`, slot, matched: false }];
   });
 }
 
 // ── Encode: Slot[] → node map ─────────────────────────────────────────────────
 
-function encodeChild(slot: Slot, overrides: ReadonlySet<string>): unknown {
+function encodeChild(
+  keyed: KeyedSlot,
+  overrides: ReadonlySet<string>,
+  options: Readonly<NodeEncodingOptions>,
+): unknown {
+  if (keyed.atomicAtoms) return cloneSlots(keyed.atomicAtoms);
+  const { slot } = keyed;
   if ("atom" in slot) return slot.atom;
   if ("item" in slot) return 1;
-  return isAtomicLeaf(slot.k, slot.v, overrides) ? slot.v : nodeFromSlots(slot.v, overrides);
+  return isAtomicLeaf(slot.k, slot.v, overrides, options)
+    ? cloneSlots(slot.v)
+    : nodeFromSlots(slot.v, overrides, options);
 }
 
 /** Build a fresh (preliminary) node map from a body's slots. */
 export function nodeFromSlots(
   slots: Slot[],
   overrides: ReadonlySet<string> = FORCE_ATOMIC_HEADS,
+  options: Readonly<NodeEncodingOptions> = {},
 ): YNode {
   const node = new Y.Map<unknown>();
-  const keyed = keySlots(slots, null);
-  for (const { key, slot } of keyed) {
-    node.set(key, encodeChild(slot, overrides));
+  const keyed = keySlots(slots, null, options);
+  for (const child of keyed) {
+    node.set(child.key, encodeChild(child, overrides, options));
   }
   const order = new Y.Array<string>();
   order.push(keyed.map((k) => k.key));
@@ -298,17 +403,18 @@ function normalizedKeys(node: YNode): string[] {
   return keys;
 }
 
-function decodeChild(key: string, value: unknown): Slot {
-  if (key.startsWith(ATOM_PREFIX)) return { atom: String(value) };
-  if (key.startsWith(ITEM_PREFIX)) return { item: key.slice(ITEM_PREFIX.length) };
+function decodeChild(key: string, value: unknown): Slot[] {
+  if (key === ATOMS_GROUP_KEY && Array.isArray(value)) return cloneSlots(value as Slot[]);
+  if (key.startsWith(ATOM_PREFIX)) return [{ atom: String(value) }];
+  if (key.startsWith(ITEM_PREFIX)) return [{ item: key.slice(ITEM_PREFIX.length) }];
   const kind = keyKind(key);
-  if (value instanceof Y.Map) return { k: kind, v: slotsFromNode(value) };
-  return { k: kind, v: (value as Slot[]) ?? [] };
+  if (value instanceof Y.Map) return [{ k: kind, v: slotsFromNode(value) }];
+  return [{ k: kind, v: cloneSlots((value as Slot[]) ?? []) }];
 }
 
 /** Materialize a node map back into the v1-identical plain `Slot[]`. */
 export function slotsFromNode(node: YNode): Slot[] {
-  return normalizedKeys(node).map((key) => decodeChild(key, node.get(key)));
+  return normalizedKeys(node).flatMap((key) => decodeChild(key, node.get(key)));
 }
 
 // ── The v2 differ: write a new body into an existing node ─────────────────────
@@ -327,8 +433,9 @@ export function updateNodeFromSlots(
   node: YNode,
   slots: Slot[],
   overrides: ReadonlySet<string> = FORCE_ATOMIC_HEADS,
+  options: Readonly<NodeEncodingOptions> = {},
 ): void {
-  const keyed = keySlots(slots, node);
+  const keyed = keySlots(slots, node, options);
   const targetKeys = keyed.map((k) => k.key);
   const targetSet = new Set(targetKeys);
 
@@ -340,19 +447,31 @@ export function updateNodeFromSlots(
   for (const key of toDelete) node.delete(key);
 
   // Updates / creations.
-  for (const { key, slot, matched } of keyed) {
+  for (const child of keyed) {
+    const { key, slot, matched } = child;
     if (!matched) {
-      node.set(key, encodeChild(slot, overrides));
+      node.set(key, encodeChild(child, overrides, options));
       continue;
     }
     const existing = node.get(key);
-    if ("atom" in slot) {
+    if (child.atomicAtoms) {
+      if (JSON.stringify(existing) !== JSON.stringify(child.atomicAtoms)) {
+        node.set(key, cloneSlots(child.atomicAtoms));
+      }
+    } else if ("atom" in slot) {
       if (existing !== slot.atom) node.set(key, slot.atom);
     } else if ("k" in slot) {
       if (existing instanceof Y.Map) {
-        updateNodeFromSlots(existing, slot.v, overrides); // sticky: stays a node map
+        if (
+          (options.atomicAnonymousSequences && hasAnonymousRepeatedChildren(slot.v)) ||
+          (options.atomicPositionalAtoms && hasNonLeadingAtom(slot.v))
+        ) {
+          node.set(key, cloneSlots(slot.v)); // migrate to a safe atomic conflict domain
+        } else {
+          updateNodeFromSlots(existing, slot.v, overrides, options);
+        }
       } else if (JSON.stringify(existing) !== JSON.stringify(slot.v)) {
-        node.set(key, slot.v); // sticky: stays an atomic leaf
+        node.set(key, cloneSlots(slot.v)); // sticky: stays an atomic leaf
       }
     }
     // {item} refs carry identity in the key; the value never changes.

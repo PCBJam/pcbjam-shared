@@ -22,9 +22,9 @@
 
 import { z } from "zod";
 import {
+  itemNodeToItems,
   renderItem,
   scalar,
-  sexprToItems,
   unquoteAtom,
   type KicadItem,
 } from "./kicad-doc.js";
@@ -81,8 +81,11 @@ function childrenIndex(items: Record<string, KicadItem>): Map<string, string[]> 
 function descendantsFrom(children: Map<string, string[]>, root: string): string[] {
   const out: string[] = [];
   const stack = [...(children.get(root) ?? [])];
+  const visited = new Set<string>([root]);
   while (stack.length) {
     const uuid = stack.pop()!;
+    if (visited.has(uuid)) continue;
+    visited.add(uuid);
     out.push(uuid);
     stack.push(...(children.get(uuid) ?? []));
   }
@@ -108,9 +111,35 @@ export function descendants(
  * Exactly one uuid-bearing candidate is required; envelope furniture (version,
  * generator, layers, lib_symbols) is sender context, not document content.
  */
-export function unwrapWireItem(text: string): string {
+class NoWireItemError extends Error {}
+
+/**
+ * pcbnew's serializer can intentionally produce exactly this furniture-only
+ * envelope for a standalone PCB_FIELD_T. It is the sole zero-item payload we
+ * may skip: a bare/unknown item-like form without a UUID is corruption.
+ */
+function isKnownEmptyPcbnewEnvelope(forms: readonly SNode[]): boolean {
+  if (forms.length !== 1 || !Array.isArray(forms[0])) return false;
+  const form = forms[0];
+  if (form[0] !== "kicad_pcb") return false;
+  const allowed = new Set(["version", "generator", "layers"]);
+  const heads: string[] = [];
+  for (const child of form.slice(1)) {
+    if (!Array.isArray(child) || typeof child[0] !== "string" || !allowed.has(child[0])) {
+      return false;
+    }
+    heads.push(child[0]);
+  }
+  return (
+    heads.length === 3 &&
+    new Set(heads).size === 3 &&
+    heads.every((head) => allowed.has(head))
+  );
+}
+
+function wireItemNode(text: string): SNode[] {
   const forms = parseSexpr(text);
-  const candidates: SNode[] = [];
+  const candidates: SNode[][] = [];
 
   for (const form of forms) {
     if (!Array.isArray(form)) continue;
@@ -123,30 +152,108 @@ export function unwrapWireItem(text: string): string {
     }
   }
 
+  if (candidates.length === 0) {
+    if (isKnownEmptyPcbnewEnvelope(forms)) {
+      throw new NoWireItemError(
+        "unwrapWireItem: known empty pcbnew field envelope contains no item",
+      );
+    }
+    throw new Error(
+      "unwrapWireItem: uuid-bearing item missing from unknown/item-like payload",
+    );
+  }
   if (candidates.length !== 1) {
     throw new Error(
       `unwrapWireItem: expected exactly 1 uuid-bearing item form, found ${candidates.length}`,
     );
   }
-  return printSexpr(candidates[0]!);
+  return candidates[0]!;
 }
 
-/** Reports a wire entry a conversion could not resolve to an item and skipped. */
+export function unwrapWireItem(text: string): string {
+  return printSexpr(wireItemNode(text));
+}
+
+/** Reports a syntactically valid, item-less native envelope that was skipped. */
 export type WireSkipHandler = (w: WireItem, err: unknown) => void;
+
+type WireUpsertCategory = "added" | "changed";
+
+interface ParsedWireUpsert {
+  wire: WireItem;
+  category: WireUpsertCategory;
+  uuid: string;
+  items: Record<string, KicadItem>;
+}
+
+/**
+ * Parse and flatten every upsert before delta construction.  Only a known
+ * item-less native envelope is recoverable: malformed syntax and ambiguous
+ * multi-item payloads reject the whole batch.
+ */
+function parseWireUpserts(
+  wire: ItemsWireDelta,
+): {
+  upserts: ParsedWireUpsert[];
+  categoryByUuid: Map<string, WireUpsertCategory>;
+  skipped: Array<{ wire: WireItem; error: NoWireItemError }>;
+} {
+  const upserts: ParsedWireUpsert[] = [];
+  const skipped: Array<{ wire: WireItem; error: NoWireItemError }> = [];
+  const categoryByUuid = new Map<string, WireUpsertCategory>();
+
+  const parseCategory = (entries: WireItem[], category: WireUpsertCategory): void => {
+    for (let index = 0; index < entries.length; index++) {
+      const entry = entries[index]!;
+      let flat: ReturnType<typeof itemNodeToItems>;
+      try {
+        flat = itemNodeToItems(wireItemNode(entry.sexpr), entry.parent);
+      } catch (error) {
+        if (error instanceof NoWireItemError) {
+          skipped.push({ wire: entry, error });
+          continue;
+        }
+        throw new Error(
+          `itemsWireToDelta: invalid ${category}[${index}] s-expression/item: ${String(error)}`,
+        );
+      }
+
+      for (const uuid of Object.keys(flat.items)) {
+        const previous = categoryByUuid.get(uuid);
+        if (previous !== undefined) {
+          const relation = previous === category ? `duplicate ${category}` : `${previous} and ${category}`;
+          throw new Error(
+            `itemsWireToDelta: uuid ${JSON.stringify(uuid)} appears in incompatible/duplicate operation categories (${relation})`,
+          );
+        }
+        categoryByUuid.set(uuid, category);
+      }
+      upserts.push({ wire: entry, category, ...flat });
+    }
+  };
+
+  parseCategory(wire.added, "added");
+  parseCategory(wire.changed, "changed");
+
+  return { upserts, categoryByUuid, skipped };
+}
 
 /**
  * Convert a bridge items-wire delta into a `KicadDelta` against the `current`
  * item set (typically the Y.Doc's items). Pure; exact subtree reconciliation:
  * a changed footprint whose pad disappeared yields `removed: [that pad]`.
  *
- * An entry that cannot be resolved to an item is SKIPPED (reported via
- * `onSkip`), never allowed to abort the batch: pcbnew's board writer emits
+ * A syntactically valid entry with no item is SKIPPED (reported via `onSkip`):
+ * pcbnew's board writer emits
  * nothing for a standalone child (`case PCB_FIELD_T: break;` — a field is its
  * footprint's content, and `default:` is a release no-op wxFAIL_MSG), so an
  * unlifted child reaching the sender's serializer yields an item-less board
  * envelope. Throwing on it discarded every OTHER entry in the message — after
  * the sender had already rebaselined, so the lost items could never be re-sent.
  * The empty envelope itself carries nothing, so skipping it is lossless.
+ * Malformed syntax, an ambiguous multi-item payload, duplicate upserts, and a
+ * uuid in incompatible operation categories reject the complete batch before
+ * any delta is returned.
  */
 export function itemsWireToDelta(
   wire: ItemsWireDelta,
@@ -155,20 +262,35 @@ export function itemsWireToDelta(
 ): KicadDelta {
   const delta = emptyKicadDelta();
   const children = childrenIndex(current); // once per conversion, not per item (opt 12)
+  const { upserts, categoryByUuid, skipped } = parseWireUpserts(wire);
 
-  const upsert = (w: WireItem): void => {
-    let flat: ReturnType<typeof sexprToItems>;
-    try {
-      flat = sexprToItems(unwrapWireItem(w.sexpr), w.parent);
-    } catch (err) {
-      onSkip?.(w, err);
-      return;
+  const explicitRemoved = new Set<string>();
+  const removedClosure = new Set<string>();
+  for (const uuid of wire.removed) {
+    if (explicitRemoved.has(uuid)) {
+      throw new Error(
+        `itemsWireToDelta: duplicate uuid ${JSON.stringify(uuid)} in removed category`,
+      );
     }
-    const { uuid, items } = flat;
+    explicitRemoved.add(uuid);
+    removedClosure.add(uuid);
+    for (const child of descendantsFrom(children, uuid)) removedClosure.add(child);
+  }
+  for (const uuid of removedClosure) {
+    const category = categoryByUuid.get(uuid);
+    if (category !== undefined) {
+      throw new Error(
+        `itemsWireToDelta: uuid ${JSON.stringify(uuid)} appears in incompatible operation categories (${category} and removed)`,
+      );
+    }
+  }
+
+  const removals = new Set<string>();
+  for (const { uuid, items } of upserts) {
     // Previous subtree members (known to `current`) that the new flatten no
     // longer contains have been deleted inside this item.
     const stale = new Set(
-      [uuid, ...descendantsFrom(children, uuid)].filter((id) => id in current),
+      [uuid, ...descendantsFrom(children, uuid)].filter((id) => Object.hasOwn(current, id)),
     );
     for (const [id, item] of Object.entries(items)) {
       const old = current[id];
@@ -176,14 +298,23 @@ export function itemsWireToDelta(
       else if (!sameKicadItem(old, item)) delta.updated.push({ uuid: id, ...item });
       stale.delete(id);
     }
-    delta.removed.push(...stale);
-  };
-
-  for (const w of wire.added) upsert(w);
-  for (const w of wire.changed) upsert(w);
-  for (const id of wire.removed) {
-    delta.removed.push(id, ...descendantsFrom(children, id));
+    for (const id of stale) removals.add(id);
   }
+  for (const id of removedClosure) removals.add(id);
+
+  for (const uuid of removals) {
+    const category = categoryByUuid.get(uuid);
+    if (category !== undefined) {
+      throw new Error(
+        `itemsWireToDelta: uuid ${JSON.stringify(uuid)} resolves to incompatible ${category} and removed categories`,
+      );
+    }
+  }
+  delta.removed = [...removals].sort();
+  // Emit recoverable skips only once every rejecting preflight and semantic
+  // category check has passed.  A rejected batch has no successful-prefix
+  // callback side effects either.
+  for (const entry of skipped) onSkip?.(entry.wire, entry.error);
   return delta;
 }
 
@@ -191,22 +322,16 @@ export function itemsWireToDelta(
  * Every uuid a wire's added/changed sexprs carry (the items plus their nested
  * subtrees). The diff-on-rebind adopt uses this to find doc-only items.
  *
- * Un-resolvable entries are skipped like `itemsWireToDelta`'s (same wire, same
- * failure mode); an item-less entry contributes no uuids, which on the adopt
- * path errs toward doc authority — the safe direction.
+ * Item-less entries are skipped like `itemsWireToDelta`'s; malformed or
+ * ambiguous entries and duplicate/incompatible upsert categories reject.
  */
 export function wireItemUuids(wire: ItemsWireDelta, onSkip?: WireSkipHandler): Set<string> {
   const out = new Set<string>();
-  for (const w of [...wire.added, ...wire.changed]) {
-    let items: Record<string, KicadItem>;
-    try {
-      items = sexprToItems(unwrapWireItem(w.sexpr), w.parent).items;
-    } catch (err) {
-      onSkip?.(w, err);
-      continue;
-    }
+  const { upserts, skipped } = parseWireUpserts(wire);
+  for (const { items } of upserts) {
     for (const id of Object.keys(items)) out.add(id);
   }
+  for (const entry of skipped) onSkip?.(entry.wire, entry.error);
   return out;
 }
 

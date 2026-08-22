@@ -10,9 +10,9 @@ import * as Y from "yjs";
 import {
   computeRevertUpdate,
   docToY,
+  kicadMetaMap,
   mergeYUpdates,
   upsertDocToY,
-  Y_KDOC_META,
   Y_KDOC_REVERT_AT,
   Y_KDOC_REVERT_NONCE,
   Y_KDOC_REVERT_REASON,
@@ -71,6 +71,7 @@ describe("upsertDocToY — minimal diff", () => {
     const ydoc = seeded();
     const doc = yToDoc(ydoc);
     delete doc.items["seg-2"];
+    doc.layout = doc.layout.filter((slot) => !("item" in slot && slot.item === "seg-2"));
     upsertDocToY(doc, ydoc, "del");
     expect(yToDoc(ydoc).items["seg-2"]).toBeUndefined();
     expect(Object.keys(yToDoc(ydoc).items)).toHaveLength(2);
@@ -115,7 +116,7 @@ describe("computeRevertUpdate — forward-op rollback", () => {
     // (CRDT merge — no epoch swap) and carries the marker.
     Y.applyUpdate(ydoc, update!);
     expect(docToFile(yToDoc(ydoc))).toBe(docToFile(fileToDoc(BASE)));
-    const meta = ydoc.getMap(Y_KDOC_META);
+    const meta = kicadMetaMap(ydoc);
     expect(meta.get(Y_KDOC_REVERT_NONCE)).toBe("job-42");
     expect(meta.get(Y_KDOC_REVERT_REASON)).toBe("unbalanced (");
     expect(meta.get(Y_KDOC_REVERT_AT)).toBe("2026-07-14T00:00:00Z");

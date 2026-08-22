@@ -111,7 +111,7 @@ describe("bug 06 — concurrent first-seed, arbitrated (seedDocToY)", () => {
   it("the merged layout holds each root slot exactly once", () => {
     const s = concurrentSeed();
     arbitrate(s);
-    const layout = s.a.getArray<Slot>(Y_KDOC_LAYOUT).toArray();
+    const layout = yToDoc(s.a).layout;
     const fpSlots = layout.filter((x) => "item" in x && x.item === "fp-1");
     expect(fpSlots).toHaveLength(1);
   });
@@ -151,7 +151,7 @@ describe("bug 06 — concurrent first-seed, arbitrated (seedDocToY)", () => {
       "edit",
     );
     arbitrate(s);
-    const layout = s.a.getArray<Slot>(Y_KDOC_LAYOUT).toArray();
+    const layout = yToDoc(s.a).layout;
     expect(layout.filter((x) => "item" in x && x.item === "fp-1")).toHaveLength(1);
     expect(layout.filter((x) => "item" in x && x.item === "seg-2")).toHaveLength(1);
   });

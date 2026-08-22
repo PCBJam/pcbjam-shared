@@ -4,6 +4,7 @@ import {
   applyDeltaToY,
   docToY,
   kicadLibSymbolsMap,
+  kicadLayout,
   syncLayoutToY,
   upsertLibSymbolsToY,
   Y_KDOC_LAYOUT,
@@ -45,7 +46,7 @@ describe("lib_symbols channel (miss 08A)", () => {
     const ydoc = new Y.Doc();
     docToY(fileToDoc(SCH), ydoc, "seed");
     expect(kicadLibSymbolsMap(ydoc).get("Device:R")).toContain(`"Device:R"`);
-    const layout = ydoc.getArray<Slot>(Y_KDOC_LAYOUT).toArray();
+    const layout = kicadLayout(ydoc);
     const slot = layout.find((s) => "k" in s && s.k === "lib_symbols");
     expect(slot && "k" in slot && slot.v).toEqual([]);
   });

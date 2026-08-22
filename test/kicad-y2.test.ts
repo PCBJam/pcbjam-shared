@@ -112,7 +112,7 @@ function nodeKeys(node: Y.Map<unknown>): string[] {
 }
 
 describe("v2 doc shape & versioning", () => {
-  it("a fresh doc is stamped sexprVersion 2 and stores bodies as node maps", () => {
+  it("a fresh doc is stamped with the current version and stores bodies as node maps", () => {
     const { a } = seededPair();
     expect(ydocSexprVersion(a)).toBe(SEXPR_VERSION_CURRENT);
     expect(kicadItemsMap(a).get("seg-1")!.get("body")).toBeInstanceOf(Y.Map);
@@ -144,11 +144,11 @@ describe("identity rules (§3.3)", () => {
     expect(scalar(yToDoc(a).items["seg-1"]!.body, "width")).toBe("0.4");
   });
 
-  it("numeric first atoms (coordinates) never become identities", () => {
+  it("v3 keeps an anonymous repeated coordinate sequence atomic", () => {
     const { a } = seededPair();
-    const pts = bodyNode(a, "poly-1").get("pts#1") as Y.Map<unknown>;
-    expect(pts).toBeInstanceOf(Y.Map);
-    expect(nodeKeys(pts)).toEqual(["xy#1", "xy#2", "xy#3", "xy#4"]);
+    const pts = bodyNode(a, "poly-1").get("pts#1");
+    expect(Array.isArray(pts)).toBe(true);
+    expect(pts).toEqual(field(yToDoc(a).items["poly-1"]!.body, "pts"));
   });
 
   it("hoisted children ref by uuid (#item# keys)", () => {
@@ -401,14 +401,14 @@ describe("v1 interop (§5)", () => {
     expect(Array.isArray(kicadItemsMap(ydoc).get("seg-1")!.get("body"))).toBe(true);
   });
 
-  it("v1 blob → fresh v2 seed (the onLoad conversion) is lossless", () => {
+  it("v1 blob → fresh current-version seed (the onLoad conversion) is lossless", () => {
     const v1 = new Y.Doc();
     v1.getMap("kdoc_meta").set(Y_KDOC_SEXPR_VERSION, 1);
     docToY(fileToDoc(BASE), v1);
     // The §5 conversion: materialize the v1 blob, reseed a FRESH doc (v2).
     const converted = new Y.Doc();
     docToY(yToDoc(v1), converted);
-    expect(ydocSexprVersion(converted)).toBe(2);
+    expect(ydocSexprVersion(converted)).toBe(SEXPR_VERSION_CURRENT);
     expect(docToFile(yToDoc(converted))).toBe(docToFile(yToDoc(v1)));
   });
 });

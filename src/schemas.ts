@@ -310,12 +310,19 @@ export type CreateLibBody = z.infer<typeof createLibBody>;
  * backend can persist under team-scoped storage keys without a lookup.
  */
 export const collabRoomIdSchema = z.string().min(1);
+/**
+ * Network/schema epoch for document rooms. This is intentionally part of the
+ * room namespace: clients with incompatible Y shapes never exchange updates.
+ * The server only admits this version; it does not choose conflict winners.
+ */
+export const KDOC_COLLAB_PROTOCOL_VERSION = 3;
+const KDOC_ROOM_PREFIX = `~kdoc-v${KDOC_COLLAB_PROTOCOL_VERSION}~:`;
 export function collabRoomId(
   scopeId: string,
   projectId: string,
   docPath: string,
 ): string {
-  return `${scopeId}:${projectId}:${docPath}`;
+  return `${scopeId}:${projectId}:${KDOC_ROOM_PREFIX}${docPath}`;
 }
 
 /**
@@ -325,17 +332,34 @@ export function collabRoomId(
  */
 export function parseCollabRoomId(
   room: string,
-): { scopeId: string; projectId: string; docPath: string } | null {
+): {
+  scopeId: string;
+  projectId: string;
+  docPath: string;
+  /** null means a legacy unversioned room (or the awareness-only presence room). */
+  schemaVersion: number | null;
+} | null {
   const i = room.indexOf(":");
   if (i <= 0) return null;
   const j = room.indexOf(":", i + 1);
   if (j <= i + 1) return null;
-  const docPath = room.slice(j + 1);
-  if (!docPath) return null; // every real room names a doc (or ~presence)
+  const encodedPath = room.slice(j + 1);
+  if (!encodedPath) return null; // every real room names a doc (or ~presence)
+  let docPath = encodedPath;
+  let schemaVersion: number | null = null;
+  const versioned = encodedPath.match(/^~kdoc-v(\d+)~:(.+)$/s);
+  if (versioned) {
+    schemaVersion = Number(versioned[1]);
+    docPath = versioned[2]!;
+    if (!Number.isSafeInteger(schemaVersion) || schemaVersion < 1 || !docPath) return null;
+  } else if (encodedPath.startsWith("~kdoc-")) {
+    return null;
+  }
   return {
     scopeId: room.slice(0, i),
     projectId: room.slice(i + 1, j),
     docPath,
+    schemaVersion,
   };
 }
 
@@ -349,7 +373,8 @@ export function parseCollabRoomId(
  */
 export const PRESENCE_DOC_PATH = "~presence";
 export function presenceRoomId(scopeId: string, projectId: string): string {
-  return collabRoomId(scopeId, projectId, PRESENCE_DOC_PATH);
+  // Presence carries no document state and is intentionally codec-agnostic.
+  return `${scopeId}:${projectId}:${PRESENCE_DOC_PATH}`;
 }
 
 /**

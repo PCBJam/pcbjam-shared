@@ -35,6 +35,8 @@
 import * as Y from "yjs";
 import {
   assertKicadDoc,
+  cloneSlots,
+  emptyKicadItems,
   kicadItemSchema,
   libSymbolsFromLayout,
   slotFromSexpr,
@@ -43,19 +45,34 @@ import {
   type Slot,
 } from "./kicad-doc.js";
 import { emptyKicadDelta, type KicadDelta } from "./kicad-delta.js";
+import {
+  assertValidKicadDoc,
+  canonicalizeKicadDocGraph,
+} from "./kicad-graph.js";
 import { Y_KDOC_COMMENTS } from "./comments-wire.js";
 import {
   nodeFromSlots,
   SEXPR_VERSION_CURRENT,
+  SEXPR_VERSION_SUPPORTED,
   slotsFromNode,
   pruneItemRefFromNode,
   updateNodeFromSlots,
+  V3_NODE_ENCODING,
+  v3RootSlotsRequireAtomicStorage,
   Y_KDOC_SEXPR_VERSION,
 } from "./kicad-y2.js";
 
 export const Y_KDOC_META = "kdoc_meta";
 export const Y_KDOC_ITEMS = "kdoc_items";
 export const Y_KDOC_LAYOUT = "kdoc_layout";
+/** v3 root: one LWW pointer to the complete active document epoch. */
+export const Y_KDOC_STATE = "kdoc_state";
+export const Y_KDOC_STATE_ACTIVE = "active";
+const V3_META = "meta";
+const V3_ITEMS = "items";
+const V3_LAYOUT_BASE = "layoutBase";
+const V3_LAYOUT_OVERRIDES = "layoutOverrides";
+const V3_LIBSYMBOLS = "libsymbols";
 /**
  * Embedded library definitions (miss 08): lib id → `(symbol …)` definition
  * text. A dedicated Y.Map so concurrent placements of DIFFERENT symbols merge
@@ -69,14 +86,101 @@ export const Y_KDOC_SEED_NONCE = "seedNonce";
 
 export type KicadYItems = Y.Map<Y.Map<unknown>>;
 
+export type KicadYState = Y.Map<unknown>;
+
+/** The v3 active state envelope, or null for a legacy v1/v2 document. */
+export function activeKicadState(ydoc: Y.Doc): KicadYState | null {
+  // Do not call getMap here: merely reading an empty document must not create
+  // a state root that is later mistaken for a corrupt/deleted active epoch.
+  if (!ydoc.share.has(Y_KDOC_STATE)) return null;
+  // A root learned only through applyUpdate is an untyped AbstractType until
+  // the application requests it; getMap performs that safe materialization.
+  const root = ydoc.getMap<unknown>(Y_KDOC_STATE);
+  if (!root.has(Y_KDOC_STATE_ACTIVE)) {
+    throw new Error("invalid kdoc v3 state: active epoch is missing");
+  }
+  const active = root.get(Y_KDOC_STATE_ACTIVE);
+  if (!(active instanceof Y.Map)) {
+    throw new Error("invalid kdoc v3 state: active epoch is not a Y.Map");
+  }
+  return active as KicadYState;
+}
+
+function stateMap<T>(state: KicadYState, key: string): Y.Map<T> {
+  const value = state.get(key);
+  if (!(value instanceof Y.Map)) throw new Error(`invalid kdoc v3 state: ${key} is not a Y.Map`);
+  return value as Y.Map<T>;
+}
+
+function stateArray<T>(state: KicadYState, key: string): Y.Array<T> {
+  const value = state.get(key);
+  if (!(value instanceof Y.Array)) {
+    throw new Error(`invalid kdoc v3 state: ${key} is not a Y.Array`);
+  }
+  return value as Y.Array<T>;
+}
+
+/** The authoritative metadata map (nested for v3, legacy root for v1/v2). */
+export function kicadMetaMap(ydoc: Y.Doc): Y.Map<unknown> {
+  const state = activeKicadState(ydoc);
+  return state ? stateMap<unknown>(state, V3_META) : ydoc.getMap(Y_KDOC_META);
+}
+
 /** The doc's flattened item map (uuid → item Y.Map). */
 export function kicadItemsMap(ydoc: Y.Doc): KicadYItems {
-  return ydoc.getMap<Y.Map<unknown>>(Y_KDOC_ITEMS);
+  const state = activeKicadState(ydoc);
+  return state
+    ? stateMap<Y.Map<unknown>>(state, V3_ITEMS)
+    : ydoc.getMap<Y.Map<unknown>>(Y_KDOC_ITEMS);
 }
 
 /** The doc's embedded library definitions (lib id → definition text). */
 export function kicadLibSymbolsMap(ydoc: Y.Doc): Y.Map<string> {
-  return ydoc.getMap<string>(Y_KDOC_LIBSYMBOLS);
+  const state = activeKicadState(ydoc);
+  return state
+    ? stateMap<string>(state, V3_LIBSYMBOLS)
+    : ydoc.getMap<string>(Y_KDOC_LIBSYMBOLS);
+}
+
+/** v3's immutable-seed/mutable-root-order base, or legacy kdoc_layout. */
+export function kicadLayoutArray(ydoc: Y.Doc): Y.Array<Slot> {
+  const state = activeKicadState(ydoc);
+  return state
+    ? stateArray<Slot>(state, V3_LAYOUT_BASE)
+    : ydoc.getArray<Slot>(Y_KDOC_LAYOUT);
+}
+
+/** Per-head v3 LWW layout values. Empty arrays are deletion tombstones. */
+export function kicadLayoutOverridesMap(ydoc: Y.Doc): Y.Map<Slot[]> | null {
+  const state = activeKicadState(ydoc);
+  return state ? stateMap<Slot[]>(state, V3_LAYOUT_OVERRIDES) : null;
+}
+
+/** Materialize the authoritative layout, applying v3 head overrides to its base. */
+export function kicadLayout(ydoc: Y.Doc): Slot[] {
+  const base = cloneSlots(kicadLayoutArray(ydoc).toArray());
+  const overrides = kicadLayoutOverridesMap(ydoc);
+  if (!overrides || overrides.size === 0) return base;
+
+  const emitted = new Set<string>();
+  const out: Slot[] = [];
+  for (const slot of base) {
+    if (!("k" in slot) || !overrides.has(slot.k)) {
+      out.push(slot);
+      continue;
+    }
+    if (emitted.has(slot.k)) continue;
+    emitted.add(slot.k);
+    out.push(...cloneSlots(overrides.get(slot.k) ?? []));
+  }
+
+  const missing = [...overrides.keys()].filter((head) => !emitted.has(head)).sort();
+  if (missing.length > 0) {
+    const extra = missing.flatMap((head) => cloneSlots(overrides.get(head) ?? []));
+    const firstItem = out.findIndex((slot) => "item" in slot);
+    out.splice(firstItem < 0 ? out.length : firstItem, 0, ...extra);
+  }
+  return out;
 }
 
 /**
@@ -84,8 +188,27 @@ export function kicadLibSymbolsMap(ydoc: Y.Doc): Y.Map<string> {
  * (every doc predating ysync 0009 is v1). See `SEXPR_VERSION_SUPPORTED`.
  */
 export function ydocSexprVersion(ydoc: Y.Doc): number {
-  const v = ydoc.getMap(Y_KDOC_META).get(Y_KDOC_SEXPR_VERSION);
-  return typeof v === "number" ? v : 1;
+  const v = kicadMetaMap(ydoc).get(Y_KDOC_SEXPR_VERSION);
+  if (v === undefined) return 1;
+  if (typeof v !== "number" || !Number.isInteger(v) || v < 1) {
+    throw new Error(`invalid kdoc s-expr version: ${JSON.stringify(v)}`);
+  }
+  return v;
+}
+
+function requireSupportedSexprVersion(ydoc: Y.Doc): number {
+  const version = ydocSexprVersion(ydoc);
+  if (!SEXPR_VERSION_SUPPORTED.includes(version)) {
+    throw new Error(
+      `unsupported kdoc s-expr version v${version}; supported versions: ${SEXPR_VERSION_SUPPORTED.join(", ")}`,
+    );
+  }
+  if (activeKicadState(ydoc) && version !== SEXPR_VERSION_CURRENT) {
+    throw new Error(
+      `invalid kdoc v3 state: active epoch declares s-expr version v${version}`,
+    );
+  }
+  return version;
 }
 
 /**
@@ -95,11 +218,23 @@ export function ydocSexprVersion(ydoc: Y.Doc): number {
  * Writers never mix — a doc is written in its own version only (§5).
  */
 function resolveWriteVersion(ydoc: Y.Doc): number {
+  const state = activeKicadState(ydoc);
+  if (state) {
+    const v = stateMap<unknown>(state, V3_META).get(Y_KDOC_SEXPR_VERSION);
+    if (v === undefined) throw new Error("invalid kdoc v3 state: missing sexprVersion");
+    return requireSupportedSexprVersion(ydoc);
+  }
+
   const meta = ydoc.getMap(Y_KDOC_META);
   const v = meta.get(Y_KDOC_SEXPR_VERSION);
-  if (typeof v === "number") return v;
-  if (ydocHasState(ydoc)) return 1;
-  meta.set(Y_KDOC_SEXPR_VERSION, SEXPR_VERSION_CURRENT);
+  if (v !== undefined) return requireSupportedSexprVersion(ydoc);
+  if (
+    ydoc.getMap(Y_KDOC_ITEMS).size > 0 ||
+    ydoc.getArray(Y_KDOC_LAYOUT).length > 0 ||
+    meta.get("root") !== undefined
+  ) {
+    return 1;
+  }
   return SEXPR_VERSION_CURRENT;
 }
 
@@ -107,7 +242,7 @@ function resolveWriteVersion(ydoc: Y.Doc): number {
 function bodySlots(ym: Y.Map<unknown>): Slot[] {
   const body = ym.get("body");
   if (body instanceof Y.Map) return slotsFromNode(body);
-  return (body as Slot[]) ?? [];
+  return cloneSlots((body as Slot[]) ?? []);
 }
 
 /** Read one item Y.Map back into a validated `KicadItem`. */
@@ -144,6 +279,8 @@ export function upsertLibSymbolsToY(
   origin?: unknown,
 ): void {
   if (Object.keys(defs).length === 0) return;
+  // Do not mutate a room whose encoding this build cannot interpret exactly.
+  if (ydocHasState(ydoc)) requireSupportedSexprVersion(ydoc);
   ydoc.transact(() => {
     const libs = kicadLibSymbolsMap(ydoc);
     for (const [id, def] of Object.entries(defs)) {
@@ -167,29 +304,108 @@ function upsertYItem(
 ): void {
   const existing = items.get(uuid);
   if (!existing) {
-    const ym = new Y.Map<unknown>();
-    ym.set("type", item.type);
-    ym.set("parent", item.parent);
-    ym.set("body", version >= 2 ? nodeFromSlots(item.body) : item.body);
-    items.set(uuid, ym);
+    items.set(uuid, yMapFromItem(item, version));
     return;
   }
   const ym = existing;
   if (ym.get("type") !== item.type) ym.set("type", item.type);
   if ((ym.get("parent") ?? null) !== item.parent) ym.set("parent", item.parent);
   const body = ym.get("body");
-  if (version >= 2) {
+  if (version === 3) {
+    if (body instanceof Y.Map) {
+      if (v3RootSlotsRequireAtomicStorage(item.body)) {
+        ym.set("body", cloneSlots(item.body));
+      } else {
+        updateNodeFromSlots(body, item.body, undefined, V3_NODE_ENCODING);
+      }
+    } else if (JSON.stringify(body) !== JSON.stringify(item.body)) {
+      // Atomic is sticky: once a root entered an identity-free conflict domain,
+      // do not silently re-granularize it on a later snapshot.
+      ym.set("body", cloneSlots(item.body));
+    }
+  } else if (version === 2) {
     if (body instanceof Y.Map) {
       updateNodeFromSlots(body, item.body); // the v2 differ (kicad-y2.ts)
     } else {
       ym.set("body", nodeFromSlots(item.body));
     }
   } else if (body instanceof Y.Map) {
-    ym.set("body", item.body);
+    ym.set("body", cloneSlots(item.body));
   } else if (JSON.stringify(body) !== JSON.stringify(item.body)) {
     // v1: body is one plain-JSON value (item-level merge) — compare to skip no-ops.
-    ym.set("body", item.body);
+    ym.set("body", cloneSlots(item.body));
   }
+}
+
+/** Build a detached item map; integration happens with its containing state. */
+function yMapFromItem(item: KicadItem, version: number): Y.Map<unknown> {
+  const ym = new Y.Map<unknown>();
+  ym.set("type", item.type);
+  ym.set("parent", item.parent);
+  ym.set(
+    "body",
+    version === 3
+      ? v3RootSlotsRequireAtomicStorage(item.body)
+        ? cloneSlots(item.body)
+        : nodeFromSlots(item.body, undefined, V3_NODE_ENCODING)
+      : version === 2
+        ? nodeFromSlots(item.body)
+        : cloneSlots(item.body),
+  );
+  return ym;
+}
+
+/**
+ * Build a complete detached v3 state. Setting this subtree at `active` is one
+ * Y.Map conflict: simultaneous first seeds therefore select one WHOLE epoch
+ * (meta, items, layout, and definitions), never a per-root union.
+ */
+function v3StateFromDoc(doc?: KicadDoc, nonce?: string): KicadYState {
+  const state = new Y.Map<unknown>();
+  const meta = new Y.Map<unknown>();
+  const items = new Y.Map<Y.Map<unknown>>();
+  const layout = new Y.Array<Slot>();
+  const overrides = new Y.Map<Slot[]>();
+  const libs = new Y.Map<string>();
+
+  meta.set(Y_KDOC_SEXPR_VERSION, SEXPR_VERSION_CURRENT);
+  if (doc) {
+    meta.set("root", doc.root);
+    for (const [uuid, item] of Object.entries(doc.items)) {
+      items.set(uuid, yMapFromItem(item, SEXPR_VERSION_CURRENT));
+    }
+    const defs = libSymbolsFromLayout(doc.layout, doc.items);
+    for (const [id, def] of Object.entries(defs)) libs.set(id, def);
+    const layoutOut = doc.layout.map(
+      (slot): Slot =>
+        "k" in slot && slot.k === "lib_symbols" ? { k: slot.k, v: [] } : slot,
+    );
+    layout.insert(0, cloneSlots(layoutOut));
+  }
+  if (nonce !== undefined) meta.set(Y_KDOC_SEED_NONCE, nonce);
+
+  state.set(V3_META, meta);
+  state.set(V3_ITEMS, items);
+  state.set(V3_LAYOUT_BASE, layout);
+  state.set(V3_LAYOUT_OVERRIDES, overrides);
+  state.set(V3_LIBSYMBOLS, libs);
+  return state;
+}
+
+function installV3State(
+  ydoc: Y.Doc,
+  state: KicadYState,
+  origin?: unknown,
+  nonce?: string,
+): void {
+  ydoc.transact(() => {
+    ydoc.getMap<unknown>(Y_KDOC_STATE).set(Y_KDOC_STATE_ACTIVE, state);
+    // Compatibility marker only. Authoritative v3 metadata lives inside the
+    // selected state; older clients see v3 and refuse rather than writing v2.
+    const marker = ydoc.getMap(Y_KDOC_META);
+    marker.set(Y_KDOC_SEXPR_VERSION, SEXPR_VERSION_CURRENT);
+    if (nonce !== undefined) marker.set(Y_KDOC_SEED_NONCE, nonce);
+  }, origin);
 }
 
 /**
@@ -198,23 +414,28 @@ function upsertYItem(
  * runtime's observers can recognize the write as their own.
  */
 export function docToY(doc: KicadDoc, ydoc: Y.Doc, origin?: unknown): void {
-  assertKicadDoc(doc);
+  assertValidKicadDoc(doc);
+  const version = resolveWriteVersion(ydoc);
+  if (version === 3 && !activeKicadState(ydoc)) {
+    installV3State(ydoc, v3StateFromDoc(doc), origin);
+    return;
+  }
   ydoc.transact(() => {
-    const version = resolveWriteVersion(ydoc); // before the root write marks the doc non-empty
-    ydoc.getMap(Y_KDOC_META).set("root", doc.root);
+    const writeVersion = resolveWriteVersion(ydoc);
+    kicadMetaMap(ydoc).set("root", doc.root);
     const items = kicadItemsMap(ydoc);
     for (const uuid of [...items.keys()]) {
-      if (!(uuid in doc.items)) items.delete(uuid);
+      if (!Object.hasOwn(doc.items, uuid)) items.delete(uuid);
     }
     for (const [uuid, item] of Object.entries(doc.items)) {
-      upsertYItem(items, uuid, item, version);
+      upsertYItem(items, uuid, item, writeVersion);
     }
     // Library definitions live in their own per-id map (see Y_KDOC_LIBSYMBOLS);
     // the layout keeps an EMPTY lib_symbols slot as the injection point.
     const defs = libSymbolsFromLayout(doc.layout, doc.items);
     const libs = kicadLibSymbolsMap(ydoc);
     for (const id of [...libs.keys()]) {
-      if (!(id in defs)) libs.delete(id);
+      if (!Object.hasOwn(defs, id)) libs.delete(id);
     }
     for (const [id, def] of Object.entries(defs)) {
       if (libs.get(id) !== def) libs.set(id, def);
@@ -222,9 +443,11 @@ export function docToY(doc: KicadDoc, ydoc: Y.Doc, origin?: unknown): void {
     const layoutOut = doc.layout.map(
       (s): Slot => ("k" in s && s.k === "lib_symbols" ? { k: s.k, v: [] } : s),
     );
-    const layout = ydoc.getArray<Slot>(Y_KDOC_LAYOUT);
+    const layout = kicadLayoutArray(ydoc);
     layout.delete(0, layout.length);
-    layout.insert(0, layoutOut);
+    layout.insert(0, cloneSlots(layoutOut));
+    const overrides = kicadLayoutOverridesMap(ydoc);
+    if (overrides) overrides.clear();
   }, origin);
 }
 
@@ -249,6 +472,20 @@ export function seedDocToY(
   origin: unknown,
   nonce: string,
 ): () => void {
+  assertValidKicadDoc(doc);
+  if (resolveWriteVersion(ydoc) === 3) {
+    installV3State(ydoc, v3StateFromDoc(doc, nonce), origin, nonce);
+    return () => {
+      // The active pointer itself arbitrates the complete state. Keep the
+      // compatibility marker aligned for old readers; there is no content to
+      // retract and this remains safe if every racing seeder calls it.
+      const winner = kicadMetaMap(ydoc).get(Y_KDOC_SEED_NONCE);
+      if (winner !== undefined) {
+        ydoc.getMap(Y_KDOC_META).set(Y_KDOC_SEED_NONCE, winner);
+      }
+    };
+  }
+
   const clientId = ydoc.clientID;
   const before = Y.getState(ydoc.store, clientId);
   ydoc.transact(() => {
@@ -306,15 +543,19 @@ export const Y_KDOC_REVERT_AT = "revertedAt";
  * revert needs (kicad-validity 0001 §4.4).
  */
 export function upsertDocToY(doc: KicadDoc, ydoc: Y.Doc, origin?: unknown): void {
-  assertKicadDoc(doc);
+  assertValidKicadDoc(doc);
+  if (resolveWriteVersion(ydoc) === 3 && !activeKicadState(ydoc)) {
+    installV3State(ydoc, v3StateFromDoc(doc), origin);
+    return;
+  }
   ydoc.transact(() => {
     const version = resolveWriteVersion(ydoc);
-    const meta = ydoc.getMap(Y_KDOC_META);
+    const meta = kicadMetaMap(ydoc);
     if (meta.get("root") !== doc.root) meta.set("root", doc.root);
 
     const items = kicadItemsMap(ydoc);
     for (const uuid of [...items.keys()]) {
-      if (!(uuid in doc.items)) items.delete(uuid);
+      if (!Object.hasOwn(doc.items, uuid)) items.delete(uuid);
     }
     for (const [uuid, item] of Object.entries(doc.items)) {
       upsertYItem(items, uuid, item, version);
@@ -323,7 +564,7 @@ export function upsertDocToY(doc: KicadDoc, ydoc: Y.Doc, origin?: unknown): void
     const defs = libSymbolsFromLayout(doc.layout, doc.items);
     const libs = kicadLibSymbolsMap(ydoc);
     for (const id of [...libs.keys()]) {
-      if (!(id in defs)) libs.delete(id);
+      if (!Object.hasOwn(defs, id)) libs.delete(id);
     }
     for (const [id, def] of Object.entries(defs)) {
       if (libs.get(id) !== def) libs.set(id, def);
@@ -332,11 +573,13 @@ export function upsertDocToY(doc: KicadDoc, ydoc: Y.Doc, origin?: unknown): void
     const target = doc.layout.map(
       (s): Slot => ("k" in s && s.k === "lib_symbols" ? { k: s.k, v: [] } : s),
     );
-    const layout = ydoc.getArray<Slot>(Y_KDOC_LAYOUT);
+    const layout = kicadLayoutArray(ydoc);
     if (JSON.stringify(layout.toArray()) !== JSON.stringify(target)) {
       layout.delete(0, layout.length);
-      layout.insert(0, target);
+      layout.insert(0, cloneSlots(target));
     }
+    const overrides = kicadLayoutOverridesMap(ydoc);
+    if (overrides?.size) overrides.clear();
   }, origin);
 }
 
@@ -380,7 +623,7 @@ export function computeRevertUpdate(opts: {
     // the checkpoint; no revert, no marker.
     if (Y.encodeStateAsUpdate(ydoc, sv).length <= 2) return null;
     ydoc.transact(() => {
-      const meta = ydoc.getMap(Y_KDOC_META);
+      const meta = kicadMetaMap(ydoc);
       meta.set(Y_KDOC_REVERT_NONCE, opts.nonce);
       meta.set(Y_KDOC_REVERT_REASON, opts.reason);
       meta.set(Y_KDOC_REVERT_AT, opts.at);
@@ -400,8 +643,9 @@ export function computeRevertUpdate(opts: {
  * from a populated one, or such docs look empty and never get adopted.
  */
 export function ydocHasState(ydoc: Y.Doc): boolean {
+  if (activeKicadState(ydoc)) return true;
   return (
-    kicadItemsMap(ydoc).size > 0 ||
+    ydoc.getMap(Y_KDOC_ITEMS).size > 0 ||
     ydoc.getArray<Slot>(Y_KDOC_LAYOUT).length > 0 ||
     ydoc.getMap(Y_KDOC_META).get("root") !== undefined
   );
@@ -409,15 +653,16 @@ export function ydocHasState(ydoc: Y.Doc): boolean {
 
 /** Read the full `KicadDoc` back out of a Y.Doc (validated). */
 export function yToDoc(ydoc: Y.Doc): KicadDoc {
-  const root = ydoc.getMap(Y_KDOC_META).get("root") as string;
-  const items: Record<string, KicadItem> = {};
+  requireSupportedSexprVersion(ydoc);
+  const root = kicadMetaMap(ydoc).get("root") as string;
+  const items = emptyKicadItems();
   // Unchecked per-item read: the whole-doc structural check at the end walks
   // every item anyway — the per-item zod parse here was a redundant second
   // full-document walk (~800ms on a 3k-item board).
   kicadItemsMap(ydoc).forEach((ym, uuid) => {
     items[uuid] = yToItemUnchecked(ym);
   });
-  const layout = ydoc.getArray<Slot>(Y_KDOC_LAYOUT).toArray();
+  const layout = kicadLayout(ydoc);
 
   // Re-inject the library definitions into the layout's lib_symbols slot
   // (sorted by lib id — the order KiCad's own writer produces, since its lib
@@ -437,7 +682,7 @@ export function yToDoc(ydoc: Y.Doc): KicadDoc {
     }
   }
 
-  return assertKicadDoc({ root, items, layout });
+  return canonicalizeKicadDocGraph(assertKicadDoc({ root, items, layout }));
 }
 
 /**
@@ -469,6 +714,19 @@ function cloneYValue(v: unknown): unknown {
     a.insert(0, v.toArray().map(cloneYValue));
     return a;
   }
+  if (Array.isArray(v)) return v.map(cloneYValue);
+  if (typeof v === "object" && v !== null) {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(v)) {
+      Object.defineProperty(out, key, {
+        value: cloneYValue(value),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
+    return out;
+  }
   return v;
 }
 
@@ -479,6 +737,14 @@ function cloneYValue(v: unknown): unknown {
  * added to room docs must be registered here.
  */
 const KDOC_EXTRA_ROOT_MAPS = [Y_KDOC_COMMENTS];
+const KDOC_KNOWN_ROOTS = new Set([
+  Y_KDOC_STATE,
+  Y_KDOC_META,
+  Y_KDOC_ITEMS,
+  Y_KDOC_LAYOUT,
+  Y_KDOC_LIBSYMBOLS,
+  ...KDOC_EXTRA_ROOT_MAPS,
+]);
 
 export interface YdocCompaction {
   /** The replacement state update (a fresh doc — new epoch, new clientIDs). */
@@ -515,11 +781,30 @@ export function compactYdocUpdate(
   const src = new Y.Doc();
   try {
     Y.applyUpdate(src, update);
-    const version = ydocSexprVersion(src);
-    if (version > SEXPR_VERSION_CURRENT) return null;
-    if (src.getMap(Y_KDOC_META).get("root") === undefined) return null;
+    let version: number;
+    try {
+      version = ydocSexprVersion(src);
+    } catch {
+      return null;
+    }
+    if (!SEXPR_VERSION_SUPPORTED.includes(version)) return null;
+    if (kicadMetaMap(src).get("root") === undefined) return null;
+    // Rebuilding only the roots this schema understands would silently erase
+    // plugin/future data. Unknown roots make compaction ineligible; the exact
+    // original update remains authoritative and can be handled by a newer app.
+    for (const key of src.share.keys()) {
+      if (!KDOC_KNOWN_ROOTS.has(key)) return null;
+    }
 
-    const kdoc = yToDoc(src);
+    let kdoc: KicadDoc;
+    try {
+      kdoc = yToDoc(src);
+    } catch {
+      // Compaction is an optimization/migration boundary, never a repair
+      // authority. A malformed known root stays byte-for-byte authoritative so
+      // the room can quarantine/recover it instead of crashing or erasing it.
+      return null;
+    }
     const out = new Y.Doc();
     try {
       docToY(kdoc, out); // fresh doc → stamped SEXPR_VERSION_CURRENT
@@ -529,6 +814,20 @@ export function compactYdocUpdate(
         const to = out.getMap<unknown>(key);
         from.forEach((val, k) => to.set(k, cloneYValue(val)));
       }
+      // Preserve durable and future metadata without carrying the ephemeral
+      // concurrent-seed nonce into the new epoch.
+      const fromMeta = kicadMetaMap(src);
+      const toMeta = kicadMetaMap(out);
+      fromMeta.forEach((value, key) => {
+        if (
+          key === "root" ||
+          key === Y_KDOC_SEXPR_VERSION ||
+          key === Y_KDOC_SEED_NONCE
+        ) {
+          return;
+        }
+        toMeta.set(key, cloneYValue(value));
+      });
       const compacted = Y.encodeStateAsUpdate(out);
       if (version < SEXPR_VERSION_CURRENT) {
         return { update: compacted, fromVersion: version, reason: "version-upgrade" };
@@ -536,6 +835,8 @@ export function compactYdocUpdate(
       if (update.length > ratio * compacted.length) {
         return { update: compacted, fromVersion: version, reason: "compaction" };
       }
+      return null;
+    } catch {
       return null;
     } finally {
       out.destroy();
@@ -583,6 +884,9 @@ function pruneItemRefs(slots: Slot[], uuid: string): Slot[] | null {
  * Y.Doc alone" invariant (ysync 0005) would only hold for the seeded state.
  */
 export function applyDeltaToY(ydoc: Y.Doc, delta: KicadDelta, origin?: unknown): void {
+  if (resolveWriteVersion(ydoc) === 3 && !activeKicadState(ydoc)) {
+    installV3State(ydoc, v3StateFromDoc(), origin);
+  }
   ydoc.transact(() => {
     const version = resolveWriteVersion(ydoc);
     const items = kicadItemsMap(ydoc);
@@ -611,7 +915,7 @@ export function applyDeltaToY(ydoc: Y.Doc, delta: KicadDelta, origin?: unknown):
       items.delete(uuid);
     }
 
-    const layout = ydoc.getArray<Slot>(Y_KDOC_LAYOUT);
+    const layout = kicadLayoutArray(ydoc);
     // Slots to drop: removed uuids, plus upserts that now have a parent (a kept
     // slot would render the item twice — once at root, once inside the parent).
     const gone = new Set(delta.removed);
@@ -656,6 +960,7 @@ export function applyDeltaToY(ydoc: Y.Doc, delta: KicadDelta, origin?: unknown):
  */
 export function syncLayoutToY(fileDoc: KicadDoc, ydoc: Y.Doc, origin?: unknown): boolean {
   assertKicadDoc(fileDoc);
+  if (ydocHasState(ydoc)) requireSupportedSexprVersion(ydoc);
   const FROZEN = new Set(["net", "lib_symbols"]);
   let changed = false;
 
@@ -670,8 +975,6 @@ export function syncLayoutToY(fileDoc: KicadDoc, ydoc: Y.Doc, origin?: unknown):
       }
     }
 
-    const layout = ydoc.getArray<Slot>(Y_KDOC_LAYOUT);
-
     const groupsOf = (slots: Slot[]): Map<string, Slot[]> => {
       const m = new Map<string, Slot[]>();
       for (const s of slots) {
@@ -684,7 +987,25 @@ export function syncLayoutToY(fileDoc: KicadDoc, ydoc: Y.Doc, origin?: unknown):
     };
 
     const fileGroups = groupsOf(fileDoc.layout);
-    const heads = new Set([...fileGroups.keys(), ...groupsOf(layout.toArray()).keys()]);
+    const visibleLayout = kicadLayout(ydoc);
+    const heads = new Set([...fileGroups.keys(), ...groupsOf(visibleLayout).keys()]);
+
+    const overrides = kicadLayoutOverridesMap(ydoc);
+    if (overrides) {
+      const currentGroups = groupsOf(visibleLayout);
+      for (const head of heads) {
+        const curGroup = currentGroups.get(head) ?? [];
+        const fileGroup = fileGroups.get(head) ?? [];
+        if (JSON.stringify(curGroup) === JSON.stringify(fileGroup)) continue;
+        // A plain JSON value is one Y.Map register: same-head replacements are
+        // single-valued LWW, while different heads remain independent.
+        overrides.set(head, cloneSlots(fileGroup));
+        changed = true;
+      }
+      return;
+    }
+
+    const layout = kicadLayoutArray(ydoc);
 
     for (const head of heads) {
       const cur = layout.toArray(); // refresh after prior group mutations
@@ -704,7 +1025,9 @@ export function syncLayoutToY(fileDoc: KicadDoc, ydoc: Y.Doc, origin?: unknown):
         const s = cur[i]!;
         if ("k" in s && s.k === head) layout.delete(i, 1);
       }
-      if (fileGroup.length) layout.insert(Math.min(insertAt, layout.length), fileGroup);
+      if (fileGroup.length) {
+        layout.insert(Math.min(insertAt, layout.length), cloneSlots(fileGroup));
+      }
       changed = true;
     }
   }, origin);

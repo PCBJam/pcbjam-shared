@@ -23,7 +23,7 @@
 export type GatewaySubMode = "active" | "passive";
 
 export type GatewayClientMsg =
-  | { t: "sub"; ch: number; doc: string; mode: GatewaySubMode }
+  | { t: "sub"; ch: number; doc: string; mode: GatewaySubMode; schema?: number }
   | { t: "act"; ch: number }
   | { t: "unsub"; ch: number };
 
@@ -52,12 +52,30 @@ export function parseGatewayClientMsg(text: string): GatewayClientMsg | null {
     return null;
   }
   if (raw === null || typeof raw !== "object") return null;
-  const m = raw as { t?: unknown; ch?: unknown; doc?: unknown; mode?: unknown };
+  const m = raw as {
+    t?: unknown;
+    ch?: unknown;
+    doc?: unknown;
+    mode?: unknown;
+    schema?: unknown;
+  };
   if (!isChannelId(m.ch)) return null;
   if (m.t === "sub") {
     if (typeof m.doc !== "string" || !m.doc) return null;
     if (m.mode !== "active" && m.mode !== "passive") return null;
-    return { t: "sub", ch: m.ch, doc: m.doc, mode: m.mode };
+    if (
+      m.schema !== undefined &&
+      (typeof m.schema !== "number" || !Number.isSafeInteger(m.schema) || m.schema < 1)
+    ) {
+      return null;
+    }
+    return {
+      t: "sub",
+      ch: m.ch,
+      doc: m.doc,
+      mode: m.mode,
+      ...(m.schema === undefined ? {} : { schema: m.schema }),
+    };
   }
   if (m.t === "act") return { t: "act", ch: m.ch };
   if (m.t === "unsub") return { t: "unsub", ch: m.ch };
