@@ -114,6 +114,44 @@ describe("lib_symbols channel (miss 08A)", () => {
     expect(ids.has("sym-1")).toBe(true);
     expect(ids.has("fld-1")).toBe(true); // nested field
   });
+
+  it("merges distinct definitions and resolves one same-key definition whole", () => {
+    const seed = new Y.Doc();
+    docToY(fileToDoc(SCH), seed, "seed");
+    const base = Y.encodeStateAsUpdate(seed);
+    const vector = Y.encodeStateVector(seed);
+    const leftDef = `(symbol "Device:X" (property "Reference" "LEFT"))`;
+    const rightDef = `(symbol "Device:X" (property "Reference" "RIGHT"))`;
+
+    const branch = (
+      clientID: number,
+      defs: Record<string, string>,
+    ): Uint8Array => {
+      const replica = new Y.Doc();
+      Y.applyUpdate(replica, base);
+      replica.clientID = clientID;
+      upsertLibSymbolsToY(replica, defs, `writer-${clientID}`);
+      return Y.encodeStateAsUpdate(replica, vector);
+    };
+
+    const updates = [
+      branch(700_001, { "Device:X": leftDef, "Device:L": `(symbol "Device:L")` }),
+      branch(700_002, { "Device:X": rightDef, "Device:C": SYM_DEF2 }),
+    ];
+
+    let expectedSameKey: string | undefined;
+    for (const order of [[0, 1], [1, 0]]) {
+      const merged = new Y.Doc();
+      Y.applyUpdate(merged, base);
+      for (const index of order) Y.applyUpdate(merged, updates[index]!);
+      const libs = kicadLibSymbolsMap(merged);
+      expect(libs.get("Device:L")).toBe(`(symbol "Device:L")`);
+      expect(libs.get("Device:C")).toBe(SYM_DEF2);
+      expect([leftDef, rightDef]).toContain(libs.get("Device:X"));
+      expectedSameKey ??= libs.get("Device:X");
+      expect(libs.get("Device:X")).toBe(expectedSameKey);
+    }
+  });
 });
 
 describe("layout save-sync (miss 08B)", () => {
