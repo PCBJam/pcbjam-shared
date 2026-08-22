@@ -198,21 +198,99 @@ describe("layout save-sync (miss 08B)", () => {
     expect(out.indexOf("(text_size")).toBeLessThan(out.indexOf("(symbol (lib_id"));
   });
 
-  it("net table stays seed-frozen; lib_symbols defs are additive-only", () => {
+  it("publishes the complete repeated PCB net table from the native save", () => {
     const PCB = `(kicad_pcb (version 20241229) (generator "pcbnew")
       (net 0 "") (net 1 "SIG")
       (segment (start 0 0) (end 1 1) (uuid "seg-1"))
     )`;
     const ydoc = new Y.Doc();
     docToY(fileToDoc(PCB), ydoc, "seed");
-    const saved = PCB.replace(`(net 1 "SIG")`, `(net 1 "RENAMED")`);
-    syncLayoutToY(fileToDoc(saved), ydoc, "save");
-    expect(docToFile(yToDoc(ydoc))).toContain(`(net 1 "SIG")`); // frozen
+    const saved = PCB.replace(
+      `(net 1 "SIG")`,
+      `(net 1 "RENAMED") (net 2 "NEW")`,
+    );
+    expect(syncLayoutToY(fileToDoc(saved), ydoc, "save")).toBe(true);
+    const out = docToFile(yToDoc(ydoc));
+    expect(out).toContain(`(net 1 "RENAMED")`);
+    expect(out).toContain(`(net 2 "NEW")`);
+    expect(out).not.toContain(`(net 1 "SIG")`);
+  });
 
+  it("concurrent native net-table saves select one whole authored group", () => {
+    const baseText = `(kicad_pcb (version 20241229)
+      (net 0 "") (net 1 "BASE"))`;
+    const leftText = `(kicad_pcb (version 20241229)
+      (net 0 "") (net 1 "LEFT"))`;
+    const rightText = `(kicad_pcb (version 20241229)
+      (net 0 "") (net 1 "RIGHT") (net 2 "EXTRA"))`;
+    const seed = new Y.Doc();
+    docToY(fileToDoc(baseText), seed, "seed");
+    const base = Y.encodeStateAsUpdate(seed);
+    const vector = Y.encodeStateVector(seed);
+
+    const authored = (clientID: number, text: string): Uint8Array => {
+      const replica = new Y.Doc();
+      Y.applyUpdate(replica, base);
+      replica.clientID = clientID;
+      expect(syncLayoutToY(fileToDoc(text), replica, `writer-${clientID}`)).toBe(true);
+      return Y.encodeStateAsUpdate(replica, vector);
+    };
+    const updates = [authored(710_001, leftText), authored(710_002, rightText)];
+    let winner: string | undefined;
+    for (const order of [[0, 1], [1, 0], [1, 0, 1, 1]]) {
+      const merged = new Y.Doc();
+      Y.applyUpdate(merged, base);
+      for (const index of order) Y.applyUpdate(merged, updates[index]!);
+      const nets = yToDoc(merged).layout.filter(
+        (slot) => "k" in slot && slot.k === "net",
+      );
+      const rendered = JSON.stringify(nets);
+      winner ??= rendered;
+      expect(rendered).toBe(winner);
+      expect([
+        JSON.stringify(fileToDoc(leftText).layout.filter((slot) => "k" in slot && slot.k === "net")),
+        JSON.stringify(fileToDoc(rightText).layout.filter((slot) => "k" in slot && slot.k === "net")),
+      ]).toContain(rendered);
+    }
+  });
+
+  it("deletes a saved-away library definition after its last Y consumer is gone", () => {
     const sch = seeded();
-    upsertLibSymbolsToY(sch, { "Device:C": SYM_DEF2 }, "peer");
-    // The local save doesn't know Device:C — the sync must not delete it.
+    applyDeltaToY(
+      sch,
+      { added: [], updated: [], removed: ["sym-1", "fld-1"], reordered: [] },
+      "native-items",
+    );
+    const saved = SCH
+      .replace(`  (lib_symbols ${SYM_DEF})\n`, "  (lib_symbols)\n")
+      .replace(/  \(symbol \(lib_id "Device:R"\)[\s\S]*?\n  \(wire /, "  (wire ");
+
+    expect(syncLayoutToY(fileToDoc(saved), sch, "save")).toBe(true);
+    expect(kicadLibSymbolsMap(sch).has("Device:R")).toBe(false);
+    expect(docToFile(yToDoc(sch))).not.toContain(`(symbol "Device:R"`);
+  });
+
+  it("preserves a definition omitted by a stale native save while Y has a peer consumer", () => {
+    const sch = seeded();
+    const peerWire = {
+      added: [
+        {
+          sexpr: `(lib_symbols ${SYM_DEF2}) (symbol (lib_id "Device:C") (at 120 60 0) (uuid "sym-2"))`,
+          parent: null,
+        },
+      ],
+      changed: [],
+      removed: [],
+    };
+    sch.transact(() => {
+      upsertLibSymbolsToY(sch, wireLibSymbols(peerWire), "peer");
+      applyDeltaToY(sch, itemsWireToDelta(peerWire, {}), "peer");
+    }, "peer");
+
+    // The local save does not know Device:C yet. Its absence is not a delete:
+    // the authoritative item graph already contains the peer's consumer.
     syncLayoutToY(fileToDoc(SCH), sch, "save");
     expect(kicadLibSymbolsMap(sch).get("Device:C")).toBe(SYM_DEF2);
+    expect(docToFile(yToDoc(sch))).toContain(`(lib_id "Device:C")`);
   });
 });
