@@ -39,7 +39,9 @@ import {
   emptyKicadItems,
   kicadItemSchema,
   libSymbolsFromLayout,
+  scalar,
   slotFromSexpr,
+  unquoteAtom,
   type KicadDoc,
   type KicadItem,
   type Slot,
@@ -1079,23 +1081,29 @@ export function applyDeltaToY(ydoc: Y.Doc, delta: KicadDelta, origin?: unknown):
  * settings edit diverges silently forever, and in ydoc mode the author's own
  * edit is lost on the next open.
  *
- * Deliberate freezes:
- * - `net` (pcbnew's root net table): net-creating edits aren't possible in the
- *   standalone; reconciling a repeated positional head would be guesswork.
- * - `lib_symbols`: routed to the kdoc_libsymbols map instead (ADDITIVE only —
- *   the saved file can't know about a peer's not-yet-applied placement, so
- *   absent defs are kept, never deleted).
+ * Special conflict domains:
+ * - `net` (pcbnew's root net table): the complete repeated group is one plain
+ *   JSON value in v3's layout-overrides map. A save therefore authors one
+ *   atomic table; concurrent saves select one whole table, never a positional
+ *   hybrid. Legacy v1/v2 rooms keep this head frozen because their Y.Array
+ *   representation cannot provide that guarantee.
+ * - `lib_symbols`: routed to the kdoc_libsymbols map. Present definitions are
+ *   upserted per id. A definition absent from the native save is deleted only
+ *   when the current authoritative Y item graph has no consumer for that id;
+ *   this prevents a stale native snapshot from deleting a peer's definition.
  *
  * Returns true when anything changed.
  */
 export function syncLayoutToY(fileDoc: KicadDoc, ydoc: Y.Doc, origin?: unknown): boolean {
   assertKicadDoc(fileDoc);
   if (ydocHasState(ydoc)) requireSupportedSexprVersion(ydoc);
-  const FROZEN = new Set(["net", "lib_symbols"]);
   let changed = false;
 
   ydoc.transact(() => {
-    // lib_symbols → the defs map, additive.
+    const overrides = kicadLayoutOverridesMap(ydoc);
+    // lib_symbols → the per-id definitions map. The saved file is complete
+    // evidence for definitions native currently contains, but absence is safe
+    // to publish only after consulting the current authoritative consumer set.
     const defs = libSymbolsFromLayout(fileDoc.layout, fileDoc.items);
     const libs = kicadLibSymbolsMap(ydoc);
     for (const [id, def] of Object.entries(defs)) {
@@ -1104,11 +1112,25 @@ export function syncLayoutToY(fileDoc: KicadDoc, ydoc: Y.Doc, origin?: unknown):
         changed = true;
       }
     }
+    const consumers = new Set<string>();
+    kicadItemsMap(ydoc).forEach((ym) => {
+      const encoded = scalar(yToItem(ym).body, "lib_id");
+      if (encoded !== undefined) consumers.add(unquoteAtom(encoded));
+    });
+    for (const id of [...libs.keys()]) {
+      if (!Object.hasOwn(defs, id) && !consumers.has(id)) {
+        libs.delete(id);
+        changed = true;
+      }
+    }
+
+    const frozen = new Set(["lib_symbols"]);
+    if (!overrides) frozen.add("net");
 
     const groupsOf = (slots: Slot[]): Map<string, Slot[]> => {
       const m = new Map<string, Slot[]>();
       for (const s of slots) {
-        if (!("k" in s) || FROZEN.has(s.k)) continue;
+        if (!("k" in s) || frozen.has(s.k)) continue;
         const list = m.get(s.k) ?? [];
         list.push(s);
         m.set(s.k, list);
@@ -1120,7 +1142,6 @@ export function syncLayoutToY(fileDoc: KicadDoc, ydoc: Y.Doc, origin?: unknown):
     const visibleLayout = kicadLayout(ydoc);
     const heads = new Set([...fileGroups.keys(), ...groupsOf(visibleLayout).keys()]);
 
-    const overrides = kicadLayoutOverridesMap(ydoc);
     if (overrides) {
       const currentGroups = groupsOf(visibleLayout);
       for (const head of heads) {
