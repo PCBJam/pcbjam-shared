@@ -74,6 +74,13 @@ const V3_LAYOUT_BASE = "layoutBase";
 const V3_LAYOUT_OVERRIDES = "layoutOverrides";
 const V3_LIBSYMBOLS = "libsymbols";
 /**
+ * Reserved layoutOverrides register for unkeyed root atoms. S-expression head
+ * names cannot contain NUL, so this cannot collide with an authored head.
+ * All atoms form one identity-free conflict domain and therefore resolve as
+ * one plain-JSON value instead of being positionally merged in a Y.Array.
+ */
+const V3_LAYOUT_ATOMS = "\u0000atoms";
+/**
  * Embedded library definitions (miss 08): lib id → `(symbol …)` definition
  * text. A dedicated Y.Map so concurrent placements of DIFFERENT symbols merge
  * per definition instead of LWW-clobbering one layout slot. The layout's
@@ -154,7 +161,14 @@ export function kicadLibSymbolsMap(ydoc: Y.Doc): Y.Map<string> {
     : ydoc.getMap<string>(Y_KDOC_LIBSYMBOLS);
 }
 
-/** v3's immutable-seed/mutable-root-order base, or legacy kdoc_layout. */
+/**
+ * v3's immutable seed/order-hint base, or legacy kdoc_layout.
+ *
+ * v3 writers never replace its non-item content: mutable keyed content lives
+ * in atomic per-head registers and item presence is authoritative in the item
+ * map/parent graph. Root item refs may be added/removed as ordering hints; the
+ * graph canonicalizer makes those hints total and unique at projection time.
+ */
 export function kicadLayoutArray(ydoc: Y.Doc): Y.Array<Slot> {
   const state = activeKicadState(ydoc);
   return state
@@ -168,15 +182,23 @@ export function kicadLayoutOverridesMap(ydoc: Y.Doc): Y.Map<Slot[]> | null {
   return state ? stateMap<Slot[]>(state, V3_LAYOUT_OVERRIDES) : null;
 }
 
-/** Materialize the authoritative layout, applying v3 head overrides to its base. */
+/** Materialize the authoritative layout, applying v3 conflict domains to its base. */
 export function kicadLayout(ydoc: Y.Doc): Slot[] {
   const base = cloneSlots(kicadLayoutArray(ydoc).toArray());
   const overrides = kicadLayoutOverridesMap(ydoc);
   if (!overrides || overrides.size === 0) return base;
 
   const emitted = new Set<string>();
+  let atomsEmitted = false;
   const out: Slot[] = [];
   for (const slot of base) {
+    if ("atom" in slot && overrides.has(V3_LAYOUT_ATOMS)) {
+      if (!atomsEmitted) {
+        atomsEmitted = true;
+        out.push(...cloneSlots(overrides.get(V3_LAYOUT_ATOMS) ?? []));
+      }
+      continue;
+    }
     if (!("k" in slot) || !overrides.has(slot.k)) {
       out.push(slot);
       continue;
@@ -186,13 +208,97 @@ export function kicadLayout(ydoc: Y.Doc): Slot[] {
     out.push(...cloneSlots(overrides.get(slot.k) ?? []));
   }
 
-  const missing = [...overrides.keys()].filter((head) => !emitted.has(head)).sort();
+  if (overrides.has(V3_LAYOUT_ATOMS) && !atomsEmitted) {
+    const extra = cloneSlots(overrides.get(V3_LAYOUT_ATOMS) ?? []);
+    const firstItem = out.findIndex((slot) => "item" in slot);
+    out.splice(firstItem < 0 ? out.length : firstItem, 0, ...extra);
+  }
+
+  const missing = [...overrides.keys()]
+    .filter((head) => head !== V3_LAYOUT_ATOMS && !emitted.has(head))
+    .sort();
   if (missing.length > 0) {
     const extra = missing.flatMap((head) => cloneSlots(overrides.get(head) ?? []));
     const firstItem = out.findIndex((slot) => "item" in slot);
     out.splice(firstItem < 0 ? out.length : firstItem, 0, ...extra);
   }
   return out;
+}
+
+function layoutHeadGroups(slots: Slot[]): Map<string, Slot[]> {
+  const groups = new Map<string, Slot[]>();
+  for (const slot of slots) {
+    if (!("k" in slot)) continue;
+    const group = groups.get(slot.k) ?? [];
+    group.push(slot);
+    groups.set(slot.k, group);
+  }
+  return groups;
+}
+
+function slotsEqual(left: Slot[], right: Slot[]): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+/**
+ * Reconcile one complete native layout snapshot into v3 without ever replacing
+ * the shared sequence's non-item seed. Each keyed head is one plain-JSON Y.Map
+ * register, including the *whole group* for legal repeated heads such as
+ * `net`. Consequently concurrent writes of one head select one authored group;
+ * writes of different heads merge independently; and no sequence interleaving
+ * can manufacture duplicate `version`/`paper`/etc. slots.
+ *
+ * Root item refs remain sequence ordering hints. Presence and parentage come
+ * from kdoc_items, and canonicalizeKicadDocGraph deterministically removes
+ * duplicate/stale hints and appends missing roots. This lets independent root
+ * insertions merge while keeping the projected graph total and single-valued.
+ * Must run inside the caller's Yjs transaction.
+ */
+function syncV3LayoutSnapshot(layout: Slot[], ydoc: Y.Doc): void {
+  const overrides = kicadLayoutOverridesMap(ydoc);
+  if (!overrides) throw new Error("invalid kdoc v3 state: layout overrides are missing");
+
+  const target = layout.map(
+    (slot): Slot =>
+      "k" in slot && slot.k === "lib_symbols" ? { k: slot.k, v: [] } : slot,
+  );
+  const visible = kicadLayout(ydoc);
+  const currentGroups = layoutHeadGroups(visible);
+  const targetGroups = layoutHeadGroups(target);
+  const heads = new Set([...currentGroups.keys(), ...targetGroups.keys()]);
+  for (const head of heads) {
+    const current = currentGroups.get(head) ?? [];
+    const next = targetGroups.get(head) ?? [];
+    if (!slotsEqual(current, next)) overrides.set(head, cloneSlots(next));
+  }
+
+  const currentAtoms = visible.filter((slot) => "atom" in slot);
+  const targetAtoms = target.filter((slot) => "atom" in slot);
+  if (!slotsEqual(currentAtoms, targetAtoms)) {
+    overrides.set(V3_LAYOUT_ATOMS, cloneSlots(targetAtoms));
+  }
+
+  // Reconcile root references without touching any non-item slot. Concurrent
+  // insertion of the same ref can leave two order hints in the Y.Array; that
+  // is harmless and deterministic because the projection keeps exactly the
+  // first ref whose authoritative item.parent is null. Any later snapshot also
+  // cleans already-visible duplicates below.
+  const targetRoots = target.filter(
+    (slot): slot is Extract<Slot, { item: string }> => "item" in slot,
+  );
+  const wanted = new Set(targetRoots.map((slot) => slot.item));
+  const base = kicadLayoutArray(ydoc);
+  const seen = new Set<string>();
+  const remove: number[] = [];
+  for (let i = 0; i < base.length; i++) {
+    const slot = base.get(i);
+    if (!("item" in slot)) continue;
+    if (!wanted.has(slot.item) || seen.has(slot.item)) remove.push(i);
+    else seen.add(slot.item);
+  }
+  for (const index of remove.reverse()) base.delete(index, 1);
+  const missing = targetRoots.filter((slot) => !seen.has(slot.item));
+  if (missing.length > 0) base.push(cloneSlots(missing));
 }
 
 /**
@@ -422,8 +528,10 @@ function installV3State(
 
 /**
  * Seed (or re-seed) a Y.Doc from a `KicadDoc` in one transaction. Removes items
- * absent from `doc`, upserts the rest, replaces layout + meta. Tag `origin` so the
- * runtime's observers can recognize the write as their own.
+ * absent from `doc`, upserts the rest, and reconciles layout + meta. In v3 the
+ * layout reconciliation uses atomic per-head registers and root-order hints;
+ * legacy encodings retain their wholesale sequence replacement. Tag `origin`
+ * so the runtime's observers can recognize the write as their own.
  */
 export function docToY(doc: KicadDoc, ydoc: Y.Doc, origin?: unknown): void {
   assertValidKicadDoc(doc);
@@ -452,14 +560,16 @@ export function docToY(doc: KicadDoc, ydoc: Y.Doc, origin?: unknown): void {
     for (const [id, def] of Object.entries(defs)) {
       if (libs.get(id) !== def) libs.set(id, def);
     }
-    const layoutOut = doc.layout.map(
-      (s): Slot => ("k" in s && s.k === "lib_symbols" ? { k: s.k, v: [] } : s),
-    );
-    const layout = kicadLayoutArray(ydoc);
-    layout.delete(0, layout.length);
-    layout.insert(0, cloneSlots(layoutOut));
-    const overrides = kicadLayoutOverridesMap(ydoc);
-    if (overrides) overrides.clear();
+    if (writeVersion === 3) {
+      syncV3LayoutSnapshot(doc.layout, ydoc);
+    } else {
+      const layoutOut = doc.layout.map(
+        (s): Slot => ("k" in s && s.k === "lib_symbols" ? { k: s.k, v: [] } : s),
+      );
+      const layout = kicadLayoutArray(ydoc);
+      layout.delete(0, layout.length);
+      layout.insert(0, cloneSlots(layoutOut));
+    }
   }, origin);
 }
 
@@ -548,11 +658,12 @@ export const Y_KDOC_REVERT_AT = "revertedAt";
 /**
  * Apply a `KicadDoc` snapshot over a Y.Doc as a FORWARD operation, touching
  * only what differs: items absent from `doc` are deleted, the rest go through
- * `upsertYItem`'s no-op skip (v2 slot differ), lib defs sync per id, and the
- * layout is replaced only when it differs at all (wholesale — layout is one
- * ordered sequence; per-group patching can't restore item order). Unchanged
- * state keeps its history/attribution untouched — the property a validity
- * revert needs (kicad-validity 0001 §4.4).
+ * `upsertYItem`'s no-op skip (v2/v3 slot differ), and lib defs sync per id. A
+ * v3 layout writes changed keyed groups as independent atomic registers and
+ * reconciles only root item ordering hints in the sequence; legacy layouts are
+ * replaced wholesale when changed. Unchanged state keeps its history and
+ * attribution untouched — the property a validity revert needs
+ * (kicad-validity 0001 §4.4).
  */
 export function upsertDocToY(doc: KicadDoc, ydoc: Y.Doc, origin?: unknown): void {
   assertValidKicadDoc(doc);
@@ -582,16 +693,18 @@ export function upsertDocToY(doc: KicadDoc, ydoc: Y.Doc, origin?: unknown): void
       if (libs.get(id) !== def) libs.set(id, def);
     }
 
-    const target = doc.layout.map(
-      (s): Slot => ("k" in s && s.k === "lib_symbols" ? { k: s.k, v: [] } : s),
-    );
-    const layout = kicadLayoutArray(ydoc);
-    if (JSON.stringify(layout.toArray()) !== JSON.stringify(target)) {
-      layout.delete(0, layout.length);
-      layout.insert(0, cloneSlots(target));
+    if (version === 3) {
+      syncV3LayoutSnapshot(doc.layout, ydoc);
+    } else {
+      const target = doc.layout.map(
+        (s): Slot => ("k" in s && s.k === "lib_symbols" ? { k: s.k, v: [] } : s),
+      );
+      const layout = kicadLayoutArray(ydoc);
+      if (JSON.stringify(layout.toArray()) !== JSON.stringify(target)) {
+        layout.delete(0, layout.length);
+        layout.insert(0, cloneSlots(target));
+      }
     }
-    const overrides = kicadLayoutOverridesMap(ydoc);
-    if (overrides?.size) overrides.clear();
   }, origin);
 }
 

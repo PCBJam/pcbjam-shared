@@ -39,13 +39,7 @@ function expectOneAuthoredValue(
 ): void {
   const actual = merged.map(docToFile);
   expect(new Set(actual).size).toBe(1);
-  const authoredFiles = authored.map(docToFile);
-  if (!authoredFiles.includes(actual[0]!)) {
-    throw new Error(
-      `hybrid=${actual[0]}\nmodel=${JSON.stringify(merged[0])}`
-      + `\nauthored=${authoredFiles.join("\n---\n")}`,
-    );
-  }
+  expect(authored.map(docToFile)).toContain(actual[0]);
 }
 
 describe("v3 conflict domains never manufacture a native snapshot hybrid", () => {
@@ -59,6 +53,57 @@ describe("v3 conflict domains never manufacture a native snapshot hybrid", () =>
       `(kicad_pcb (version 20241229)
         (via (at 9 9) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (uuid "same")))`,
     );
+
+    expectOneAuthoredValue(concurrentMerge(base, left, right), [left, right]);
+  });
+
+  it("keeps every legal occurrence of a repeated root head in one authored group", () => {
+    const base = fileToDoc(
+      `(kicad_pcb (version 20241229) (net 0 "") (net 1 "BASE"))`,
+    );
+    const left = fileToDoc(
+      `(kicad_pcb (version 20241229) (net 0 "") (net 1 "LEFT"))`,
+    );
+    const right = fileToDoc(
+      `(kicad_pcb (version 20241229) (net 0 "") (net 1 "RIGHT") (net 2 "EXTRA"))`,
+    );
+
+    const merged = concurrentMerge(base, left, right);
+    expectOneAuthoredValue(merged, [left, right]);
+    for (const doc of merged) {
+      // `net` is repeatable: the fix must select a complete group, never
+      // mistake repeated legal slots for corruption and deduplicate them.
+      expect(doc.layout.filter((slot) => "k" in slot && slot.k === "net")).toHaveLength(
+        docToFile(doc) === docToFile(left) ? 2 : 3,
+      );
+    }
+  });
+
+  it("merges concurrent changes to distinct root heads independently", () => {
+    const base = fileToDoc(
+      `(kicad_pcb (version 20241229) (paper "A4") (title_block (title "BASE")))`,
+    );
+    const paperEdit = fileToDoc(
+      `(kicad_pcb (version 20241229) (paper "A3") (title_block (title "BASE")))`,
+    );
+    const titleEdit = fileToDoc(
+      `(kicad_pcb (version 20241229) (paper "A4") (title_block (title "RIGHT")))`,
+    );
+
+    const merged = concurrentMerge(base, paperEdit, titleEdit);
+    expect(new Set(merged.map(docToFile)).size).toBe(1);
+    for (const doc of merged) {
+      const text = docToFile(doc);
+      expect(text).toContain('(paper "A3")');
+      expect(text).toContain('(title "RIGHT")');
+      expect(doc.layout.filter((slot) => "k" in slot && slot.k === "version")).toHaveLength(1);
+    }
+  });
+
+  it("keeps unkeyed root atoms in one identity-free conflict domain", () => {
+    const base = fileToDoc(`(page_layout base first)`);
+    const left = fileToDoc(`(page_layout left authored tuple)`);
+    const right = fileToDoc(`(page_layout right whole)`);
 
     expectOneAuthoredValue(concurrentMerge(base, left, right), [left, right]);
   });
