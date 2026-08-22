@@ -66,60 +66,74 @@ export function docDelta(
 
 // ── Order-only classification (drift reporting) ──────────────────────────────
 //
-// `sameKicadItem` is order-sensitive on purpose: slot order IS file content, and
-// the LIVE sync path must apply a reorder like any other change. Drift REPORTING
-// is a different question — y-sexpr v2 reorders legitimately, so an order-only
-// difference is noise, not a defect:
+// Exact slot order is the default because order is part of the lossless KicadDoc
+// model. The old oracle sorted every top-level keyed child. That hid authored
+// changes to anonymous repeated heads (`(xy A) (xy B)` → `(xy B) (xy A)`).
 //
-//   - `normalizedKeys` (kicad-y2.ts) appends map keys missing from `#attr_order`
-//     in sorted key order; `#attr_order` is "a hint, never membership truth"
-//     (ysync 0009 §3.4) and legitimately loses entries on resurrections,
-//     concurrent inserts and drop-and-recreate.
-//   - `docToY` re-emits `lib_symbols` sorted by lib id (kicad-y.ts).
-//   - `applyDeltaToY` appends new root items to `kdoc_layout`, so a root item's
-//     original file position is not preserved.
-//
-// Scope of the relaxation, deliberately narrow: only the TOP-LEVEL sequence of an
-// item body / doc layout is treated as a multiset. Nested slot content is compared
-// verbatim (order-sensitive), so geometry never slips through — `(pts (xy …) (xy …))`
-// is a single top-level slot whose internal `xy` order is part of its canonical
-// string. Leading positional atoms (`(pad "1" smd roundrect …)`) also stay ordered.
+// There is one separately audited exception: KiCad may normalize the order of
+// UUID-bearing root/nested items when it writes a model. Those children already
+// have durable identity, membership and content checks, so callers comparing two
+// writer snapshots may opt into the `item-references` class explicitly. No
+// positional atom or anonymous/keyed field is covered by that exception.
 
 /** How two slot lists relate for drift-reporting purposes. */
 export type SlotsRelation = "equal" | "reordered" | "different";
 
-function isAtom(slot: Slot): slot is { atom: string } {
-  return "atom" in slot;
+export type SlotOrderClass = "item-references";
+
+export interface CompareSlotsOptions {
+  /** Writer-normalized order classes that this comparison may ignore. */
+  ignoreOrderClasses?: readonly SlotOrderClass[];
 }
+
+/**
+ * The only order relaxation backed by a real KiCad writer observation: a board
+ * reopen moved an independent UUID-bearing track block while all 533 UUID item
+ * nodes and every non-item slot remained structurally equal.
+ */
+export const KICAD_WRITER_NORMALIZED_ITEM_REFERENCE_ORDER: Readonly<CompareSlotsOptions> =
+  Object.freeze({ ignoreOrderClasses: Object.freeze(["item-references"] as const) });
 
 /**
  * Classify two slot lists as identical, a pure reordering of the same children,
  * or a real difference. See the block comment above for what "reordering" covers.
  */
-export function compareSlots(a: Slot[], b: Slot[]): SlotsRelation {
+export function compareSlots(
+  a: Slot[],
+  b: Slot[],
+  options: Readonly<CompareSlotsOptions> = {},
+): SlotsRelation {
   if (JSON.stringify(a) === JSON.stringify(b)) return "equal";
 
-  // Positional atoms carry meaning by position — never treat those as a multiset.
-  const atomsA = a.filter(isAtom).map((s) => s.atom);
-  const atomsB = b.filter(isAtom).map((s) => s.atom);
-  if (JSON.stringify(atomsA) !== JSON.stringify(atomsB)) return "different";
+  const ignored = new Set(options.ignoreOrderClasses ?? []);
+  if (!ignored.has("item-references")) return "different";
 
-  const restA = a.filter((s) => !isAtom(s)).map((s) => JSON.stringify(s)).sort();
-  const restB = b.filter((s) => !isAtom(s)).map((s) => JSON.stringify(s)).sort();
-  return JSON.stringify(restA) === JSON.stringify(restB) ? "reordered" : "different";
+  // Only identity-bearing item references may move. Everything else stays in
+  // its exact authored order, including repeated anonymous heads and atoms.
+  const orderedA = a.filter((slot) => !("item" in slot));
+  const orderedB = b.filter((slot) => !("item" in slot));
+  if (JSON.stringify(orderedA) !== JSON.stringify(orderedB)) return "different";
+
+  const refsA = a.filter((slot) => "item" in slot).map((slot) => slot.item).sort();
+  const refsB = b.filter((slot) => "item" in slot).map((slot) => slot.item).sort();
+  return JSON.stringify(refsA) === JSON.stringify(refsB) ? "reordered" : "different";
 }
 
 /** `compareSlots` lifted to whole items (type/parent changes are always real). */
-export function compareKicadItems(a: KicadItem, b: KicadItem): SlotsRelation {
+export function compareKicadItems(
+  a: KicadItem,
+  b: KicadItem,
+  options: Readonly<CompareSlotsOptions> = {},
+): SlotsRelation {
   if (a.type !== b.type || a.parent !== b.parent) return "different";
-  return compareSlots(a.body, b.body);
+  return compareSlots(a.body, b.body, options);
 }
 
 /** A `KicadDelta` with order-only changes split out of `updated`. */
 export const driftDeltaSchema = kicadDeltaSchema.extend({
   /**
-   * Items present on both sides whose children are the same multiset in a
-   * different order. Reported for visibility but NOT counted as drift.
+   * Items present on both sides that differ only under a caller-selected,
+   * audited order class. Reported for visibility but NOT counted as drift.
    * Optional-with-default so reports/blobs written before this existed parse.
    */
   reordered: z.array(keyedKicadItemSchema).default([]),
@@ -127,12 +141,13 @@ export const driftDeltaSchema = kicadDeltaSchema.extend({
 export type DriftDelta = z.infer<typeof driftDeltaSchema>;
 
 /**
- * `docDelta` for drift reporting: items that differ only in child ORDER land in
- * `reordered` instead of `updated`, so they neither trigger a report nor count.
+ * `docDelta` for drift reporting. Exact item order is the default. A caller may
+ * pass an audited exception; only those differences land in `reordered`.
  */
 export function driftDocDelta(
   prev: Pick<KicadDoc, "items">,
   next: Pick<KicadDoc, "items">,
+  options: Readonly<CompareSlotsOptions> = {},
 ): DriftDelta {
   const delta: DriftDelta = { ...emptyKicadDelta(), reordered: [] };
   for (const [uuid, item] of Object.entries(next.items)) {
@@ -141,7 +156,7 @@ export function driftDocDelta(
       delta.added.push({ uuid, ...item });
       continue;
     }
-    const rel = compareKicadItems(old, item);
+    const rel = compareKicadItems(old, item, options);
     if (rel === "reordered") delta.reordered.push({ uuid, ...item });
     else if (rel === "different") delta.updated.push({ uuid, ...item });
   }

@@ -4,16 +4,16 @@ import {
   compareSlots,
   docDelta,
   driftDocDelta,
+  KICAD_WRITER_NORMALIZED_ITEM_REFERENCE_ORDER,
 } from "../src/kicad-delta.js";
 import { fileToDoc, type KicadItem, type Slot } from "../src/kicad-doc.js";
 
 /**
  * Order-only classification for drift reporting (kicad-delta.ts).
  *
- * The contract under test, stated once: an order difference among an item's
- * TOP-LEVEL keyed children is `reordered` (y-sexpr v2 produces those
- * legitimately), while positional atoms and anything nested stay strictly
- * order-sensitive so geometry can never be waved through.
+ * The contract under test, stated once: order is exact by default. Only
+ * identity-bearing item references may use the explicit, writer-audited order
+ * exception; positional atoms and anonymous/keyed children always stay exact.
  */
 
 const k = (key: string, ...v: Slot[]): Slot => ({ k: key, v });
@@ -26,10 +26,32 @@ describe("compareSlots", () => {
     expect(compareSlots(slots, [...slots])).toBe("equal");
   });
 
-  it("treats a swap of top-level keyed children as a reorder", () => {
+  it("treats a swap of top-level keyed children as different by default", () => {
     const x = k("property", a('"Reference"'));
     const y = k("property", a('"Value"'));
-    expect(compareSlots([x, y], [y, x])).toBe("reordered");
+    expect(compareSlots([x, y], [y, x])).toBe("different");
+  });
+
+  it("ignores only explicitly audited UUID item-reference order", () => {
+    const x: Slot = { item: "uuid-a" };
+    const y: Slot = { item: "uuid-b" };
+    expect(compareSlots([x, y], [y, x])).toBe("different");
+    expect(
+      compareSlots([x, y], [y, x], KICAD_WRITER_NORMALIZED_ITEM_REFERENCE_ORDER),
+    ).toBe("reordered");
+  });
+
+  it("does not let item-reference relaxation hide an anonymous reorder", () => {
+    const x: Slot = { item: "uuid-a" };
+    const p1 = k("xy", a("0"), a("0"));
+    const p2 = k("xy", a("1"), a("1"));
+    expect(
+      compareSlots(
+        [x, p1, p2],
+        [p2, p1, x],
+        KICAD_WRITER_NORMALIZED_ITEM_REFERENCE_ORDER,
+      ),
+    ).toBe("different");
   });
 
   it("treats a changed value as different, not a reorder", () => {
@@ -103,22 +125,19 @@ describe("driftDocDelta", () => {
     },
   };
 
-  it("routes order-only changes to `reordered`, not `updated`", () => {
+  it("reports keyed-child order changes as drift by default", () => {
     const d = driftDocDelta(reorderedOnly, swapped);
-    expect(d.updated).toHaveLength(0);
+    expect(d.updated.map((i) => i.uuid)).toEqual(["u-1"]);
     expect(d.added).toHaveLength(0);
     expect(d.removed).toHaveLength(0);
-    expect(d.reordered.map((i) => i.uuid)).toEqual(["u-1"]);
+    expect(d.reordered).toHaveLength(0);
   });
 
-  // The whole point: a reorder-only drift must not be reportable.
-  it("is empty-by-the-report-check when only order differs", () => {
+  it("does not let a pure order drift pass the report check", () => {
     const d = driftDocDelta(reorderedOnly, swapped);
     expect(
       d.added.length === 0 && d.updated.length === 0 && d.removed.length === 0,
-    ).toBe(true);
-    // ...whereas the sync-path delta still sees it, because applying a reorder
-    // is a real edit.
+    ).toBe(false);
     expect(docDelta(reorderedOnly, swapped).updated).toHaveLength(1);
   });
 
