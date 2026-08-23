@@ -1003,6 +1003,16 @@ export function compactYdocUpdate(
     const out = new Y.Doc();
     try {
       docToY(kdoc, out); // fresh doc → stamped SEXPR_VERSION_CURRENT
+      // `yToDoc` intentionally materializes only definitions referenced by
+      // the current item graph. The raw library map is broader, monotonic
+      // collaboration knowledge: an unreferenced definition may be needed by
+      // a concurrent or later consumer. Preserve that authoritative map
+      // verbatim across the fresh compaction epoch without injecting its
+      // orphans into the native `KicadDoc` snapshot.
+      const fromLibs = kicadLibSymbolsMap(src);
+      const toLibs = kicadLibSymbolsMap(out);
+      toLibs.clear();
+      fromLibs.forEach((definition, id) => toLibs.set(id, definition));
       for (const key of KDOC_EXTRA_ROOT_MAPS) {
         const from = src.getMap<unknown>(key);
         if (from.size === 0) continue;
