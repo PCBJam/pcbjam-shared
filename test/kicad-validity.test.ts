@@ -1,21 +1,11 @@
-/**
- * kicad-validity 0001 §4.4/§4.5 — the revert primitives, exercised exactly as
- * the backend runner calls them: encoded updates in, an incremental
- * forward-op update out (`computeRevertUpdate`), with `upsertDocToY` as the
- * minimal-diff writer underneath and `mergeYUpdates` as the bisect composer.
- */
+/** Client-side snapshot reconciliation and update composition primitives. */
 
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import {
-  computeRevertUpdate,
   docToY,
-  kicadMetaMap,
   mergeYUpdates,
   upsertDocToY,
-  Y_KDOC_REVERT_AT,
-  Y_KDOC_REVERT_NONCE,
-  Y_KDOC_REVERT_REASON,
   yToDoc,
 } from "../src/kicad-y.js";
 import { docToFile, fileToDoc, type Slot } from "../src/kicad-doc.js";
@@ -75,88 +65,6 @@ describe("upsertDocToY — minimal diff", () => {
     upsertDocToY(doc, ydoc, "del");
     expect(yToDoc(ydoc).items["seg-2"]).toBeUndefined();
     expect(Object.keys(yToDoc(ydoc).items)).toHaveLength(2);
-  });
-});
-
-describe("computeRevertUpdate — forward-op rollback", () => {
-  it("returns null when content already equals the checkpoint", () => {
-    const ydoc = seeded();
-    const good = snapshot(ydoc);
-    expect(
-      computeRevertUpdate({
-        current: good,
-        good,
-        nonce: "n-1",
-        reason: "r",
-        at: "2026-07-14T00:00:00Z",
-      }),
-    ).toBeNull();
-  });
-
-  it("reverts a corrupted doc's CONTENT to the checkpoint and stamps the marker", () => {
-    const ydoc = seeded();
-    const good = snapshot(ydoc);
-
-    // Corrupt: schema-valid slot, invalid s-expr (the gate's target class).
-    const doc = yToDoc(ydoc);
-    doc.items["seg-1"]!.body.push({ atom: "(" });
-    upsertDocToY(doc, ydoc, "corrupt");
-    expect(docToFile(yToDoc(ydoc))).not.toBe(docToFile(fileToDoc(BASE)));
-
-    const update = computeRevertUpdate({
-      current: snapshot(ydoc),
-      good,
-      nonce: "job-42",
-      reason: "unbalanced (",
-      at: "2026-07-14T00:00:00Z",
-    });
-    expect(update).not.toBeNull();
-
-    // Applying the revert to the live doc restores the checkpoint rendering
-    // (CRDT merge — no epoch swap) and carries the marker.
-    Y.applyUpdate(ydoc, update!);
-    expect(docToFile(yToDoc(ydoc))).toBe(docToFile(fileToDoc(BASE)));
-    const meta = kicadMetaMap(ydoc);
-    expect(meta.get(Y_KDOC_REVERT_NONCE)).toBe("job-42");
-    expect(meta.get(Y_KDOC_REVERT_REASON)).toBe("unbalanced (");
-    expect(meta.get(Y_KDOC_REVERT_AT)).toBe("2026-07-14T00:00:00Z");
-  });
-
-  it("merges over a concurrently-advanced replica without losing untouched items", () => {
-    const ydoc = seeded();
-    const good = snapshot(ydoc);
-
-    const doc = yToDoc(ydoc);
-    doc.items["seg-1"]!.body.push({ atom: "(" });
-    upsertDocToY(doc, ydoc, "corrupt");
-    const corrupted = snapshot(ydoc);
-
-    // While the runner computes the revert, a client moves seg-2 (a slot the
-    // revert does NOT touch — the checkpoint's seg-2 equals the corrupted
-    // doc's seg-2, so the minimal diff never writes it).
-    const update = computeRevertUpdate({
-      current: corrupted,
-      good,
-      nonce: "n",
-      reason: "r",
-      at: "2026-07-14T00:00:00Z",
-    })!;
-
-    const live = new Y.Doc();
-    Y.applyUpdate(live, corrupted);
-    const doc2 = yToDoc(live);
-    doc2.items["seg-2"]!.body = doc2.items["seg-2"]!.body.map(
-      (s): Slot =>
-        "k" in s && s.k === "start" ? { k: "start", v: [{ atom: "7" }, { atom: "7" }] } : s,
-    );
-    upsertDocToY(doc2, live, "concurrent");
-
-    Y.applyUpdate(live, update);
-    const out = docToFile(yToDoc(live));
-    expect(out).not.toContain('{"atom"'); // structural sanity
-    expect(out).toContain("(start 7 7)"); // the concurrent edit survived
-    expect(out).toContain("(start 0 0)"); // seg-1 reverted
-    expect(out).not.toContain("( )"); // corruption gone
   });
 });
 

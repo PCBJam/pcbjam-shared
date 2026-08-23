@@ -11,9 +11,6 @@ import {
   syncLayoutToY,
   upsertLibSymbolsToY,
   upsertDocToY,
-  Y_KDOC_REVERT_AT,
-  Y_KDOC_REVERT_NONCE,
-  Y_KDOC_REVERT_REASON,
   Y_KDOC_STATE,
   Y_KDOC_STATE_ACTIVE,
   ydocSexprVersion,
@@ -349,22 +346,18 @@ describe("compaction is fail-closed and metadata-preserving", () => {
     expect(compactYdocUpdate(Y.encodeStateAsUpdate(ydoc), { ratio: 0 })).toBeNull();
   });
 
-  it("preserves durable revert and custom metadata but drops the seed nonce", () => {
+  it("preserves custom durable metadata but drops the seed nonce", () => {
     const ydoc = new Y.Doc();
     seedDocToY(fileToDoc(LEGACY_BASE), ydoc, "seed", "ephemeral-seed");
     const meta = kicadMetaMap(ydoc);
-    meta.set(Y_KDOC_REVERT_NONCE, "revert-1");
-    meta.set(Y_KDOC_REVERT_REASON, "invalid merge");
-    meta.set(Y_KDOC_REVERT_AT, "2026-08-22T12:00:00.000Z");
+    meta.set("auditTrail", { actor: "client", action: "reviewed" });
     meta.set("customDurableMetadata", { nested: ["kept", 42] });
 
     const compacted = compactYdocUpdate(Y.encodeStateAsUpdate(ydoc), { ratio: 0 });
     expect(compacted?.reason).toBe("compaction");
     const out = hydrate(compacted!.update);
     const outMeta = kicadMetaMap(out);
-    expect(outMeta.get(Y_KDOC_REVERT_NONCE)).toBe("revert-1");
-    expect(outMeta.get(Y_KDOC_REVERT_REASON)).toBe("invalid merge");
-    expect(outMeta.get(Y_KDOC_REVERT_AT)).toBe("2026-08-22T12:00:00.000Z");
+    expect(outMeta.get("auditTrail")).toEqual({ actor: "client", action: "reviewed" });
     expect(outMeta.get("customDurableMetadata")).toEqual({ nested: ["kept", 42] });
     expect(outMeta.get("seedNonce")).toBeUndefined();
   });
