@@ -351,6 +351,15 @@ describe("layout save-sync (miss 08B)", () => {
     expect(rendered).toContain(`sym-later`);
   });
 
+  it("fails closed instead of rendering a consumer with a missing definition", () => {
+    const sch = seeded();
+    kicadLibSymbolsMap(sch).delete("Device:R");
+
+    expect(() => yToDoc(sch)).toThrow(
+      /referenced library definitions are missing \("Device:R"\)/,
+    );
+  });
+
   it("preserves a definition omitted by a stale native save while Y has a peer consumer", () => {
     const sch = seeded();
     const peerWire = {

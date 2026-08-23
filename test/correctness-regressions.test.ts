@@ -47,11 +47,13 @@ describe("P0: a first-seed race selects one complete epoch", () => {
     (version 20250114)
     (paper "A4")
     (lib_symbols (symbol "Device:R" (pin_numbers hide)))
+    (symbol (lib_id "Device:R") (at 5 5 0) (uuid "symbol-a"))
     (wire (pts (xy 0 0) (xy 10 0)) (uuid "wire-a")))`;
   const B = `(kicad_sch
     (version 20250114)
     (paper "A3")
     (lib_symbols (symbol "Device:C" (pin_names hide)))
+    (symbol (lib_id "Device:C") (at 15 15 0) (uuid "symbol-b"))
     (junction (at 20 20) (diameter 0) (uuid "junction-b")))`;
 
   it("never leaves items or library definitions from the losing seed", () => {

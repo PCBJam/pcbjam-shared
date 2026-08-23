@@ -39,9 +39,8 @@ import {
   emptyKicadItems,
   kicadItemSchema,
   libSymbolsFromLayout,
-  scalar,
+  referencedLibSymbolIds,
   slotFromSexpr,
-  unquoteAtom,
   type KicadDoc,
   type KicadItem,
   type Slot,
@@ -556,9 +555,6 @@ export function docToY(doc: KicadDoc, ydoc: Y.Doc, origin?: unknown): void {
     // the layout keeps an EMPTY lib_symbols slot as the injection point.
     const defs = libSymbolsFromLayout(doc.layout, doc.items);
     const libs = kicadLibSymbolsMap(ydoc);
-    for (const id of [...libs.keys()]) {
-      if (!Object.hasOwn(defs, id)) libs.delete(id);
-    }
     for (const [id, def] of Object.entries(defs)) {
       if (libs.get(id) !== def) libs.set(id, def);
     }
@@ -686,9 +682,6 @@ export function upsertDocToY(doc: KicadDoc, ydoc: Y.Doc, origin?: unknown): void
 
     const defs = libSymbolsFromLayout(doc.layout, doc.items);
     const libs = kicadLibSymbolsMap(ydoc);
-    for (const id of [...libs.keys()]) {
-      if (!Object.hasOwn(defs, id)) libs.delete(id);
-    }
     for (const [id, def] of Object.entries(defs)) {
       if (libs.get(id) !== def) libs.set(id, def);
     }
@@ -789,14 +782,29 @@ export function yToDoc(ydoc: Y.Doc): KicadDoc {
   });
   const layout = kicadLayout(ydoc);
 
-  // Re-inject the library definitions into the layout's lib_symbols slot
-  // (sorted by lib id — the order KiCad's own writer produces, since its lib
-  // cache is a sorted map).
+  // Definition knowledge is monotonic internal state. Materialize only the
+  // subset referenced by current authoritative items, sorted like KiCad's
+  // native cache writer. Orphans remain available for a concurrent/later
+  // consumer without creating native-file drift meanwhile.
   const libs = kicadLibSymbolsMap(ydoc);
-  if (libs.size > 0) {
-    const defSlots = [...libs.keys()]
-      .sort()
-      .map((id) => slotFromSexpr(libs.get(id)!, items));
+  const referenced = referencedLibSymbolIds(items);
+  const materialized = [...referenced].filter((id) => libs.has(id)).sort();
+  // `lib_symbols` is a schematic cache. PCB fixtures and older generic item
+  // rooms may legitimately contain a `lib_id` atom without that cache; only a
+  // schematic consumer/definition mismatch is a dangling native document.
+  const missing =
+    root === "kicad_sch"
+      ? [...referenced].filter((id) => !libs.has(id)).sort()
+      : [];
+  if (missing.length > 0) {
+    throw new Error(
+      `cannot materialize KiCad document: referenced library definitions are missing (${missing
+        .map((id) => JSON.stringify(id))
+        .join(", ")})`,
+    );
+  }
+  if (materialized.length > 0) {
+    const defSlots = materialized.map((id) => slotFromSexpr(libs.get(id)!, items));
     const at = layout.findIndex((s) => "k" in s && s.k === "lib_symbols");
     const slot: Slot = { k: "lib_symbols", v: defSlots };
     if (at >= 0) {
@@ -1142,10 +1150,11 @@ export function applyDeltaToY(ydoc: Y.Doc, delta: KicadDelta, origin?: unknown):
  *   atomic table; concurrent saves select one whole table, never a positional
  *   hybrid. Legacy v1/v2 rooms keep this head frozen because their Y.Array
  *   representation cannot provide that guarantee.
- * - `lib_symbols`: routed to the kdoc_libsymbols map. Present definitions are
- *   upserted per id. A definition absent from the native save is deleted only
- *   when the current authoritative Y item graph has no consumer for that id;
- *   this prevents a stale native snapshot from deleting a peer's definition.
+ * - `lib_symbols`: routed to the monotonic kdoc_libsymbols knowledge map.
+ *   Native snapshots may add/update knowledge but never delete it: absence
+ *   cannot distinguish an orphan from an unseen concurrent peer consumer.
+ *   `yToDoc` filters retained orphans from native materialization until a live
+ *   authoritative item references that definition again.
  *
  * Returns true when anything changed.
  */
@@ -1156,9 +1165,8 @@ export function syncLayoutToY(fileDoc: KicadDoc, ydoc: Y.Doc, origin?: unknown):
 
   ydoc.transact(() => {
     const overrides = kicadLayoutOverridesMap(ydoc);
-    // lib_symbols → the per-id definitions map. The saved file is complete
-    // evidence for definitions native currently contains, but absence is safe
-    // to publish only after consulting the current authoritative consumer set.
+    // lib_symbols → monotonic per-id definition knowledge. A native snapshot
+    // can teach us a definition but can never prove it safe to forget one.
     const defs = libSymbolsFromLayout(fileDoc.layout, fileDoc.items);
     const libs = kicadLibSymbolsMap(ydoc);
     for (const [id, def] of Object.entries(defs)) {
@@ -1167,18 +1175,6 @@ export function syncLayoutToY(fileDoc: KicadDoc, ydoc: Y.Doc, origin?: unknown):
         changed = true;
       }
     }
-    const consumers = new Set<string>();
-    kicadItemsMap(ydoc).forEach((ym) => {
-      const encoded = scalar(yToItem(ym).body, "lib_id");
-      if (encoded !== undefined) consumers.add(unquoteAtom(encoded));
-    });
-    for (const id of [...libs.keys()]) {
-      if (!Object.hasOwn(defs, id) && !consumers.has(id)) {
-        libs.delete(id);
-        changed = true;
-      }
-    }
-
     const frozen = new Set(["lib_symbols"]);
     if (!overrides) frozen.add("net");
 

@@ -49,16 +49,19 @@ const SEED_FILES = [
     (version 20250114)
     (paper "A4")
     (lib_symbols (symbol "Device:R" (pin_numbers hide)))
+    (symbol (lib_id "Device:R") (at 5 5 0) (uuid "symbol-a"))
     (wire (pts (xy 0 0) (xy 10 0)) (uuid "wire-a")))`,
   `(kicad_sch
     (version 20250114)
     (paper "A3")
     (lib_symbols (symbol "Device:C" (pin_names hide)))
+    (symbol (lib_id "Device:C") (at 15 15 0) (uuid "symbol-b"))
     (junction (at 20 20) (diameter 0) (uuid "junction-b")))`,
   `(kicad_sch
     (version 20250114)
     (paper "A5")
     (lib_symbols (symbol "Device:L" (exclude_from_sim no)))
+    (symbol (lib_id "Device:L") (at 25 25 0) (uuid "symbol-c"))
     (wire (pts (xy 30 30) (xy 40 30)) (uuid "wire-c")))`,
 ] as const;
 

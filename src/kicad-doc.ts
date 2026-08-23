@@ -394,6 +394,18 @@ export function libSymbolsFromLayout(
   return defs;
 }
 
+/** Library ids referenced by the current authoritative item graph. */
+export function referencedLibSymbolIds(
+  items: Readonly<Record<string, KicadItem>>,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const item of Object.values(items)) {
+    const encoded = scalar(item.body, "lib_id");
+    if (encoded !== undefined) ids.add(unquoteAtom(encoded));
+  }
+  return ids;
+}
+
 // ── Accessors: ergonomic (lossy) reads over slot lists ───────────────────────
 
 /** The positional atoms of a slot list, verbatim, in order. */
