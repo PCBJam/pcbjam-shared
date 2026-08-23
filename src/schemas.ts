@@ -315,7 +315,16 @@ export const collabRoomIdSchema = z.string().min(1);
  * room namespace: clients with incompatible Y shapes never exchange updates.
  * The server only admits this version; it does not choose conflict winners.
  */
-export const KDOC_COLLAB_PROTOCOL_VERSION = 3;
+/**
+ * Network writer epoch. Version 4 excludes older v3 writers whose library-
+ * definition garbage collection can race an unseen concurrent consumer.
+ */
+export const KDOC_COLLAB_PROTOCOL_VERSION = 4;
+/**
+ * Stored Y s-expression shape. The v4 admission fence changes writer policy,
+ * not representation, so existing healthy v3 documents hydrate directly.
+ */
+export const KDOC_SEXPR_ENCODING_VERSION = 3;
 const KDOC_ROOM_PREFIX = `~kdoc-v${KDOC_COLLAB_PROTOCOL_VERSION}~:`;
 export function collabRoomId(
   scopeId: string,

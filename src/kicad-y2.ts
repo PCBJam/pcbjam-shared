@@ -47,13 +47,13 @@
 
 import * as Y from "yjs";
 import { cloneSlots, unquoteAtom, type Slot } from "./kicad-doc.js";
-import { KDOC_COLLAB_PROTOCOL_VERSION } from "./schemas.js";
+import { KDOC_SEXPR_ENCODING_VERSION } from "./schemas.js";
 
 // ── Version constants (§5) ────────────────────────────────────────────────────
 
 /** `kdoc_meta` key holding the doc's s-expr encoding version. */
 export const Y_KDOC_SEXPR_VERSION = "sexprVersion";
-export const SEXPR_VERSION_CURRENT = KDOC_COLLAB_PROTOCOL_VERSION;
+export const SEXPR_VERSION_CURRENT = KDOC_SEXPR_ENCODING_VERSION;
 export const SEXPR_VERSION_SUPPORTED: readonly number[] = [1, 2, 3];
 
 // ── Key vocabulary ────────────────────────────────────────────────────────────

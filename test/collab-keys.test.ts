@@ -127,13 +127,13 @@ describe("parseCollabRoomId (inverse of collabRoomId/presenceRoomId)", () => {
   it("names document rooms by codec version while keeping file identity intact", () => {
     for (const docPath of ["board.kicad_pcb", "sub/child.kicad_sch", "weird:name.kicad_pcb"]) {
       expect(collabRoomId(SID, PID, docPath)).toBe(
-        `${SID}:${PID}:~kdoc-v3~:${docPath}`,
+        `${SID}:${PID}:~kdoc-v4~:${docPath}`,
       );
       expect(parseCollabRoomId(collabRoomId(SID, PID, docPath))).toEqual({
         scopeId: SID,
         projectId: PID,
         docPath,
-        schemaVersion: 3,
+        schemaVersion: 4,
       });
     }
     expect(parseCollabRoomId(presenceRoomId(SID, PID))).toEqual({
