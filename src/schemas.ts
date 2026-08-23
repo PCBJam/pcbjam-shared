@@ -515,9 +515,11 @@ export function collabLiveKey(
 
 /**
  * R2 key of an ARCHIVED ydoc epoch: the exact blob `<…>.ydoc` held before an
- * onLoad version-conversion/compaction replaced it (ysync 0009 §5/§6 — the
- * attribution-history chain survives even though the reseed resets the live
- * doc's CRDT history). `epochMs` is the replacement time; one doc's chain is
+ * explicit offline/manual version-conversion or compaction replaced it. A
+ * live load-time replacement is unsafe without a replica-generation fence and
+ * is deliberately disabled. The attribution-history chain survives even
+ * though the reseed resets the replacement doc's CRDT history. `epochMs` is
+ * the replacement time; one doc's chain is
  * every key under the `<docKey>.` prefix, ordered by the numeric suffix.
  * Deliberately NOT recognized by {@link parseCollabKey}, so archives never
  * surface as live collab docs in listings.

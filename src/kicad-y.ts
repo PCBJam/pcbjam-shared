@@ -934,16 +934,17 @@ export interface YdocCompaction {
 }
 
 /**
- * The ysync 0009 §5 conversion point, for the sync server's read-file hook
- * (`BoardRoom.onLoad` — the provably safe epoch boundary: clients never
- * persist ydocs locally and onLoad runs before any client syncs). Given a
- * persisted state update:
+ * Build a fresh-identity replacement update for an explicit offline/manual
+ * epoch rewrite. This MUST NOT run from `BoardRoom.onLoad` or another live
+ * path until a replica-generation fence rejects or drains every client that
+ * can still publish updates from the old epoch: Yjs updates from those replicas
+ * remain mergeable but cannot affect the freshly allocated identities.
+ * Given a persisted state update:
  *
  *  - a doc written in an OLDER s-expr version is re-seeded as a fresh
  *    `SEXPR_VERSION_CURRENT` doc (`reason: "version-upgrade"`);
  *  - a current-version doc whose blob has bloated past `ratio ×` its compacted
- *    size is re-seeded the same way (`reason: "compaction"` — this is also the
- *    recurring gc-off compaction event, §6);
+ *    size is re-seeded the same way (`reason: "compaction"`);
  *  - anything else returns null: hydrate the blob as-is. That covers docs
  *    NEWER than this build (never downgrade), presence/empty docs, and
  *    editor-snapshot-seeded docs with no `kdoc_meta.root` (not materializable

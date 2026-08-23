@@ -1,7 +1,8 @@
 /**
- * ysync 0009 §5 — the onLoad conversion/compaction point (`compactYdocUpdate`).
- * Exercised exactly as the sync server does: persisted blob in, replacement
- * update (or null = hydrate as-is) out.
+ * Offline/manual conversion and compaction (`compactYdocUpdate`): persisted
+ * blob in, fresh-epoch replacement update (or null = hydrate as-is) out. A
+ * live room must not install that replacement without a replica-generation
+ * fence.
  */
 
 import { describe, expect, it } from "vitest";

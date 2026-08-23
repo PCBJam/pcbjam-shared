@@ -401,7 +401,7 @@ describe("v1 interop (§5)", () => {
     expect(Array.isArray(kicadItemsMap(ydoc).get("seg-1")!.get("body"))).toBe(true);
   });
 
-  it("v1 blob → fresh current-version seed (the onLoad conversion) is lossless", () => {
+  it("v1 blob → fresh current-version seed (offline epoch rewrite) is lossless", () => {
     const v1 = new Y.Doc();
     v1.getMap("kdoc_meta").set(Y_KDOC_SEXPR_VERSION, 1);
     docToY(fileToDoc(BASE), v1);
