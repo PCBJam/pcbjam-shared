@@ -27,6 +27,31 @@ export type GatewayClientMsg =
   | { t: "act"; ch: number }
   | { t: "unsub"; ch: number };
 
+/**
+ * Reserved doc name of the project's FILE-CHANGE channel (project-sync 0002):
+ * a passive-only subscription that carries {@link GatewayFileChange} hints for
+ * writes landing on the files route (CAS PUT, upload, job resave) — the
+ * channel a room-less file like `.kicad_pro` never had. Never dials a relay.
+ */
+export const FILES_DOC_PATH = "~files";
+
+/** One changed project-file row, as carried by a `files` hint. */
+export interface GatewayFileChange {
+  path: string;
+  /** Row revision after the write; 0 with `deleted` for a removed row. */
+  revision: number;
+  deleted?: true;
+  /** Coarse writer class, for UX copy only. */
+  origin: "editor" | "upload" | "job";
+  /** Writer's user slug when a session wrote it; absent for machine writers. */
+  by?: string;
+}
+
+/** Cap on `changes` per `files` frame (project-sync 0002 §1): above it the
+ *  frame carries an empty list and the `seq` gap rule makes the client refetch
+ *  the listing — a mass import is one listing GET, not a giant frame. */
+export const FILES_HINT_MAX_CHANGES = 256;
+
 export type GatewayServerMsg =
   /** The subscription is dead (invalid-file 409, presence-as-readonly 403…).
    *  A 4xx status is terminal for the channel — re-subscribing is the only
@@ -37,7 +62,12 @@ export type GatewayServerMsg =
   | { t: "resync"; ch: number }
   /** The doc changed while this subscriber is passive — mark it dirty and
    *  catch up on the next activate(). */
-  | { t: "touched"; ch: number };
+  | { t: "touched"; ch: number }
+  /** Project files changed on the files route (project-sync 0002). `seq` is
+   *  per-ProjectRoom monotonic: a gap means frames were missed (reconnect,
+   *  or an oversized batch) and the listing must be refetched. Hints are a
+   *  trigger only — never a CAS precondition. */
+  | { t: "files"; ch: number; seq: number; changes: GatewayFileChange[] };
 
 function isChannelId(v: unknown): v is number {
   return typeof v === "number" && Number.isInteger(v) && v >= 0;
@@ -91,7 +121,40 @@ export function parseGatewayServerMsg(text: string): GatewayServerMsg | null {
   }
   if (m.t === "resync") return { t: "resync", ch: m.ch };
   if (m.t === "touched") return { t: "touched", ch: m.ch };
+  if (m.t === "files") {
+    const f = m as { seq?: unknown; changes?: unknown };
+    if (typeof f.seq !== "number" || !Number.isSafeInteger(f.seq) || f.seq < 0) return null;
+    if (!Array.isArray(f.changes)) return null;
+    const changes: GatewayFileChange[] = [];
+    for (const raw of f.changes) {
+      const c = parseGatewayFileChange(raw);
+      if (!c) return null;
+      changes.push(c);
+    }
+    return { t: "files", ch: m.ch, seq: f.seq, changes };
+  }
   return null;
+}
+
+/** Validate one file-change entry; null for anything malformed. */
+export function parseGatewayFileChange(raw: unknown): GatewayFileChange | null {
+  if (raw === null || typeof raw !== "object") return null;
+  const c = raw as {
+    path?: unknown;
+    revision?: unknown;
+    deleted?: unknown;
+    origin?: unknown;
+    by?: unknown;
+  };
+  if (typeof c.path !== "string" || !c.path) return null;
+  if (typeof c.revision !== "number" || !Number.isSafeInteger(c.revision) || c.revision < 0) {
+    return null;
+  }
+  if (c.origin !== "editor" && c.origin !== "upload" && c.origin !== "job") return null;
+  const out: GatewayFileChange = { path: c.path, revision: c.revision, origin: c.origin };
+  if (c.deleted === true) out.deleted = true;
+  if (typeof c.by === "string" && c.by) out.by = c.by;
+  return out;
 }
 
 /** lib0-compatible unsigned varint decode (permissive about non-minimal
