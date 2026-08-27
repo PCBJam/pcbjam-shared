@@ -407,6 +407,22 @@ export function ydocHasState(ydoc: Y.Doc): boolean {
   );
 }
 
+/**
+ * A doc that carries layout/meta but ZERO items and was never seeded (no
+ * `seedNonce`): the footprint left by a layout-only write (`syncLayoutToY`
+ * from a save-all) into a room nobody had entered yet. Such a doc must be
+ * treated as EMPTY by every "adopt the doc" decision — adopting it would
+ * remove every item on the editor's screen — and as "nothing to serve" by
+ * materialization, which would otherwise render a title-block-only file.
+ */
+export function ydocIsHollow(ydoc: Y.Doc): boolean {
+  return (
+    ydocHasState(ydoc) &&
+    kicadItemsMap(ydoc).size === 0 &&
+    ydoc.getMap(Y_KDOC_META).get(Y_KDOC_SEED_NONCE) === undefined
+  );
+}
+
 /** Read the full `KicadDoc` back out of a Y.Doc (validated). */
 export function yToDoc(ydoc: Y.Doc): KicadDoc {
   const root = ydoc.getMap(Y_KDOC_META).get("root") as string;
