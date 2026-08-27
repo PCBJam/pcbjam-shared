@@ -35,6 +35,7 @@
 import * as Y from "yjs";
 import {
   assertKicadDoc,
+  duplicateSingletonHeadIndices,
   kicadItemSchema,
   libSymbolsFromLayout,
   slotFromSexpr,
@@ -726,6 +727,23 @@ export function syncLayoutToY(fileDoc: KicadDoc, ydoc: Y.Doc, origin?: unknown):
   }, origin);
 
   return changed;
+}
+
+/**
+ * Delete repeated singleton header groups from the shared layout (ysync 0011
+ * follow-up): after two whole-layout writers merge, the Y.Array holds the
+ * header block twice. Keeps the first occurrence — the same choice every
+ * renderer makes — so peers running this concurrently delete the same
+ * entries and the doc converges. Returns true if anything was removed.
+ */
+export function repairLayoutY(ydoc: Y.Doc, origin?: unknown): boolean {
+  const layout = ydoc.getArray<Slot>(Y_KDOC_LAYOUT);
+  const dups = duplicateSingletonHeadIndices(layout.toArray());
+  if (!dups.length) return false;
+  ydoc.transact(() => {
+    for (let i = dups.length - 1; i >= 0; i--) layout.delete(dups[i]!, 1);
+  }, origin);
+  return true;
 }
 
 /**

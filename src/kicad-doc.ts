@@ -291,10 +291,74 @@ export function renderItem(doc: Pick<KicadDoc, "items">, uuid: string): string {
   return renderItemInner(doc.items, uuid, new Set());
 }
 
+/**
+ * Top-level `(k …)` forms KiCad writes at most ONCE per file. Two concurrent
+ * whole-layout writers (a layout-only save-sync racing a file seed — ysync
+ * 0011) merge into a layout carrying the header block twice; KiCad's lexer
+ * rejects the second `(version …)` outright ("Expecting … Got version"). Every
+ * renderer keeps the FIRST occurrence of these; `repairLayoutY` deletes the
+ * rest from the shared doc so it converges to one.
+ */
+export const SINGLETON_HEADS: ReadonlySet<string> = new Set([
+  "version",
+  "generator",
+  "generator_version",
+  "uuid",
+  "paper",
+  "page",
+  "title_block",
+  "lib_symbols",
+  "sheet_instances",
+  "symbol_instances",
+  "embedded_fonts",
+  "embedded_files",
+  "general",
+  "layers",
+  "setup",
+]);
+
+/** Singleton heads KiCad writes AFTER the items (everything else precedes them). */
+const TRAILER_HEADS: ReadonlySet<string> = new Set(["sheet_instances", "symbol_instances"]);
+
+/**
+ * Indices of top-level slots that are a REPEAT of a singleton head — the
+ * ones to drop. Empty for a well-formed layout.
+ *
+ * Which copy survives is chosen by KiCad's own file order, not by Y.Array
+ * position (a merge orders the two writers' blocks by clientID, so either
+ * block can come first): a header head keeps its last occurrence BEFORE the
+ * first item slot (the copy that belongs to the block carrying the items —
+ * KiCad's lexer rejects a `(version …)` after items), a trailer head keeps
+ * its last occurrence overall. Deterministic across peers, so concurrent
+ * repairs delete the same entries.
+ */
+export function duplicateSingletonHeadIndices(slots: readonly Slot[]): number[] {
+  const firstItem = slots.findIndex((s) => "item" in s);
+  const keep = new Map<string, number>();
+  const all = new Map<string, number[]>();
+  slots.forEach((s, i) => {
+    if (!("k" in s) || !SINGLETON_HEADS.has(s.k)) return;
+    const list = all.get(s.k) ?? [];
+    list.push(i);
+    all.set(s.k, list);
+    const beforeItems = firstItem < 0 || i < firstItem;
+    if (TRAILER_HEADS.has(s.k) || beforeItems || !keep.has(s.k)) keep.set(s.k, i);
+  });
+  const dups: number[] = [];
+  for (const [k, idxs] of all) {
+    if (idxs.length < 2) continue;
+    const kept = keep.get(k)!;
+    for (const i of idxs) if (i !== kept) dups.push(i);
+  }
+  return dups.sort((x, y) => x - y);
+}
+
 /** Reassemble KiCad s-expr text from a `KicadDoc`, in `layout` order. */
 export function docToFile(doc: KicadDoc): string {
   assertKicadDoc(doc);
-  const inner = renderSlots(doc.layout, doc.items, new Set());
+  const dups = new Set(duplicateSingletonHeadIndices(doc.layout));
+  const layout = dups.size ? doc.layout.filter((_, i) => !dups.has(i)) : doc.layout;
+  const inner = renderSlots(layout, doc.items, new Set());
   return inner.length ? `(${doc.root} ${inner})` : `(${doc.root})`;
 }
 
