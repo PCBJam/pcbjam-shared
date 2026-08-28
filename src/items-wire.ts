@@ -49,6 +49,13 @@ export const itemsWireDeltaSchema = z.object({
   changed: z.array(wireItemSchema).default([]),
   /** uuids; removal cascades over descendants on conversion. */
   removed: z.array(z.string()).default([]),
+  /**
+   * Project-relative path of the sheet this apply belongs to (ysync bug 07,
+   * UP side). The C++ apply runs deferred on whatever screen is active WHEN
+   * IT RUNS; the tool drops an envelope whose sheet is not the shown one
+   * instead of adding another sheet's items to the current screen.
+   */
+  sheet: z.string().optional(),
 });
 export type ItemsWireDelta = z.infer<typeof itemsWireDeltaSchema>;
 
