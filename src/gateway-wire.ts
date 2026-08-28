@@ -67,7 +67,14 @@ export type GatewayServerMsg =
    *  per-ProjectRoom monotonic: a gap means frames were missed (reconnect,
    *  or an oversized batch) and the listing must be refetched. Hints are a
    *  trigger only — never a CAS precondition. */
-  | { t: "files"; ch: number; seq: number; changes: GatewayFileChange[] };
+  | { t: "files"; ch: number; seq: number; changes: GatewayFileChange[] }
+  /** Awareness clients that spoke on this channel through a connection that
+   *  has gone away (collab-presence: ghost peers). Clock-independent
+   *  companion of the synthesized awareness removal frame: the gateway may
+   *  only know a STALE clock for them after a hibernation wake, in which
+   *  case the binary tombstone is rejected by y-protocols — this control
+   *  tells the client to drop the states regardless. */
+  | { t: "gone"; ch: number; clients: number[] };
 
 function isChannelId(v: unknown): v is number {
   return typeof v === "number" && Number.isInteger(v) && v >= 0;
@@ -121,6 +128,16 @@ export function parseGatewayServerMsg(text: string): GatewayServerMsg | null {
   }
   if (m.t === "resync") return { t: "resync", ch: m.ch };
   if (m.t === "touched") return { t: "touched", ch: m.ch };
+  if (m.t === "gone") {
+    const g = m as { clients?: unknown };
+    if (!Array.isArray(g.clients)) return null;
+    const clients: number[] = [];
+    for (const c of g.clients) {
+      if (typeof c !== "number" || !Number.isSafeInteger(c) || c < 0) return null;
+      clients.push(c);
+    }
+    return { t: "gone", ch: m.ch, clients };
+  }
   if (m.t === "files") {
     const f = m as { seq?: unknown; changes?: unknown };
     if (typeof f.seq !== "number" || !Number.isSafeInteger(f.seq) || f.seq < 0) return null;
