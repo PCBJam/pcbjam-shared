@@ -333,6 +333,18 @@ const TRAILER_HEADS: ReadonlySet<string> = new Set(["sheet_instances", "symbol_i
  * repairs delete the same entries.
  */
 export function duplicateSingletonHeadIndices(slots: readonly Slot[]): number[] {
+  // A DOUBLE SEED in flight (bug 06: two clients seeded one fresh room) also
+  // carries every header twice — but each copy belongs to a whole block that
+  // seedNonce LWW arbitration retracts as a unit. Repairing here would delete
+  // one header copy by position and the retractor the other, leaving NO
+  // header when the loser is the earlier block. A double seed is the only
+  // merge that repeats item slots, so leave it to the arbitration.
+  const seenItems = new Set<string>();
+  for (const s of slots) {
+    if (!("item" in s)) continue;
+    if (seenItems.has(s.item)) return [];
+    seenItems.add(s.item);
+  }
   const firstItem = slots.findIndex((s) => "item" in s);
   const keep = new Map<string, number>();
   const all = new Map<string, number[]>();

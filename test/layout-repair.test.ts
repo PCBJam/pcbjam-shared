@@ -67,3 +67,35 @@ describe("duplicated singleton header groups (ysync 0011 follow-up)", () => {
   });
   }
 });
+
+/**
+ * Bug 06 double seed: two clients seeded the same fresh room. Both blocks carry
+ * the header AND the items; `seedNonce` LWW picks the winner and the loser
+ * retracts its whole block. The repair must stay out of that race — deleting a
+ * header copy by position here plus the retraction deleted BOTH copies whenever
+ * the loser was the earlier block (ysync-two-tab "concurrent seed" e2e).
+ */
+describe("double seed is left to seedNonce arbitration", () => {
+  for (const loserFirst of [true, false]) {
+    it(`repairLayoutY is a no-op on a double seed and the retraction leaves one header (loser block ${loserFirst ? "first" : "last"})`, () => {
+      const winner = new Y.Doc();
+      const loser = new Y.Doc();
+      winner.clientID = loserFirst ? 2 : 1;
+      loser.clientID = loserFirst ? 1 : 2;
+      seedDocToY(fileToDoc(FILE), winner, "seed", "nonce-winner");
+      const retract = seedDocToY(fileToDoc(FILE), loser, "seed", "nonce-loser");
+      Y.applyUpdate(winner, Y.encodeStateAsUpdate(loser));
+      Y.applyUpdate(loser, Y.encodeStateAsUpdate(winner));
+
+      expect(duplicateSingletonHeadIndices(yToDoc(winner).layout)).toEqual([]);
+      expect(repairLayoutY(winner, "x")).toBe(false);
+      expect(repairLayoutY(loser, "x")).toBe(false);
+
+      retract();
+      Y.applyUpdate(winner, Y.encodeStateAsUpdate(loser));
+      const text = docToFile(yToDoc(winner));
+      expect((text.match(/\(version /g) ?? []).length).toBe(1);
+      expect(text).toBe(docToFile(fileToDoc(FILE)));
+    });
+  }
+});
