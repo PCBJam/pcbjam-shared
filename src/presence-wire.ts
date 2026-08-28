@@ -36,7 +36,9 @@ export const presenceStateSchema = z.object({
   sheetPath: z.string().optional(),
   /** Pointer position in world coordinates (KiCad internal units, nm);
    *  null = pointer not on the canvas. Published by 0002. */
-  cursor: z.object({ x: z.number(), y: z.number() }).nullable(),
+  // `.finite()` (findings W-4): a ±Infinity cursor would reach the wasm as
+  // JSON null and throw in kicadCollabSetRemote.
+  cursor: z.object({ x: z.number().finite(), y: z.number().finite() }).nullable(),
   /** KIID strings of the client's current selection. Published by 0002. */
   selection: z.array(z.string()),
   /**

@@ -26,9 +26,12 @@ export const commentAnchorSchema = z.object({
   itemUuid: z.string().optional(),
   /** Absolute world position (editor IU) captured at creation — the resting
    *  place for item-less pins and the fallback for detached ones. */
-  pos: z.object({ x: z.number(), y: z.number() }),
+  // `.finite()` (findings W-1): ±Infinity passes plain z.number(), serializes
+  // as JSON null and throws inside the wasm pins bridge. A poisoned thread
+  // drops out here like a NaN one already does.
+  pos: z.object({ x: z.number().finite(), y: z.number().finite() }),
   /** Pin position relative to the anchor item's origin (IU). */
-  offset: z.object({ x: z.number(), y: z.number() }).optional(),
+  offset: z.object({ x: z.number().finite(), y: z.number().finite() }).optional(),
 });
 
 /**

@@ -285,3 +285,45 @@ describe("author identity (display name + email)", () => {
     expect(t.messages[0]).not.toHaveProperty("authorEmail");
   });
 });
+
+// repro for W-1 (findings group W / security audit v3 #11): a non-finite
+// anchor coordinate rides the wire as a plain `z.number()` and resolves
+// unguarded, so downstream JSON.stringify emits `null` into the wasm pins
+// bridge (nlohmann `.value("x", 0.0)` throws type_error.302 on a present null).
+describe("W-1 non-finite anchor coordinates", () => {
+  it("resolveAnchor never yields a non-finite world position (pos-only anchor)", () => {
+    const ydoc = new Y.Doc();
+    const r = resolveAnchor(ydoc, { pos: { x: Infinity, y: NaN } }, 1e6);
+    expect(Number.isFinite(r.x)).toBe(true);
+    expect(Number.isFinite(r.y)).toBe(true);
+  });
+
+  it("resolveAnchor never yields a non-finite world position (detached / overflowing offset)", () => {
+    const ydoc = new Y.Doc();
+    docToY(fileToDoc(BASE), ydoc);
+    // Detached branch: item gone → anchor.pos passthrough.
+    const gone = resolveAnchor(ydoc, { itemUuid: "nope", pos: { x: -Infinity, y: 1 } }, 1e6);
+    expect(Number.isFinite(gone.x) && Number.isFinite(gone.y)).toBe(true);
+    // Tracked branch: finite item mm + non-finite offset.
+    const off = resolveAnchor(
+      ydoc,
+      { itemUuid: "fp-1", pos: { x: 0, y: 0 }, offset: { x: Infinity, y: 0 } },
+      1e6,
+    );
+    expect(Number.isFinite(off.x) && Number.isFinite(off.y)).toBe(true);
+  });
+
+  it("listThreads drops (or sanitizes) a thread whose anchor carries Infinity/NaN", () => {
+    const ydoc = new Y.Doc();
+    const ok = createThread(ydoc, { anchor: { pos: { x: 1, y: 2 } }, author: "a", body: "ok", now: 1 });
+    const bad = createThread(ydoc, { anchor: { pos: { x: 1, y: 2 } }, author: "a", body: "bad", now: 2 });
+    // Poison the anchor the way a raw-Yjs room writer would (bypasses the API).
+    setThreadAnchor(ydoc, bad, { pos: { x: Infinity, y: 0 } });
+    const threads = listThreads(ydoc);
+    expect(threads.some((t) => t.id === ok)).toBe(true);
+    for (const t of threads) {
+      const r = resolveAnchor(ydoc, t.anchor, 1e6);
+      expect(Number.isFinite(r.x) && Number.isFinite(r.y)).toBe(true);
+    }
+  });
+});

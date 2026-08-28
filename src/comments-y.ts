@@ -417,16 +417,26 @@ export function resolveAnchor(
       const y = Number(ys);
 
       if (Number.isFinite(x) && Number.isFinite(y)) {
-        return {
-          x: x * iuPerMm + (anchor.offset?.x ?? 0),
-          y: y * iuPerMm + (anchor.offset?.y ?? 0),
-          detached: false,
-        };
+        return finiteOr(
+          {
+            x: x * iuPerMm + (anchor.offset?.x ?? 0),
+            y: y * iuPerMm + (anchor.offset?.y ?? 0),
+            detached: false,
+          },
+        );
       }
     }
 
-    return { ...anchor.pos, detached: true };
+    return finiteOr({ ...anchor.pos, detached: true });
   }
 
-  return { ...anchor.pos, detached: false };
+  return finiteOr({ ...anchor.pos, detached: false });
+}
+
+/** Findings W-1: a world position must never be non-finite (the wasm pins
+ *  bridge serializes it as JSON null and throws). The `x*iuPerMm + offset`
+ *  product can overflow even when the inputs passed the wire schema; a
+ *  poisoned pin parks at the origin, detached, so it stays deletable. */
+function finiteOr(r: { x: number; y: number; detached: boolean }) {
+  return Number.isFinite(r.x) && Number.isFinite(r.y) ? r : { x: 0, y: 0, detached: true };
 }

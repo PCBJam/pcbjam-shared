@@ -102,3 +102,32 @@ describe("parseProjectTarget", () => {
     });
   });
 });
+
+// repro for W-2 (findings group W / security audit v3 #26): react-router
+// decodes `%2F` in a named param, so a `/%2Fevil.com/projects/x` URL hands the
+// builders scope="/evil.com"; interpolated verbatim that yields the
+// scheme-relative `//evil.com/…`, which window.location.assign treats as a
+// cross-origin navigation (open redirect). Scope/name must be encoded like the
+// free-form file segments already are.
+describe("W-2 scope/name are never interpolated verbatim", () => {
+  it("projectToolPath encodes a slash-prefixed scope (no scheme-relative URL)", () => {
+    const p = projectToolPath("/evil.com", "proj", "calculator");
+    expect(p.startsWith("//")).toBe(false);
+    expect(p).toBe("/%2Fevil.com/projects/proj/-/calculator");
+  });
+
+  it("projectPath / libPath encode scope and name", () => {
+    expect(projectPath("/evil.com", "a/b")).toBe("/%2Fevil.com/projects/a%2Fb");
+    expect(projectPath("/evil.com", "p", "dir/f.kicad_sch")).toBe(
+      "/%2Fevil.com/projects/p/dir/f.kicad_sch",
+    );
+    expect(libPath("/evil.com", "lib")).toBe("/%2Fevil.com/libs/lib");
+  });
+
+  it("well-formed slugs are unchanged (@-prefixed virtual scopes included)", () => {
+    expect(projectPath("@local", "uploaded")).toBe("/@local/projects/uploaded");
+    expect(projectToolPath("my-org.x_1", "proj", "gerbview")).toBe(
+      "/my-org.x_1/projects/proj/-/gerbview",
+    );
+  });
+});

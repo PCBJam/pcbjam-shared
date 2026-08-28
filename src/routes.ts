@@ -67,6 +67,16 @@ export function parseToolParam(value: string | null | undefined): Tool | null {
   return r.success ? r.data : null;
 }
 
+/** Findings W-2: scope/name come back DECODED from the router (`%2F` → `/`),
+ *  so interpolating them verbatim lets `/%2Fevil.com/projects/x` build a
+ *  scheme-relative `//evil.com/…` navigation. Slugs (`[a-z0-9._-]`, optional
+ *  leading `@`) are unchanged by encodeURIComponent. */
+function encSeg(segment: string): string {
+  // `@` (reserved virtual scopes like `@local`) is kept readable; it cannot
+  // form a scheme-relative or path-escaping segment.
+  return encodeURIComponent(segment).replace(/%40/g, "@");
+}
+
 function encPath(filePath: string): string {
   return filePath
     .split("/")
@@ -81,7 +91,7 @@ export function projectPath(
   name: string,
   filePath?: string,
 ): string {
-  const base = `/${scope}/projects/${name}`;
+  const base = `/${encSeg(scope)}/projects/${encSeg(name)}`;
   const rel = filePath ? encPath(filePath) : "";
   return rel ? `${base}/${rel}` : base;
 }
@@ -92,12 +102,12 @@ export function projectToolPath(
   name: string,
   tool: Tool,
 ): string {
-  return `/${scope}/projects/${name}/${TOOL_SEGMENT}/${tool}`;
+  return `/${encSeg(scope)}/projects/${encSeg(name)}/${TOOL_SEGMENT}/${tool}`;
 }
 
 /** `/:scope/libs/:name` — open a library in its kind-appropriate editor. */
 export function libPath(scope: string, name: string): string {
-  return `/${scope}/libs/${name}`;
+  return `/${encSeg(scope)}/libs/${encSeg(name)}`;
 }
 
 /**
