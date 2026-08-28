@@ -17,9 +17,11 @@
  * encoding can't make the two disagree about where the inner frame starts.
  */
 
-/** Subscription mode (0003 §2): passive registers interest only — it receives
- *  awareness and `touched` hints but never doc frames, and can never cause a
- *  BoardRoom relay dial. Active is a real y-protocol participant. */
+/** Subscription mode (0003 §2, amended by 0004 §2.1): passive registers
+ *  interest — it receives awareness and `touched` hints and may PULL the doc's
+ *  at-rest state with SyncStep1 (answered by the gateway from R2 / a live
+ *  room's RPC), but can never cause a BoardRoom relay dial. Active is a real
+ *  y-protocol participant. */
 export type GatewaySubMode = "active" | "passive";
 
 export type GatewayClientMsg =
@@ -61,8 +63,13 @@ export type GatewayServerMsg =
    *  send SyncStep1 so server-side news flows down. */
   | { t: "resync"; ch: number }
   /** The doc changed while this subscriber is passive — mark it dirty and
-   *  catch up on the next activate(). */
+   *  catch up on the next activate() (or pull now with SyncStep1, 0004 §2.2). */
   | { t: "touched"; ch: number }
+  /** The doc's CRDT history was replaced server-side (a runner re-seed after a
+   *  re-upload, an onLoad epoch conversion) and this passive subscriber holds
+   *  clocks the new epoch does not know (0004 §2.3). Merging would duplicate
+   *  the layout: the client must drop its doc and subscribe afresh. */
+  | { t: "reset"; ch: number }
   /** Project files changed on the files route (project-sync 0002). `seq` is
    *  per-ProjectRoom monotonic: a gap means frames were missed (reconnect,
    *  or an oversized batch) and the listing must be refetched. Hints are a
@@ -128,6 +135,7 @@ export function parseGatewayServerMsg(text: string): GatewayServerMsg | null {
   }
   if (m.t === "resync") return { t: "resync", ch: m.ch };
   if (m.t === "touched") return { t: "touched", ch: m.ch };
+  if (m.t === "reset") return { t: "reset", ch: m.ch };
   if (m.t === "gone") {
     const g = m as { clients?: unknown };
     if (!Array.isArray(g.clients)) return null;

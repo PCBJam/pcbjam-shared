@@ -217,3 +217,19 @@ describe("fixture docs survive the Y wire (auto-discovered)", () => {
     });
   }
 });
+
+describe("kicadDocToYdocUpdate (load-path-rework 0004 §2.4)", () => {
+  it("produces a seeded, non-hollow, round-trippable at-rest ydoc", async () => {
+    const { kicadDocToYdocUpdate, ydocIsHollow, Y_KDOC_META, Y_KDOC_SEED_NONCE } =
+      await import("../src/kicad-y.js");
+    const doc = fileToDoc(BASE);
+    const update = kicadDocToYdocUpdate(doc, "runner:test");
+    const ydoc = new Y.Doc();
+    Y.applyUpdate(ydoc, update);
+    expect(ydocHasState(ydoc)).toBe(true);
+    expect(ydocIsHollow(ydoc)).toBe(false);
+    expect(ydoc.getMap(Y_KDOC_META).get(Y_KDOC_SEED_NONCE)).toBe("runner:test");
+    expect(docToFile(yToDoc(ydoc))).toBe(docToFile(doc));
+    expect(docToFile(ydocUpdateToKicadDoc(update))).toBe(docToFile(doc));
+  });
+});

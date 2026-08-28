@@ -290,6 +290,24 @@ export function seedDocToY(
   };
 }
 
+/**
+ * Build a standalone, at-rest ydoc from a `KicadDoc` (load-path-rework 0004
+ * §2.4): the runner installs one for every resaved KiCad document so a file
+ * nobody has opened yet still has a ydoc to y-sync from. Seeds exactly like a
+ * client's file seed — meta + layout + items via `docToY`, `seedNonce`
+ * stamped in the same transaction so the result is never `ydocIsHollow` —
+ * and returns the encoded state (v1 update) ready for `.ydoc` storage.
+ */
+export function kicadDocToYdocUpdate(doc: KicadDoc, nonce: string): Uint8Array {
+  const ydoc = new Y.Doc();
+  try {
+    seedDocToY(doc, ydoc, "seed", nonce);
+    return Y.encodeStateAsUpdate(ydoc);
+  } finally {
+    ydoc.destroy();
+  }
+}
+
 // --- validity revert (kicad-validity 0001 B2) --------------------------------
 // `kdoc_meta` marker a backend writes alongside a validity revert, so clients
 // can surface "this document was rolled back" (observed like seedNonce).

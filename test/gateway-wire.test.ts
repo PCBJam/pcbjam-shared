@@ -76,6 +76,7 @@ describe("gateway control messages", () => {
       { t: "suberr", ch: 2, status: 409, message: "invalid" },
       { t: "resync", ch: 0 },
       { t: "touched", ch: 9 },
+      { t: "reset", ch: 4 },
     ] as const;
     for (const m of msgs) {
       expect(parseGatewayServerMsg(JSON.stringify(m))).toEqual(m);
