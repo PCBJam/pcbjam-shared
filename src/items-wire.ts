@@ -141,6 +141,96 @@ export function unwrapWireItem(text: string): string {
 /** Reports a wire entry a conversion could not resolve to an item and skipped. */
 export type WireSkipHandler = (w: WireItem, err: unknown) => void;
 
+/** 32-bit FNV-1a over `str`, folded from `seed`. */
+function fnv1a(str: string, seed: number): number {
+  let h = seed >>> 0;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h >>> 0;
+}
+
+/**
+ * Deterministic uuid-shaped digest of `ns` (v4/variant nibbles pinned so
+ * KiCad's KIID parser accepts it). Stable across processes — the same
+ * (root, child) collision always re-keys to the same uuid, which is what
+ * makes repeated sends of the same colliding blob idempotent.
+ */
+function deriveUuid(ns: string): string {
+  const h =
+    fnv1a(ns, 0x811c9dc5).toString(16).padStart(8, "0") +
+    fnv1a(ns, 0x9747b28c).toString(16).padStart(8, "0") +
+    fnv1a(ns, 0x2545f491).toString(16).padStart(8, "0") +
+    fnv1a(ns, 0x85ebca6b).toString(16).padStart(8, "0");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
+}
+
+/** Rewrite `{item: X}` refs inside slots per `mapping`, in place. */
+function rewriteSlotRefs(slots: KicadItem["body"], mapping: Map<string, string>): void {
+  for (const s of slots) {
+    if ("item" in s) {
+      const to = mapping.get(s.item);
+      if (to !== undefined) (s as { item: string }).item = to;
+    } else if ("k" in s) {
+      rewriteSlotRefs(s.v, mapping);
+    }
+  }
+}
+
+/**
+ * Guard against cross-parent uuid collisions (sync-delete bug 2026-08-31):
+ * eeschema's copy-paste mints a fresh uuid for the pasted symbol ROOT but
+ * keeps the source symbol's pin/field uuids verbatim. KiCad only needs child
+ * uuids to be unique per parent; the flat uuid-keyed item map needs them
+ * globally unique. Upserting such a blob as-is would overwrite the ORIGINAL
+ * owner's child entries with `parent = <pasted root>` ("stealing" them) — and
+ * a later delete of the pasted root would cascade over the stolen children,
+ * leaving the original's body with dangling refs (docToFile: "missing item",
+ * which froze the pcbnew tab's sibling mirror forever).
+ *
+ * Any flattened NON-ROOT item whose uuid already exists in `current` under a
+ * DIFFERENT parent (outside this subtree) is re-keyed to a deterministic
+ * derived uuid; the subtree's parent links and `{item}` refs follow. The
+ * derivation is a pure function of (root, child), so every conversion of the
+ * same blob re-keys identically — re-sends compare equal and stay no-ops.
+ */
+function rekeyCollidingChildren(
+  flat: { uuid: string; items: Record<string, KicadItem> },
+  current: Record<string, KicadItem>,
+): { uuid: string; items: Record<string, KicadItem> } {
+  const mapping = new Map<string, string>();
+  for (const [id, item] of Object.entries(flat.items)) {
+    if (id === flat.uuid) continue;
+    const old = current[id];
+    if (!old) continue;
+    if (old.parent === item.parent) continue; // same owner — a normal update
+    // The old parent living inside this same subtree means the item moved
+    // within its own root's structure, not across owners.
+    if (old.parent !== null && old.parent in flat.items) continue;
+    let candidate = deriveUuid(`${flat.uuid}:${id}`);
+    for (
+      let salt = 1;
+      candidate in flat.items ||
+      (candidate in current && current[candidate]!.parent !== item.parent);
+      salt++
+    ) {
+      candidate = deriveUuid(`${flat.uuid}:${id}:${salt}`);
+    }
+    mapping.set(id, candidate);
+  }
+  if (mapping.size === 0) return flat;
+
+  const items: Record<string, KicadItem> = {};
+  for (const [id, item] of Object.entries(flat.items)) {
+    const newParent = item.parent !== null ? (mapping.get(item.parent) ?? item.parent) : null;
+    if (newParent !== item.parent) item.parent = newParent;
+    rewriteSlotRefs(item.body, mapping);
+    items[mapping.get(id) ?? id] = item;
+  }
+  return { uuid: flat.uuid, items };
+}
+
 /**
  * Convert a bridge items-wire delta into a `KicadDelta` against the `current`
  * item set (typically the Y.Doc's items). Pure; exact subtree reconciliation:
@@ -171,7 +261,7 @@ export function itemsWireToDelta(
       onSkip?.(w, err);
       return;
     }
-    const { uuid, items } = flat;
+    const { uuid, items } = rekeyCollidingChildren(flat, current);
     // Previous subtree members (known to `current`) that the new flatten no
     // longer contains have been deleted inside this item.
     const stale = new Set(

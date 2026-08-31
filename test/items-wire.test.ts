@@ -272,3 +272,81 @@ describe("wire schema", () => {
     expect(isEmptyItemsWireDelta(parseItemsWireDelta("{}"))).toBe(true);
   });
 });
+
+describe("uuid collision — paste keeps source child uuids (sync-delete bug 2026-08-31)", () => {
+  // eeschema's copy-paste mints a fresh uuid for the pasted symbol ROOT but
+  // keeps the source symbol's pin/field uuids verbatim. Upserting such a blob
+  // used to overwrite the original's child entries with parent=<pasted root>
+  // ("stealing" them); deleting the pasted root then cascade-removed the
+  // shared children, leaving the ORIGINAL's body with dangling refs and
+  // docToFile throwing "missing item" forever.
+  const PASTED = `(footprint "lib:R" (layer "F.Cu") (uuid "fp-2") (at 50 50)
+  (property "Reference" "R2" (at 0 -2) (uuid "fld-1"))
+  (pad "1" smd (at 0 0) (uuid "pad-1")))`;
+
+  function pasteDelta(cur = current()) {
+    return itemsWireToDelta(
+      parseItemsWireDelta(JSON.stringify({ added: [{ sexpr: PASTED }] })),
+      cur,
+    );
+  }
+
+  it("does not re-parent the original's children", () => {
+    const d = pasteDelta();
+    // fld-1/pad-1 belong to fp-1 — no update may touch them.
+    expect(d.updated).toEqual([]);
+    expect(d.removed).toEqual([]);
+    for (const it of d.added) {
+      expect(["fld-1", "pad-1"]).not.toContain(it.uuid);
+    }
+  });
+
+  it("re-keys the colliding children deterministically under the pasted root", () => {
+    const d1 = pasteDelta();
+    const d2 = pasteDelta();
+    const kids1 = d1.added.filter((i) => i.parent === "fp-2").map((i) => i.uuid).sort();
+    const kids2 = d2.added.filter((i) => i.parent === "fp-2").map((i) => i.uuid).sort();
+    expect(kids1).toHaveLength(2);
+    expect(kids1).toEqual(kids2); // deterministic across conversions
+    // the root's body references the re-keyed uuids, never the originals
+    const root = d1.added.find((i) => i.uuid === "fp-2")!;
+    const body = JSON.stringify(root.body);
+    for (const k of kids1) expect(body).toContain(k);
+    expect(body).not.toContain('"item":"pad-1"');
+    expect(body).not.toContain('"item":"fld-1"');
+  });
+
+  it("a re-send after apply is an empty delta (idempotent)", () => {
+    const cur = current();
+    const d1 = itemsWireToDelta(
+      parseItemsWireDelta(JSON.stringify({ added: [{ sexpr: PASTED }] })),
+      cur,
+    );
+    for (const it of d1.added) cur[it.uuid] = { type: it.type, parent: it.parent, body: it.body };
+    const d2 = itemsWireToDelta(
+      parseItemsWireDelta(JSON.stringify({ changed: [{ sexpr: PASTED }] })),
+      cur,
+    );
+    expect(d2.added).toEqual([]);
+    expect(d2.updated).toEqual([]);
+    expect(d2.removed).toEqual([]);
+  });
+
+  it("deleting the pasted root spares the original's children", () => {
+    const cur = current();
+    const d1 = itemsWireToDelta(
+      parseItemsWireDelta(JSON.stringify({ added: [{ sexpr: PASTED }] })),
+      cur,
+    );
+    for (const it of d1.added) cur[it.uuid] = { type: it.type, parent: it.parent, body: it.body };
+    const d2 = itemsWireToDelta(
+      parseItemsWireDelta(JSON.stringify({ removed: ["fp-2"] })),
+      cur,
+    );
+    expect(d2.removed).not.toContain("pad-1");
+    expect(d2.removed).not.toContain("fld-1");
+    // it does remove the pasted root and its re-keyed children
+    expect(d2.removed).toContain("fp-2");
+    expect(d2.removed).toHaveLength(3);
+  });
+});

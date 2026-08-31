@@ -254,34 +254,58 @@ export function sexprToItems(
 
 // ── Render: KicadDoc → file text ─────────────────────────────────────────────
 
+/**
+ * Rendering tolerance for docs that carry a dangling `{item}` ref (a removed
+ * item some surviving body still names — the 2026-08-31 sync-delete
+ * corruption). With `onMissingItem` set the slot renders as nothing and the
+ * uuid is reported; without it, a missing item still THROWS — write gates and
+ * seeds must stay strict so corruption is loud where it can be rejected.
+ */
+export interface RenderDocOptions {
+  onMissingItem?: (uuid: string) => void;
+}
+
 function renderSlots(
   slots: Slot[],
   items: Record<string, KicadItem>,
   seen: Set<string>,
+  opts?: RenderDocOptions,
 ): string {
-  return slots.map((s) => renderSlot(s, items, seen)).join(" ");
+  return slots
+    .map((s) => renderSlot(s, items, seen, opts))
+    .filter((s) => s.length > 0)
+    .join(" ");
 }
 
 function renderSlot(
   slot: Slot,
   items: Record<string, KicadItem>,
   seen: Set<string>,
+  opts?: RenderDocOptions,
 ): string {
   if ("atom" in slot) return slot.atom;
-  if ("item" in slot) return renderItemInner(items, slot.item, seen);
-  return slot.v.length ? `(${slot.k} ${renderSlots(slot.v, items, seen)})` : `(${slot.k})`;
+  if ("item" in slot) {
+    if (!items[slot.item] && opts?.onMissingItem) {
+      opts.onMissingItem(slot.item);
+      return "";
+    }
+    return renderItemInner(items, slot.item, seen, opts);
+  }
+  const inner = renderSlots(slot.v, items, seen, opts);
+  return inner.length ? `(${slot.k} ${inner})` : `(${slot.k})`;
 }
 
 function renderItemInner(
   items: Record<string, KicadItem>,
   uuid: string,
   seen: Set<string>,
+  opts?: RenderDocOptions,
 ): string {
   if (seen.has(uuid)) throw new Error(`renderItem: cycle through item ${uuid}`);
   const item = items[uuid];
   if (!item) throw new Error(`renderItem: missing item ${uuid}`);
   seen.add(uuid);
-  const inner = renderSlots(item.body, items, seen);
+  const inner = renderSlots(item.body, items, seen, opts);
   seen.delete(uuid);
   return inner.length ? `(${item.type} ${inner})` : `(${item.type})`;
 }
@@ -366,11 +390,11 @@ export function duplicateSingletonHeadIndices(slots: readonly Slot[]): number[] 
 }
 
 /** Reassemble KiCad s-expr text from a `KicadDoc`, in `layout` order. */
-export function docToFile(doc: KicadDoc): string {
+export function docToFile(doc: KicadDoc, opts?: RenderDocOptions): string {
   assertKicadDoc(doc);
   const dups = new Set(duplicateSingletonHeadIndices(doc.layout));
   const layout = dups.size ? doc.layout.filter((_, i) => !dups.has(i)) : doc.layout;
-  const inner = renderSlots(layout, doc.items, new Set());
+  const inner = renderSlots(layout, doc.items, new Set(), opts);
   return inner.length ? `(${doc.root} ${inner})` : `(${doc.root})`;
 }
 

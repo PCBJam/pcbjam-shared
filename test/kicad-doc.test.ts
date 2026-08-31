@@ -145,3 +145,42 @@ describe("kicad file ⇄ doc round trip (real fixtures)", () => {
     });
   }
 });
+
+describe("docToFile with dangling item refs (sync-delete bug 2026-08-31)", () => {
+  // A doc corrupted by a cross-parent uuid steal + cascade delete carries
+  // {item} slots pointing at removed entries. Strict rendering throws (write
+  // gates keep that); a renderer given onMissingItem drops the slot and
+  // reports it, so a stale-frozen mirror can self-heal instead of freezing.
+  function corrupted() {
+    const doc = fileToDoc(
+      `(kicad_pcb (footprint "lib:R" (layer "F.Cu") (uuid "fp-1") (at 10 10)
+        (pad "1" smd (at 0 0) (uuid "pad-1"))))`,
+    );
+    delete doc.items["pad-1"]; // fp-1's body still holds {item: pad-1}
+    return doc;
+  }
+
+  it("throws without a handler (unchanged strict default)", () => {
+    expect(() => docToFile(corrupted())).toThrow(/missing item pad-1/);
+  });
+
+  it("drops the dangling slot and reports it with onMissingItem", () => {
+    const missing: string[] = [];
+    const text = docToFile(corrupted(), { onMissingItem: (u) => missing.push(u) });
+    expect(missing).toEqual(["pad-1"]);
+    expect(text).toContain('(uuid "fp-1")');
+    expect(text).not.toContain("pad-1");
+    // still a parseable doc
+    expect(() => fileToDoc(text)).not.toThrow();
+  });
+
+  it("handles a dangling ref directly in the layout", () => {
+    const doc = fileToDoc(`(kicad_pcb (segment (start 0 0) (end 1 1) (uuid "seg-1")))`);
+    doc.layout.push({ item: "ghost-1" });
+    expect(() => docToFile(doc)).toThrow(/missing item ghost-1/);
+    const missing: string[] = [];
+    const text = docToFile(doc, { onMissingItem: (u) => missing.push(u) });
+    expect(missing).toEqual(["ghost-1"]);
+    expect(text).toContain('(uuid "seg-1")');
+  });
+});

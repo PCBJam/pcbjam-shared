@@ -10,6 +10,7 @@ import {
   yToDoc,
 } from "../src/kicad-y.js";
 import { docToFile, fileToDoc, renderItem, type Slot } from "../src/kicad-doc.js";
+import { itemsWireToDelta, parseItemsWireDelta } from "../src/items-wire.js";
 
 /**
  * Reproduction tests for the 2026-07-02 ysync review — shared-lib bugs
@@ -154,5 +155,56 @@ describe("bug 06 — concurrent first-seed, arbitrated (seedDocToY)", () => {
     const layout = s.a.getArray<Slot>(Y_KDOC_LAYOUT).toArray();
     expect(layout.filter((x) => "item" in x && x.item === "fp-1")).toHaveLength(1);
     expect(layout.filter((x) => "item" in x && x.item === "seg-2")).toHaveLength(1);
+  });
+});
+
+describe("2026-08-31 sync-delete bug: paste-collision steal + cascade delete", () => {
+  // End-to-end shape of the field failure (Arduino Leonardo Power sheet):
+  // the pasted symbol's blob reuses the ORIGINAL symbol's pin uuids. The
+  // upsert must not steal the original's children into the pasted root —
+  // otherwise deleting the pasted root cascade-removes the shared pins and
+  // the original's body dangles, making every docToFile of the doc throw
+  // ("missing item") and freezing the pcbnew tab's sibling mirror forever.
+  const SCH = `(kicad_sch
+  (version 20250114)
+  (symbol (lib_id "Device:R_Pack04_Split") (at 10 10 0) (uuid "sym-orig")
+    (property "Reference" "RN2" (at 0 0 0) (uuid "fld-orig"))
+    (pin "1" (uuid "pin-a"))
+    (pin "2" (uuid "pin-b")))
+)`;
+  // Pasted copy: fresh root uuid, SAME pin uuids (real eeschema paste blob shape).
+  const PASTED = `(symbol (lib_id "Device:R_Pack04_Split") (at 50 50 0) (uuid "sym-paste")
+    (property "Reference" "RN4" (at 0 0 0) (uuid "fld-paste"))
+    (pin "1" (uuid "pin-a"))
+    (pin "2" (uuid "pin-b")))`;
+
+  it("paste then delete leaves a renderable doc with the original intact", () => {
+    const ydoc = new Y.Doc();
+    seedDocToY(fileToDoc(SCH), ydoc, "seed", "test-nonce");
+
+    // paste arrives over the wire
+    const cur1 = yToDoc(ydoc).items;
+    const paste = itemsWireToDelta(
+      parseItemsWireDelta(JSON.stringify({ added: [{ sexpr: PASTED }] })),
+      cur1,
+    );
+    applyDeltaToY(ydoc, paste, "local-edit");
+
+    // the editor deletes the pasted symbol; the wire carries the root uuid,
+    // conversion cascades over the doc's recorded descendants
+    const cur2 = yToDoc(ydoc).items;
+    const del = itemsWireToDelta(
+      parseItemsWireDelta(JSON.stringify({ removed: ["sym-paste"] })),
+      cur2,
+    );
+    applyDeltaToY(ydoc, del, "local-edit");
+
+    // the doc must still render, and the original keeps both pins
+    const doc = yToDoc(ydoc);
+    const text = docToFile(doc); // used to throw: renderItem: missing item pin-a
+    expect(text).toContain('(uuid "sym-orig")');
+    expect(text).toContain('(uuid "pin-a")');
+    expect(text).toContain('(uuid "pin-b")');
+    expect(text).not.toContain("sym-paste");
   });
 });
