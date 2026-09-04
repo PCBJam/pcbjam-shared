@@ -34,6 +34,12 @@ export const presenceStateSchema = z.object({
    * presence-driven sibling restage).
    */
   sheetPath: z.string().optional(),
+  /**
+   * Hidden-tab policy (do-observability 0001 §B): the tab has been in the
+   * background for a while — the user is not looking. Rosters dim the entry;
+   * nothing else changes. Optional so states from older builds validate.
+   */
+  away: z.boolean().optional(),
   /** Pointer position in world coordinates (KiCad internal units, nm);
    *  null = pointer not on the canvas. Published by 0002. */
   // `.finite()` (findings W-4): a ±Infinity cursor would reach the wasm as
