@@ -142,6 +142,11 @@ export const contract = c.router(
       method: "GET",
       path: "/api/scopes/:scope/collaborators",
       pathParams: z.object({ scope: z.string() }),
+      // `project` (comments-ux 0003): scope the roster to one project — the
+      // team's members PLUS that project's commenters, each with `role`; a
+      // commenter of that project may call it too (they need the roster to
+      // @-mention the owner). Without it: members only, as before.
+      query: z.object({ project: z.string().optional() }),
       responses: {
         200: z.array(collaboratorSchema),
         401: errorBody,

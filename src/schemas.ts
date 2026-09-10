@@ -164,6 +164,24 @@ export const projectFileSchema = z.object({
 });
 export type ProjectFile = z.infer<typeof projectFileSchema>;
 
+/**
+ * The caller's capability on a project, as the editor gates on it
+ * (comments-ux 0003): "read" = pure viewer, "comment" = viewer who may write
+ * comments through the comment-op route, "write" = editor. Owner vs editor
+ * is indistinguishable inside the editor, so this is deliberately narrower
+ * than {@link projectRoleSchema}.
+ */
+export const projectAccessSchema = z.enum(["read", "comment", "write"]);
+export type ProjectAccess = z.infer<typeof projectAccessSchema>;
+
+/**
+ * Ordered project roles (comments-ux 0003). Shape only — how a backend
+ * resolves a role (team membership, per-project grants, visibility) stays
+ * closed. `reader < commenter < editor < owner`.
+ */
+export const projectRoleSchema = z.enum(["reader", "commenter", "editor", "owner"]);
+export type ProjectRole = z.infer<typeof projectRoleSchema>;
+
 export const projectWithFiles = z.object({
   project: projectSchema,
   files: z.array(projectFileSchema),
@@ -175,7 +193,7 @@ export const projectWithFiles = z.object({
    * descriptor like `LayerDescriptor.writable`, not authz policy: how it is
    * computed stays in the closed application layer.
    */
-  access: z.enum(["read", "write"]).optional(),
+  access: projectAccessSchema.optional(),
 });
 export type ProjectWithFiles = z.infer<typeof projectWithFiles>;
 
@@ -194,6 +212,12 @@ export const collaboratorSchema = z.object({
   slug: z.string(),
   name: z.string(),
   image: z.string().optional(),
+  /**
+   * The collaborator's project role when the roster was asked for a specific
+   * project (`?project=`, comments-ux 0003) — lets the UI mark commenters.
+   * Optional: scope-wide rosters and older backends omit it.
+   */
+  role: projectRoleSchema.optional(),
 });
 export type Collaborator = z.infer<typeof collaboratorSchema>;
 
