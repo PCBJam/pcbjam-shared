@@ -232,6 +232,11 @@ export function applyCommentOp(
           outcome = { ok: false, code: "message-missing" };
           return;
         }
+        // Tombstones (moderation) are inert below the moderator role.
+        if (msg.moderation && actor.role !== "moderator") {
+          outcome = { ok: false, code: "not-own" };
+          return;
+        }
         if (actor.role === "commenter" && msg.author !== actor.slug) {
           outcome = { ok: false, code: "not-own" };
           return;

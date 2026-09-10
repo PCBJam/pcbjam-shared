@@ -75,6 +75,13 @@ export const commentMessageSchema = z.object({
   /** ms epoch, client clock — ordering + display only. */
   createdAt: z.number(),
   editedAt: z.number().optional(),
+  /**
+   * Tombstone marker (comments-ux 0003 §6): "removed" = a moderator removed
+   * this message (author kept, body replaced); "banned-author" = the author
+   * was banned (author and body replaced). Optional — legacy messages carry
+   * none; new clients render tombstones muted and inert.
+   */
+  moderation: z.enum(["removed", "banned-author"]).optional(),
 });
 
 export const commentThreadSchema = z.object({
