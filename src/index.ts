@@ -29,6 +29,7 @@ export * from "./presence-wire.js";
 export * from "./presence-colors.js";
 export * from "./comments-wire.js";
 export * from "./comments-y.js";
+export * from "./comment-ops.js";
 
 const c = initContract();
 
