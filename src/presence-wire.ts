@@ -73,6 +73,14 @@ export const presenceStateSchema = z.object({
     .optional(),
   /** ms epoch of the last field change (display-only, e.g. stale fadeout). */
   updatedAt: z.number(),
+  /**
+   * Commenter presence (comments-ux 0003 §5.2): a reviewer's state carries
+   * `role: "commenter"`, SERVER-VERIFIED — the sync worker drops a
+   * commenter connection's frames without it and an editor's frames with
+   * it — so peers can trust it: reviewer selections never become soft-locks
+   * and render in their own style. Absent = editor (old builds validate).
+   */
+  role: z.enum(["commenter"]).optional(),
 });
 
 export type PresenceUser = z.infer<typeof presenceUserSchema>;
