@@ -35,7 +35,9 @@
 import * as Y from "yjs";
 import {
   assertKicadDoc,
-  duplicateSingletonHeadIndices,
+  duplicateLayoutIndices,
+  missingRootInsertIndex,
+  unreferencedRoots,
   kicadItemSchema,
   libSymbolsFromLayout,
   slotFromSexpr,
@@ -774,18 +776,68 @@ export function syncLayoutToY(fileDoc: KicadDoc, ydoc: Y.Doc, origin?: unknown):
 }
 
 /**
- * Delete repeated singleton header groups from the shared layout (ysync 0011
- * follow-up): after two whole-layout writers merge, the Y.Array holds the
- * header block twice. Keeps the first occurrence — the same choice every
- * renderer makes — so peers running this concurrently delete the same
- * entries and the doc converges. Returns true if anything was removed.
+ * Insertion client of every live slot in a Y.Array, by index (walks the item
+ * chain like `seedDocToY`'s retractor — internal yjs structures stable across
+ * the pinned major, covered by the layout-repair tests).
+ */
+function arraySlotClients<T>(arr: Y.Array<T>): number[] {
+  interface YItemNode {
+    id: { client: number; clock: number };
+    length: number;
+    deleted: boolean;
+    countable: boolean;
+    right: YItemNode | null;
+  }
+  const out: number[] = [];
+  let node = (arr as unknown as { _start: YItemNode | null })._start;
+  for (; node; node = node.right) {
+    if (node.deleted || !node.countable) continue;
+    for (let i = 0; i < node.length; i++) out.push(node.id.client);
+  }
+  return out;
+}
+
+/** The client whose seed won `seedNonce` arbitration (`${clientID}:…`), if any. */
+function seedWinnerClient(ydoc: Y.Doc): number | undefined {
+  const nonce = ydoc.getMap(Y_KDOC_META).get(Y_KDOC_SEED_NONCE);
+  const m = typeof nonce === "string" ? /^(\d+):/.exec(nonce) : null;
+  return m ? Number(m[1]) : undefined;
+}
+
+/**
+ * Converge the shared layout to the renderer's normalized form (ysync 0011
+ * follow-up + 0012 #3): delete repeated slots — singleton header groups after
+ * two whole-layout writers merged, `{item}` refs two replicas inserted for the
+ * same root, a double seed's second block — and append a ref for any root the
+ * item map holds but the layout lost. Which duplicate survives follows
+ * `duplicateLayoutIndices` with the seed winner's provenance, so peers (and the
+ * losing seeder's own retractor) delete the same entries and the doc converges
+ * even when the loser disconnected before retracting. Returns true if anything
+ * changed.
  */
 export function repairLayoutY(ydoc: Y.Doc, origin?: unknown): boolean {
   const layout = ydoc.getArray<Slot>(Y_KDOC_LAYOUT);
-  const dups = duplicateSingletonHeadIndices(layout.toArray());
-  if (!dups.length) return false;
+  const slots = layout.toArray();
+  const dups = duplicateLayoutIndices(slots, {
+    clients: arraySlotClients(layout),
+    winner: seedWinnerClient(ydoc),
+  });
+  const items: Record<string, KicadItem> = {};
+  kicadItemsMap(ydoc).forEach((ym, uuid) => {
+    items[uuid] = { type: "", parent: (ym.get("parent") ?? null) as string | null, body: [] };
+  });
+  const dupSet = new Set(dups);
+  const kept = dups.length ? slots.filter((_, i) => !dupSet.has(i)) : slots;
+  const missing = unreferencedRoots({ items, layout: kept });
+  if (!dups.length && !missing.length) return false;
   ydoc.transact(() => {
     for (let i = dups.length - 1; i >= 0; i--) layout.delete(dups[i]!, 1);
+    if (missing.length) {
+      layout.insert(
+        missingRootInsertIndex(layout.toArray()),
+        missing.map((uuid): Slot => ({ item: uuid })),
+      );
+    }
   }, origin);
   return true;
 }

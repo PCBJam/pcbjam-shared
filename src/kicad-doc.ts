@@ -345,56 +345,148 @@ export const SINGLETON_HEADS: ReadonlySet<string> = new Set([
 const TRAILER_HEADS: ReadonlySet<string> = new Set(["sheet_instances", "symbol_instances"]);
 
 /**
- * Indices of top-level slots that are a REPEAT of a singleton head — the
- * ones to drop. Empty for a well-formed layout.
- *
- * Which copy survives is chosen by KiCad's own file order, not by Y.Array
- * position (a merge orders the two writers' blocks by clientID, so either
- * block can come first): a header head keeps its last occurrence BEFORE the
- * first item slot (the copy that belongs to the block carrying the items —
- * KiCad's lexer rejects a `(version …)` after items), a trailer head keeps
- * its last occurrence overall. Deterministic across peers, so concurrent
- * repairs delete the same entries.
+ * Provenance a repair can use to pick the surviving copy of a duplicated slot
+ * (ysync 0012 #3): `clients[i]` is the Y client that inserted slot `i`, and
+ * `winner` the client whose seed won `seedNonce` arbitration (the nonce is
+ * `${clientID}:…`). With both, every copy the winner inserted survives and the
+ * other clients' repeats are dropped — exactly what the loser's own retractor
+ * would delete, so repair and retraction never remove BOTH copies, and a loser
+ * that disconnected before retracting is healed by any peer or the server.
  */
-export function duplicateSingletonHeadIndices(slots: readonly Slot[]): number[] {
-  // A DOUBLE SEED in flight (bug 06: two clients seeded one fresh room) also
-  // carries every header twice — but each copy belongs to a whole block that
-  // seedNonce LWW arbitration retracts as a unit. Repairing here would delete
-  // one header copy by position and the retractor the other, leaving NO
-  // header when the loser is the earlier block. A double seed is the only
-  // merge that repeats item slots, so leave it to the arbitration.
+export interface LayoutProvenance {
+  clients?: readonly number[];
+  winner?: number;
+}
+
+/**
+ * Indices of top-level slots that are a REPEAT of something already in the
+ * layout — the ones to drop. Empty for a well-formed layout. Repeats are:
+ *  - a singleton head (`SINGLETON_HEADS`) occurring more than once;
+ *  - an `{item}` ref occurring more than once (two replicas restoring the same
+ *    root concurrently, or a double seed) — root MEMBERSHIP is the item map's,
+ *    the layout's refs are an order hint, so each root renders exactly once;
+ *  - while item refs repeat (the double-seed signature: whole blocks merged),
+ *    any other `(k …)` slot that is byte-identical to an earlier one (pcbnew's
+ *    `(net …)` table, for instance — a whole-block duplicate, never content).
+ *
+ * Which copy survives: the seed winner's, when provenance says so (see
+ * `LayoutProvenance`); otherwise KiCad's own file order, not Y.Array position
+ * (a merge orders the two writers' blocks by clientID, so either block can
+ * come first): a header head keeps its last occurrence BEFORE the first item
+ * slot (the copy that belongs to the block carrying the items — KiCad's lexer
+ * rejects a `(version …)` after items), a trailer head keeps its last
+ * occurrence overall, an item ref / plain slot keeps its first. Deterministic
+ * across peers, so concurrent repairs delete the same entries.
+ */
+export function duplicateLayoutIndices(
+  slots: readonly Slot[],
+  prov?: LayoutProvenance,
+): number[] {
+  const firstItem = slots.findIndex((s) => "item" in s);
   const seenItems = new Set<string>();
+  let repeatedItems = false;
   for (const s of slots) {
     if (!("item" in s)) continue;
-    if (seenItems.has(s.item)) return [];
+    if (seenItems.has(s.item)) repeatedItems = true;
     seenItems.add(s.item);
   }
-  const firstItem = slots.findIndex((s) => "item" in s);
-  const keep = new Map<string, number>();
+  // identity key → occurrence indices
   const all = new Map<string, number[]>();
   slots.forEach((s, i) => {
-    if (!("k" in s) || !SINGLETON_HEADS.has(s.k)) return;
-    const list = all.get(s.k) ?? [];
+    let key: string;
+    if ("item" in s) key = `item:${s.item}`;
+    else if ("k" in s && SINGLETON_HEADS.has(s.k)) key = `head:${s.k}`;
+    else if ("k" in s && repeatedItems) key = `slot:${JSON.stringify(s)}`;
+    else return;
+    const list = all.get(key) ?? [];
     list.push(i);
-    all.set(s.k, list);
-    const beforeItems = firstItem < 0 || i < firstItem;
-    if (TRAILER_HEADS.has(s.k) || beforeItems || !keep.has(s.k)) keep.set(s.k, i);
+    all.set(key, list);
   });
   const dups: number[] = [];
-  for (const [k, idxs] of all) {
+  for (const [key, idxs] of all) {
     if (idxs.length < 2) continue;
-    const kept = keep.get(k)!;
+    let candidates = idxs;
+    if (prov?.winner !== undefined && prov.clients) {
+      const mine = idxs.filter((i) => prov.clients![i] === prov.winner);
+      if (mine.length) candidates = mine;
+    }
+    let kept: number;
+    if (key.startsWith("head:")) {
+      const head = key.slice(5);
+      if (TRAILER_HEADS.has(head)) {
+        kept = candidates[candidates.length - 1]!;
+      } else {
+        const before = candidates.filter((i) => firstItem < 0 || i < firstItem);
+        kept = before.length ? before[before.length - 1]! : candidates[candidates.length - 1]!;
+      }
+    } else {
+      kept = candidates[0]!;
+    }
     for (const i of idxs) if (i !== kept) dups.push(i);
   }
   return dups.sort((x, y) => x - y);
 }
 
+/** @deprecated name kept for callers; see `duplicateLayoutIndices`. */
+export const duplicateSingletonHeadIndices = duplicateLayoutIndices;
+
+/**
+ * Root items (`parent === null`) not referenced by any `{item}` slot in the
+ * layout tree (top level or nested inside `(k …)` slots such as `lib_symbols`).
+ * Membership truth is the item map (ysync 0012 #3): a root whose ref was lost
+ * to a concurrent layout delete still exists and must still render.
+ */
+export function unreferencedRoots(doc: Pick<KicadDoc, "items" | "layout">): string[] {
+  const referenced = new Set<string>();
+  const walk = (slots: readonly Slot[]): void => {
+    for (const s of slots) {
+      if ("item" in s) referenced.add(s.item);
+      else if ("k" in s) walk(s.v);
+    }
+  };
+  walk(doc.layout);
+  return Object.keys(doc.items).filter(
+    (uuid) => doc.items[uuid]!.parent === null && !referenced.has(uuid),
+  );
+}
+
+/**
+ * Where a root ref that is missing from the layout belongs: after the last
+ * existing item slot; else before the first trailer head; else the end.
+ */
+export function missingRootInsertIndex(slots: readonly Slot[]): number {
+  for (let i = slots.length - 1; i >= 0; i--) {
+    if ("item" in slots[i]!) return i + 1;
+  }
+  const trailer = slots.findIndex((s) => "k" in s && TRAILER_HEADS.has(s.k));
+  return trailer < 0 ? slots.length : trailer;
+}
+
+/**
+ * The layout as a renderer walks it: repeated slots dropped
+ * (`duplicateLayoutIndices`) and unreferenced roots appended once
+ * (`unreferencedRoots`) — the read-side normalization every renderer and
+ * repair agrees on, so a layout carrying merge artifacts still renders each
+ * root exactly once.
+ */
+export function normalizedLayout(doc: Pick<KicadDoc, "items" | "layout">): Slot[] {
+  const dups = new Set(duplicateLayoutIndices(doc.layout));
+  const layout = dups.size ? doc.layout.filter((_, i) => !dups.has(i)) : [...doc.layout];
+  const missing = unreferencedRoots({ items: doc.items, layout });
+  if (missing.length) {
+    layout.splice(
+      missingRootInsertIndex(layout),
+      0,
+      ...missing.map((uuid): Slot => ({ item: uuid })),
+    );
+  }
+  return layout;
+}
+
 /** Reassemble KiCad s-expr text from a `KicadDoc`, in `layout` order. */
 export function docToFile(doc: KicadDoc, opts?: RenderDocOptions): string {
   assertKicadDoc(doc);
-  const dups = new Set(duplicateSingletonHeadIndices(doc.layout));
-  const layout = dups.size ? doc.layout.filter((_, i) => !dups.has(i)) : doc.layout;
-  const inner = renderSlots(layout, doc.items, new Set(), opts);
+  const inner = renderSlots(normalizedLayout(doc), doc.items, new Set(), opts);
   return inner.length ? `(${doc.root} ${inner})` : `(${doc.root})`;
 }
 
