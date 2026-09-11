@@ -252,6 +252,13 @@ export function itemsWireToDelta(
 ): KicadDelta {
   const delta = emptyKicadDelta();
   const children = childrenIndex(current); // once per conversion, not per item (opt 12)
+  // The collision view (ysync 0012 #6): `current` plus every entry this batch
+  // has already produced. Two roots emitted in ONE batch can carry the same
+  // child uuid (eeschema keeps pin/field uuids on paste natively, so pasting
+  // two earlier copies of a symbol together does exactly that); checking only
+  // `current` let the second root steal the first's child, and deleting it
+  // later cascaded over the child and left the first root dangling.
+  const working: Record<string, KicadItem> = { ...current };
 
   const upsert = (w: WireItem): void => {
     let flat: ReturnType<typeof sexprToItems>;
@@ -261,7 +268,7 @@ export function itemsWireToDelta(
       onSkip?.(w, err);
       return;
     }
-    const { uuid, items } = rekeyCollidingChildren(flat, current);
+    const { uuid, items } = rekeyCollidingChildren(flat, working);
     // Previous subtree members (known to `current`) that the new flatten no
     // longer contains have been deleted inside this item.
     const stale = new Set(
@@ -272,7 +279,9 @@ export function itemsWireToDelta(
       if (!old) delta.added.push({ uuid: id, ...item });
       else if (!sameKicadItem(old, item)) delta.updated.push({ uuid: id, ...item });
       stale.delete(id);
+      working[id] = item;
     }
+    for (const id of stale) delete working[id];
     delta.removed.push(...stale);
   };
 

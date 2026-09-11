@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import * as Y from "yjs";
 import {
   deltaToItemsWire,
   descendants,
@@ -7,7 +8,8 @@ import {
   parseItemsWireDelta,
   wireItemUuids,
 } from "../src/items-wire.js";
-import { fileToDoc } from "../src/kicad-doc.js";
+import { docToFile, fileToDoc, type KicadItem } from "../src/kicad-doc.js";
+import { applyDeltaToY, seedDocToY, yToDoc } from "../src/kicad-y.js";
 import { parseSexpr } from "../src/sexpr.js";
 
 const FP = `(footprint "lib:R" (layer "F.Cu") (uuid "fp-1") (at 10 10)
@@ -348,5 +350,61 @@ describe("uuid collision — paste keeps source child uuids (sync-delete bug 202
     // it does remove the pasted root and its re-keyed children
     expect(d2.removed).toContain("fp-2");
     expect(d2.removed).toHaveLength(3);
+  });
+});
+
+describe("child-uuid collision WITHIN one batch (ysync 0012 #6)", () => {
+  // Two roots emitted together that share a child uuid: eeschema keeps
+  // pin/field uuids on paste natively, so pasting two earlier copies of the
+  // same symbol in one go produces exactly this batch. Checking collisions
+  // against `current` alone let the second root steal the first root's child.
+  const fp = (id: string, x: number) =>
+    `(footprint "lib:R" (layer "F.Cu") (uuid "${id}") (at ${x} 10)
+      (pad "1" smd (at 0 0) (uuid "shared-child")))`;
+  const batch = () =>
+    parseItemsWireDelta(
+      JSON.stringify({ added: [{ sexpr: fp("fp-1", 10) }, { sexpr: fp("fp-2", 20) }] }),
+    );
+
+  it("re-keys the later root's colliding child instead of stealing", () => {
+    const d = itemsWireToDelta(batch(), {});
+    const kids = d.added.filter((i) => i.parent !== null);
+    expect(kids).toHaveLength(2);
+    const byParent = Object.fromEntries(kids.map((i) => [i.parent, i.uuid]));
+    expect(byParent["fp-1"]).toBe("shared-child");
+    expect(byParent["fp-2"]).not.toBe("shared-child");
+    const second = d.added.find((i) => i.uuid === "fp-2")!;
+    expect(JSON.stringify(second.body)).toContain(byParent["fp-2"]);
+  });
+
+  it("deleting the second root leaves a materializable doc", () => {
+    const doc = new Y.Doc();
+    seedDocToY(fileToDoc(`(kicad_pcb (version 20250114) (generator "pcbnew"))`), doc, "seed", "n");
+    applyDeltaToY(doc, itemsWireToDelta(batch(), {}));
+    applyDeltaToY(
+      doc,
+      itemsWireToDelta(
+        parseItemsWireDelta(JSON.stringify({ removed: ["fp-2"] })),
+        yToDoc(doc).items,
+      ),
+    );
+    expect(() => docToFile(yToDoc(doc))).not.toThrow();
+    expect(docToFile(yToDoc(doc))).toContain('(uuid "shared-child")');
+  });
+
+  it("is idempotent on re-send once applied", () => {
+    const cur: Record<string, KicadItem> = {};
+    for (const it of itemsWireToDelta(batch(), {}).added) {
+      cur[it.uuid] = { type: it.type, parent: it.parent, body: it.body };
+    }
+    const again = itemsWireToDelta(
+      parseItemsWireDelta(
+        JSON.stringify({ changed: [{ sexpr: fp("fp-1", 10) }, { sexpr: fp("fp-2", 20) }] }),
+      ),
+      cur,
+    );
+    expect(again.added).toEqual([]);
+    expect(again.updated).toEqual([]);
+    expect(again.removed).toEqual([]);
   });
 });
