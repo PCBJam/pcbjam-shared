@@ -8,7 +8,7 @@ import {
   parseItemsWireDelta,
   wireItemUuids,
 } from "../src/items-wire.js";
-import { docToFile, fileToDoc, type KicadItem } from "../src/kicad-doc.js";
+import { docToFile, fileToDoc, sexprToItems, type KicadItem } from "../src/kicad-doc.js";
 import { applyDeltaToY, seedDocToY, yToDoc } from "../src/kicad-y.js";
 import { parseSexpr } from "../src/sexpr.js";
 
@@ -406,5 +406,51 @@ describe("child-uuid collision WITHIN one batch (ysync 0012 #6)", () => {
     expect(again.added).toEqual([]);
     expect(again.updated).toEqual([]);
     expect(again.removed).toEqual([]);
+  });
+});
+
+describe("itemsWireToDelta with a native baseline (ysync 0012 #2)", () => {
+  const FP2 = (x: number, value: string, pads = `(pad "1" smd (at 0 0) (uuid "pad-1"))`) =>
+    `(footprint "lib:R" (layer "F.Cu") (uuid "fp-1") (at ${x} 10) (property "Value" "${value}") ${pads})`;
+  const flat = (sexpr: string) => sexprToItems(sexpr).items;
+  const wireOf = (sexpr: string) =>
+    parseItemsWireDelta(JSON.stringify({ changed: [{ sexpr, parent: null }] }));
+
+  it("skips an item equal to its baseline even when the doc differs (a peer's edit)", () => {
+    const baseline = flat(FP2(10, "old"));
+    const current = flat(FP2(10, "peer")); // Y already holds the peer's Value
+    const d = itemsWireToDelta(wireOf(FP2(10, "old")), current, undefined, { baseline });
+    expect(d.updated).toEqual([]);
+    expect(d.added).toEqual([]);
+    expect(d.removed).toEqual([]);
+  });
+
+  it("a changed item carries `base` so the Y write can stay slot-granular", () => {
+    const baseline = flat(FP2(10, "old"));
+    const current = flat(FP2(10, "peer"));
+    const d = itemsWireToDelta(wireOf(FP2(20, "old")), current, undefined, { baseline });
+    expect(d.updated).toHaveLength(1);
+    expect(d.updated[0]!.uuid).toBe("fp-1");
+    expect(d.updated[0]!.base).toEqual(baseline["fp-1"]!.body);
+  });
+
+  it("does not remove a child the baseline never knew (a peer's concurrent add)", () => {
+    const baseline = flat(FP2(10, "old"));
+    const current = flat(FP2(10, "old", `(pad "1" smd (at 0 0) (uuid "pad-1")) (pad "2" smd (at 1 0) (uuid "pad-2"))`));
+    const d = itemsWireToDelta(wireOf(FP2(20, "old")), current, undefined, { baseline });
+    expect(d.removed).not.toContain("pad-2");
+  });
+
+  it("still removes a child the baseline knew and the editor dropped", () => {
+    const baseline = flat(FP2(10, "old"));
+    const current = flat(FP2(10, "old"));
+    const d = itemsWireToDelta(wireOf(FP2(10, "old", "")), current, undefined, { baseline });
+    expect(d.removed).toContain("pad-1");
+  });
+
+  it("reports every resolved item through `resolved`", () => {
+    const resolved: Record<string, KicadItem> = {};
+    itemsWireToDelta(wireOf(FP2(10, "old")), {}, undefined, { resolved });
+    expect(Object.keys(resolved).sort()).toEqual(["fp-1", "pad-1"]);
   });
 });

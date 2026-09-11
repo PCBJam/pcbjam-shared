@@ -41,6 +41,13 @@ export const wireItemSchema = z.object({
   sexpr: z.string(),
   /** uuid of the enclosing item; null/omitted for a document-root item. */
   parent: z.string().nullable().default(null),
+  /**
+   * The item's uuid, stamped on Y → editor payloads (ysync 0012 #2) so the
+   * C++ apply can ask the binding to re-resolve the entry to the doc's LATEST
+   * content when it finally executes (`resolveItems`). Ignored by the C++
+   * parser otherwise; editor → Y payloads carry it in the sexpr.
+   */
+  uuid: z.string().optional(),
 });
 export type WireItem = z.infer<typeof wireItemSchema>;
 
@@ -140,6 +147,25 @@ export function unwrapWireItem(text: string): string {
 
 /** Reports a wire entry a conversion could not resolve to an item and skipped. */
 export type WireSkipHandler = (w: WireItem, err: unknown) => void;
+
+export interface WireToDeltaOptions {
+  /**
+   * What the EDITOR last agreed the items were (the binding's native view,
+   * ysync 0012 #2). With it, the conversion emits the writer's INTENT rather
+   * than its full state: an item equal to its baseline entry is skipped even
+   * when the doc differs (a peer edited it — nothing to write), a changed one
+   * carries `base` so the Y write stays slot-granular, and the children a
+   * changed root no longer lists are removed only if the baseline knew them
+   * (a peer's concurrent child add survives). Items without a baseline entry
+   * convert as before (whole body against `current`).
+   */
+  baseline?: Record<string, KicadItem>;
+  /**
+   * Receives every item the conversion resolved (post-rekey, skipped ones
+   * included) — how a caller keeps its native view current.
+   */
+  resolved?: Record<string, KicadItem>;
+}
 
 /** 32-bit FNV-1a over `str`, folded from `seed`. */
 function fnv1a(str: string, seed: number): number {
@@ -249,9 +275,12 @@ export function itemsWireToDelta(
   wire: ItemsWireDelta,
   current: Record<string, KicadItem>,
   onSkip?: WireSkipHandler,
+  opts?: WireToDeltaOptions,
 ): KicadDelta {
   const delta = emptyKicadDelta();
   const children = childrenIndex(current); // once per conversion, not per item (opt 12)
+  const baseline = opts?.baseline;
+  const baseChildren = baseline ? childrenIndex(baseline) : undefined;
   // The collision view (ysync 0012 #6): `current` plus every entry this batch
   // has already produced. Two roots emitted in ONE batch can carry the same
   // child uuid (eeschema keeps pin/field uuids on paste natively, so pasting
@@ -274,10 +303,26 @@ export function itemsWireToDelta(
     const stale = new Set(
       [uuid, ...descendantsFrom(children, uuid)].filter((id) => id in current),
     );
+    if (baseline && baseChildren) {
+      // Only what the editor knew about can be "no longer listed" by it.
+      const known = new Set([uuid, ...descendantsFrom(baseChildren, uuid)]);
+      for (const id of [...stale]) if (!known.has(id)) stale.delete(id);
+    }
     for (const [id, item] of Object.entries(items)) {
       const old = current[id];
-      if (!old) delta.added.push({ uuid: id, ...item });
-      else if (!sameKicadItem(old, item)) delta.updated.push({ uuid: id, ...item });
+      const base = baseline?.[id];
+      if (opts?.resolved) opts.resolved[id] = item;
+      if (!old) {
+        delta.added.push({ uuid: id, ...item });
+      } else if (base) {
+        if (!sameKicadItem(base, item)) {
+          const sameShape = base.type === item.type && base.parent === item.parent;
+          delta.updated.push({ uuid: id, ...item, ...(sameShape ? { base: base.body } : {}) });
+        }
+        // else: untouched by the editor — even if the doc moved on (a peer's edit)
+      } else if (!sameKicadItem(old, item)) {
+        delta.updated.push({ uuid: id, ...item });
+      }
       stale.delete(id);
       working[id] = item;
     }
@@ -401,7 +446,7 @@ export function deltaToItemsWire(
       const def = libId ? libDefs(unquoteAtom(libId)) : undefined;
       if (def) sexpr = `(lib_symbols ${def}) ${sexpr}`;
     }
-    return { sexpr, parent };
+    return { sexpr, parent, uuid };
   };
 
   const added = new Set<string>();

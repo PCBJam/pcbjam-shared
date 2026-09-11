@@ -361,6 +361,78 @@ export function updateNodeFromSlots(
   updateAttrOrder(node, targetKeys, toDelete, keyed);
 }
 
+/**
+ * PATCH a body into `node` relative to a BASELINE (ysync 0012 #2): only the
+ * slots that differ between `before` (what the writer last agreed the body
+ * was) and `after` (its new body) are written; a slot the writer did not
+ * touch keeps whatever the node holds now — including a peer's concurrent
+ * edit that the writer's full re-serialization would otherwise overwrite.
+ * Deletions are likewise baseline-relative (a key `before` had and `after`
+ * lacks), so a slot a peer added meanwhile survives. `#attr_order` is left
+ * alone unless the baseline→new key sequence itself changed, and then keys
+ * the writer never saw keep their current relative position. Nested node
+ * maps recurse with their own baseline. Same alignment degradation as
+ * `updateNodeFromSlots` (a shifted positional pool replaces a slot wholesale,
+ * never corrupts). Must run inside a `ydoc.transact`.
+ */
+export function patchNodeFromSlots(
+  node: YNode,
+  before: Slot[],
+  after: Slot[],
+  overrides: ReadonlySet<string> = FORCE_ATOMIC_HEADS,
+): void {
+  const keyedBefore = keySlots(before, node);
+  const keyedAfter = keySlots(after, node);
+  const beforeByKey = new Map(keyedBefore.map((k) => [k.key, k.slot]));
+  const afterKeys = new Set(keyedAfter.map((k) => k.key));
+
+  // Deletions: the baseline had it, the new body lacks it, the node still has it.
+  const toDelete: string[] = [];
+  for (const { key } of keyedBefore) {
+    if (!afterKeys.has(key) && node.has(key)) toDelete.push(key);
+  }
+  for (const key of toDelete) node.delete(key);
+
+  // Writes: only slots that differ from the baseline.
+  for (const { key, slot, matched } of keyedAfter) {
+    const base = beforeByKey.get(key);
+    if (base !== undefined && JSON.stringify(base) === JSON.stringify(slot)) continue;
+    if (!matched || !node.has(key)) {
+      node.set(key, encodeChild(slot, overrides));
+      continue;
+    }
+    const existing = node.get(key);
+    if ("atom" in slot) {
+      if (existing !== slot.atom) node.set(key, slot.atom);
+    } else if ("k" in slot) {
+      if (existing instanceof Y.Map) {
+        if (base !== undefined && "k" in base) {
+          patchNodeFromSlots(existing, base.v, slot.v, overrides);
+        } else {
+          updateNodeFromSlots(existing, slot.v, overrides);
+        }
+      } else if (JSON.stringify(existing) !== JSON.stringify(slot.v)) {
+        node.set(key, slot.v);
+      }
+    }
+  }
+
+  // Order: untouched unless the writer changed its own key sequence.
+  const seqBefore = keyedBefore.map((k) => k.key);
+  const seqAfter = keyedAfter.map((k) => k.key);
+  if (sameOrder(seqBefore, seqAfter)) return;
+  const known = new Set([...seqBefore, ...seqAfter]);
+  const target = [...seqAfter];
+  const current = normalizedKeys(node);
+  current.forEach((key, i) => {
+    if (known.has(key)) return; // a key the writer never saw: keep its place
+    const prev = i > 0 ? current[i - 1]! : undefined;
+    const at = prev === undefined ? -1 : target.indexOf(prev);
+    target.splice(at + 1, 0, key);
+  });
+  updateAttrOrder(node, target, toDelete, keyedAfter);
+}
+
 function updateAttrOrder(
   node: YNode,
   targetKeys: string[],

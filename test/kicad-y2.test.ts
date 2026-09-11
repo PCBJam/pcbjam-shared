@@ -21,10 +21,11 @@ import {
   nodeFromSlots,
   SEXPR_VERSION_CURRENT,
   slotsFromNode,
+  patchNodeFromSlots,
   updateNodeFromSlots,
   Y_KDOC_SEXPR_VERSION,
 } from "../src/kicad-y2.js";
-import { docToFile, fileToDoc, field, scalar, type Slot } from "../src/kicad-doc.js";
+import { docToFile, fileToDoc, field, renderItem, scalar, sexprToItems, type Slot } from "../src/kicad-doc.js";
 import { isEmptyKicadDelta } from "../src/kicad-delta.js";
 import { parseSexpr } from "../src/sexpr.js";
 
@@ -410,5 +411,76 @@ describe("v1 interop (§5)", () => {
     docToY(yToDoc(v1), converted);
     expect(ydocSexprVersion(converted)).toBe(2);
     expect(docToFile(yToDoc(converted))).toBe(docToFile(yToDoc(v1)));
+  });
+});
+
+describe("patchNodeFromSlots — baseline-relative writes (ysync 0012 #2)", () => {
+  const FP = `(footprint "lib:R" (layer "F.Cu") (uuid "fp-1") (at 10 10)
+    (property "Value" "old") (property "Reference" "R1")
+    (pad "1" smd (at 0 0) (uuid "pad-1")))`;
+  const item = (sexpr: string) => sexprToItems(sexpr).items["fp-1"]!;
+
+  function seeded() {
+    const doc = new Y.Doc();
+    docToY(fileToDoc(`(kicad_pcb ${FP})`), doc);
+    const node = kicadItemsMap(doc).get("fp-1")!.get("body") as Y.Map<unknown>;
+    return { doc, node };
+  }
+
+  it("writes only the slots that differ from the baseline; a peer's edit to another slot survives", () => {
+    const { doc, node } = seeded();
+    const base = item(FP).body;
+    // A peer changes Value in the doc …
+    doc.transact(() => updateNodeFromSlots(node, item(FP.replace('"old"', '"peer"')).body));
+    // … while the writer (which never saw it) moves the footprint.
+    doc.transact(() => patchNodeFromSlots(node, base, item(FP.replace("(at 10 10)", "(at 20 20)")).body));
+    const text = renderItem(yToDoc(doc), "fp-1");
+    expect(text).toContain("(at 20 20)");
+    expect(text).toContain('"peer"');
+    // Same call through the whole-body differ would have reverted the peer.
+  });
+
+  it("deletes a slot the baseline had and the new body lacks, but keeps a peer-added slot", () => {
+    const { doc, node } = seeded();
+    const base = item(FP).body;
+    doc.transact(() =>
+      updateNodeFromSlots(node, item(FP.replace('(property "Reference" "R1")', '(property "Reference" "R1") (property "Datasheet" "x")')).body),
+    );
+    doc.transact(() => patchNodeFromSlots(node, base, item(FP.replace('(property "Reference" "R1")', "")).body));
+    const text = renderItem(yToDoc(doc), "fp-1");
+    expect(text).not.toContain('"Reference"');
+    expect(text).toContain('"Datasheet"');
+  });
+
+  it("an unchanged body is a no-op (no events)", () => {
+    const { doc, node } = seeded();
+    let updates = 0;
+    doc.on("update", () => updates++);
+    doc.transact(() => patchNodeFromSlots(node, item(FP).body, item(FP).body));
+    expect(updates).toBe(0);
+  });
+
+  it("recurses into nested node maps with their own baseline", () => {
+    const { doc, node } = seeded();
+    const withStroke = FP.replace("(at 10 10)", "(at 10 10) (fp_text user \"a\" (at 0 0) (effects (font (size 1 1) (thickness 0.1)) (justify left)))");
+    doc.transact(() => updateNodeFromSlots(node, item(withStroke).body));
+    const base = item(withStroke).body;
+    // Peer: justify right. Writer: thickness 0.2. Both nested under effects.
+    doc.transact(() => updateNodeFromSlots(node, item(withStroke.replace("(justify left)", "(justify right)")).body));
+    doc.transact(() => patchNodeFromSlots(node, base, item(withStroke.replace("(thickness 0.1)", "(thickness 0.2)")).body));
+    const text = renderItem(yToDoc(doc), "fp-1");
+    expect(text).toContain("(justify right)");
+    expect(text).toContain("(thickness 0.2)");
+  });
+
+  it("applyDeltaToY honours `base` on updated items", () => {
+    const { doc } = seeded();
+    const peer = { uuid: "fp-1", ...item(FP.replace('"old"', '"peer"')) };
+    applyDeltaToY(doc, { added: [], updated: [peer], removed: [] }, "peer");
+    const moved = { uuid: "fp-1", ...item(FP.replace("(at 10 10)", "(at 20 20)")), base: item(FP).body };
+    applyDeltaToY(doc, { added: [], updated: [moved], removed: [] }, "local");
+    const text = renderItem(yToDoc(doc), "fp-1");
+    expect(text).toContain("(at 20 20)");
+    expect(text).toContain('"peer"');
   });
 });

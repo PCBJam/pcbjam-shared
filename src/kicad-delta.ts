@@ -9,6 +9,7 @@
 import { z } from "zod";
 import {
   kicadItemSchema,
+  slotSchema,
   type KicadDoc,
   type KicadItem,
   type Slot,
@@ -18,9 +19,21 @@ import {
 export const keyedKicadItemSchema = kicadItemSchema.extend({ uuid: z.string() });
 export type KeyedKicadItem = z.infer<typeof keyedKicadItemSchema>;
 
+/**
+ * An updated item that also carries the BASELINE body the writer diffed from
+ * (ysync 0012 #2). With `base`, the Y write is slot-granular relative to that
+ * baseline (`patchNodeFromSlots`): slots the writer did not touch keep a
+ * peer's concurrent edit instead of being overwritten by the writer's full
+ * re-serialization. Without it, the whole body is diffed against the doc.
+ */
+export const patchedKicadItemSchema = keyedKicadItemSchema.extend({
+  base: z.array(slotSchema).optional(),
+});
+export type PatchedKicadItem = z.infer<typeof patchedKicadItemSchema>;
+
 export const kicadDeltaSchema = z.object({
   added: z.array(keyedKicadItemSchema),
-  updated: z.array(keyedKicadItemSchema),
+  updated: z.array(patchedKicadItemSchema),
   /** uuids. */
   removed: z.array(z.string()),
 });

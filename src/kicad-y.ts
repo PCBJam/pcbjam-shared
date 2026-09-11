@@ -52,6 +52,7 @@ import {
   SEXPR_VERSION_CURRENT,
   slotsFromNode,
   pruneItemRefFromNode,
+  patchNodeFromSlots,
   updateNodeFromSlots,
   Y_KDOC_SEXPR_VERSION,
 } from "./kicad-y2.js";
@@ -176,6 +177,7 @@ function upsertYItem(
   uuid: string,
   item: KicadItem,
   version: number,
+  base?: Slot[],
 ): void {
   const existing = items.get(uuid);
   if (!existing) {
@@ -192,7 +194,10 @@ function upsertYItem(
   const body = ym.get("body");
   if (version >= 2) {
     if (body instanceof Y.Map) {
-      updateNodeFromSlots(body, item.body); // the v2 differ (kicad-y2.ts)
+      // The v2 differ (kicad-y2.ts): baseline-relative when the writer says
+      // what it diffed from (0012 #2), else the whole body against the doc.
+      if (base) patchNodeFromSlots(body, base, item.body);
+      else updateNodeFromSlots(body, item.body);
     } else {
       ym.set("body", nodeFromSlots(item.body));
     }
@@ -650,7 +655,7 @@ export function applyDeltaToY(ydoc: Y.Doc, delta: KicadDelta, origin?: unknown):
     const version = resolveWriteVersion(ydoc);
     const items = kicadItemsMap(ydoc);
     for (const it of delta.added) upsertYItem(items, it.uuid, it, version);
-    for (const it of delta.updated) upsertYItem(items, it.uuid, it, version);
+    for (const it of delta.updated) upsertYItem(items, it.uuid, it, version, it.base);
     for (const uuid of delta.removed) {
       // Before deleting a CHILD item, prune its `{item: uuid}` slot from the
       // surviving parent's body — a dangling reference makes renderItem/docToFile
