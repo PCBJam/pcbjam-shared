@@ -10,6 +10,8 @@ import {
   applyDeltaToY,
   compactYdocUpdate,
   docToY,
+  seedDocToY,
+  ydocIsHollow,
   ydocSexprVersion,
   yToDoc,
 } from "../src/kicad-y.js";
@@ -113,5 +115,32 @@ describe("compactYdocUpdate — hydrate-as-is cases", () => {
 
   it("skips an empty doc", () => {
     expect(compactYdocUpdate(Y.encodeStateAsUpdate(new Y.Doc()))).toBeNull();
+  });
+});
+
+describe("compactYdocUpdate — initialized-empty survives the epoch boundary (ysync 0012 #5)", () => {
+  it("a legitimately emptied doc is still NOT hollow after size-gated compaction", () => {
+    const ydoc = new Y.Doc();
+    seedDocToY(fileToDoc(BASE), ydoc, "seed", "1:nonce");
+    const cur = () => yToDoc(ydoc).items;
+    // Churn so the blob bloats past the ratio gate with default GC on.
+    for (let i = 0; i < 100; i++) {
+      const id = `tmp-${i}`;
+      applyDeltaToY(ydoc, {
+        added: [{ uuid: id, ...fileToDoc(`(kicad_pcb (via (at ${i} 0) (uuid "${id}")))`).items[id]! }],
+        updated: [],
+        removed: [],
+      });
+      applyDeltaToY(ydoc, { added: [], updated: [], removed: [id] });
+    }
+    // Then the user empties the sheet.
+    applyDeltaToY(ydoc, { added: [], updated: [], removed: Object.keys(cur()) });
+    expect(ydocIsHollow(ydoc)).toBe(false);
+    const res = compactYdocUpdate(Y.encodeStateAsUpdate(ydoc));
+    expect(res?.reason).toBe("compaction");
+    const after = hydrate(res!.update);
+    expect(ydocIsHollow(after)).toBe(false);
+    expect(after.getMap("kdoc_meta").get("seedNonce")).toBeUndefined(); // race state stays out
+    expect(docToFile(yToDoc(after))).toBe(docToFile(yToDoc(ydoc)));
   });
 });

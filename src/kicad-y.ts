@@ -67,6 +67,15 @@ export const Y_KDOC_LAYOUT = "kdoc_layout";
 export const Y_KDOC_LIBSYMBOLS = "kdoc_libsymbols";
 /** kdoc_meta key holding the winning seeder's nonce (see `seedDocToY`). */
 export const Y_KDOC_SEED_NONCE = "seedNonce";
+/**
+ * kdoc_meta key marking a doc that was INITIALIZED with document content
+ * (ysync 0012 #5): stamped by every full seed (`docToY` — file seed, runner
+ * at-rest seed, compaction's rebuild, validity revert) and by the editor-
+ * snapshot seed. Durable, unlike `seedNonce` (race arbitration state that
+ * compaction deliberately drops): it is what tells a legitimately EMPTIED doc
+ * from a hollow one after any epoch change.
+ */
+export const Y_KDOC_INITIALIZED = "initialized";
 
 export type KicadYItems = Y.Map<Y.Map<unknown>>;
 
@@ -202,7 +211,9 @@ export function docToY(doc: KicadDoc, ydoc: Y.Doc, origin?: unknown): void {
   assertKicadDoc(doc);
   ydoc.transact(() => {
     const version = resolveWriteVersion(ydoc); // before the root write marks the doc non-empty
-    ydoc.getMap(Y_KDOC_META).set("root", doc.root);
+    const meta = ydoc.getMap(Y_KDOC_META);
+    meta.set("root", doc.root);
+    if (meta.get(Y_KDOC_INITIALIZED) !== true) meta.set(Y_KDOC_INITIALIZED, true);
     const items = kicadItemsMap(ydoc);
     for (const uuid of [...items.keys()]) {
       if (!(uuid in doc.items)) items.delete(uuid);
@@ -330,6 +341,7 @@ export function upsertDocToY(doc: KicadDoc, ydoc: Y.Doc, origin?: unknown): void
     const version = resolveWriteVersion(ydoc);
     const meta = ydoc.getMap(Y_KDOC_META);
     if (meta.get("root") !== doc.root) meta.set("root", doc.root);
+    if (meta.get(Y_KDOC_INITIALIZED) !== true) meta.set(Y_KDOC_INITIALIZED, true);
 
     const items = kicadItemsMap(ydoc);
     for (const uuid of [...items.keys()]) {
@@ -427,19 +439,22 @@ export function ydocHasState(ydoc: Y.Doc): boolean {
 }
 
 /**
- * A doc that carries layout/meta but ZERO items and was never seeded (no
- * `seedNonce`): the footprint left by a layout-only write (`syncLayoutToY`
- * from a save-all) into a room nobody had entered yet. Such a doc must be
- * treated as EMPTY by every "adopt the doc" decision — adopting it would
- * remove every item on the editor's screen — and as "nothing to serve" by
- * materialization, which would otherwise render a title-block-only file.
+ * A doc that carries layout/meta but ZERO items and was never initialized
+ * (neither `initialized` nor a legacy `seedNonce`): the footprint left by a
+ * layout-only write (`syncLayoutToY` from a save-all) into a room nobody had
+ * entered yet. Such a doc must be treated as EMPTY by every "adopt the doc"
+ * decision — adopting it would remove every item on the editor's screen — and
+ * as "nothing to serve" by materialization, which would otherwise render a
+ * title-block-only file.
+ *
+ * An INITIALIZED doc with zero items is NOT hollow: a sheet the user emptied,
+ * or a drawing sheet (no uuid items at all). It stays authoritative — served,
+ * adopted, never re-seeded from an older file (ysync 0012 #4/#5).
  */
 export function ydocIsHollow(ydoc: Y.Doc): boolean {
-  return (
-    ydocHasState(ydoc) &&
-    kicadItemsMap(ydoc).size === 0 &&
-    ydoc.getMap(Y_KDOC_META).get(Y_KDOC_SEED_NONCE) === undefined
-  );
+  if (!ydocHasState(ydoc) || kicadItemsMap(ydoc).size > 0) return false;
+  const meta = ydoc.getMap(Y_KDOC_META);
+  return meta.get(Y_KDOC_INITIALIZED) !== true && meta.get(Y_KDOC_SEED_NONCE) === undefined;
 }
 
 /** Read the full `KicadDoc` back out of a Y.Doc (validated). */
@@ -483,12 +498,21 @@ export function yToDoc(ydoc: Y.Doc): KicadDoc {
  * discarded here). Pair with `docToFile` to get the KiCad s-expr.
  */
 export function ydocUpdateToKicadDoc(update: Uint8Array): KicadDoc {
-  const doc = new Y.Doc();
+  return ydocUpdateToKicadDocInfo(update).doc;
+}
+
+/**
+ * `ydocUpdateToKicadDoc` plus the doc's hollow status (`ydocIsHollow`), read
+ * from the same one-shot Y.Doc so a backend can decide "serve this" vs "fall
+ * back to the raw file" without a second decode (ysync 0012 #4).
+ */
+export function ydocUpdateToKicadDocInfo(update: Uint8Array): { doc: KicadDoc; hollow: boolean } {
+  const ydoc = new Y.Doc();
   try {
-    Y.applyUpdate(doc, update);
-    return yToDoc(doc);
+    Y.applyUpdate(ydoc, update);
+    return { doc: yToDoc(ydoc), hollow: ydocIsHollow(ydoc) };
   } finally {
-    doc.destroy();
+    ydoc.destroy();
   }
 }
 
@@ -540,7 +564,9 @@ export interface YdocCompaction {
  *
  * Comment threads (and any `KDOC_EXTRA_ROOT_MAPS` entry) are deep-cloned into
  * the fresh doc; layout arbitration state (`seedNonce`) is deliberately not —
- * it only matters within one concurrent-seed race window.
+ * it only matters within one concurrent-seed race window. The durable
+ * `initialized` marker is re-stamped by `docToY`, so an emptied doc never
+ * turns hollow across the epoch boundary (ysync 0012 #5).
  */
 export function compactYdocUpdate(
   update: Uint8Array,

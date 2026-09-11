@@ -7,9 +7,15 @@ import {
   deltaFromYEvents,
   docToY,
   kicadItemsMap,
+  syncLayoutToY,
+  Y_KDOC_INITIALIZED,
+  Y_KDOC_META,
+  Y_KDOC_SEED_NONCE,
   yToDoc,
   ydocHasState,
+  ydocIsHollow,
   ydocUpdateToKicadDoc,
+  ydocUpdateToKicadDocInfo,
 } from "../src/kicad-y.js";
 import { isEmptyKicadDelta, type KicadDelta } from "../src/kicad-delta.js";
 import { docToFile, fileToDoc } from "../src/kicad-doc.js";
@@ -231,5 +237,36 @@ describe("kicadDocToYdocUpdate (load-path-rework 0004 §2.4)", () => {
     expect(ydoc.getMap(Y_KDOC_META).get(Y_KDOC_SEED_NONCE)).toBe("runner:test");
     expect(docToFile(yToDoc(ydoc))).toBe(docToFile(doc));
     expect(docToFile(ydocUpdateToKicadDoc(update))).toBe(docToFile(doc));
+  });
+});
+
+describe("ydocIsHollow — initialized vs hollow (ysync 0012 #4/#5)", () => {
+  const FILE = `(kicad_pcb (version 20250114) (generator "pcbnew")
+    (segment (start 0 0) (end 1 1) (width 0.2) (uuid "seg-1")))`;
+
+  it("a layout-only write into a fresh room is hollow", () => {
+    const ydoc = new Y.Doc();
+    syncLayoutToY(fileToDoc(FILE), ydoc, "layout-save");
+    expect(ydocHasState(ydoc)).toBe(true);
+    expect(ydocIsHollow(ydoc)).toBe(true);
+  });
+
+  it("docToY stamps `initialized`; emptying the doc afterwards keeps it non-hollow", () => {
+    const ydoc = new Y.Doc();
+    docToY(fileToDoc(FILE), ydoc);
+    expect(ydoc.getMap(Y_KDOC_META).get(Y_KDOC_INITIALIZED)).toBe(true);
+    applyDeltaToY(ydoc, { added: [], updated: [], removed: ["seg-1"] });
+    expect(kicadItemsMap(ydoc).size).toBe(0);
+    expect(ydocIsHollow(ydoc)).toBe(false);
+    const info = ydocUpdateToKicadDocInfo(Y.encodeStateAsUpdate(ydoc));
+    expect(info.hollow).toBe(false);
+    expect(docToFile(info.doc)).toBe(`(kicad_pcb (version 20250114) (generator "pcbnew"))`);
+  });
+
+  it("a legacy doc carrying only seedNonce is still recognized as initialized", () => {
+    const ydoc = new Y.Doc();
+    syncLayoutToY(fileToDoc(FILE), ydoc, "layout-save");
+    ydoc.getMap(Y_KDOC_META).set(Y_KDOC_SEED_NONCE, "1:legacy");
+    expect(ydocIsHollow(ydoc)).toBe(false);
   });
 });
