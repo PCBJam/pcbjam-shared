@@ -546,6 +546,35 @@ function cloneYValue(v: unknown): unknown {
  */
 const KDOC_EXTRA_ROOT_MAPS = [Y_KDOC_COMMENTS];
 
+/**
+ * Whether a transaction touched the kdoc CONTENT — anything the file render
+ * (`docToFile`) reads — as opposed to only the extra root maps
+ * (`KDOC_EXTRA_ROOT_MAPS`: comments) that ride the same doc but never reach
+ * the `.kicad_*` text. The sync server's save path uses this to decide
+ * whether a persisted state needs a validity check (kicad-validity 0002): a
+ * comment op is a doc update and therefore a save, but it cannot change the
+ * lint verdict. Unknown roots count as content — an unregistered root is
+ * linted rather than silently skipped.
+ */
+export function transactionTouchesKdocContent(tr: Y.Transaction): boolean {
+  const extras = new Set<unknown>();
+  for (const name of KDOC_EXTRA_ROOT_MAPS) {
+    const root = tr.doc.share.get(name);
+    if (root) extras.add(root);
+  }
+  for (const changed of tr.changed.keys()) {
+    let type: Y.AbstractType<Y.YEvent<Y.AbstractType<unknown>>> = changed;
+    // Walk to the root type: only integrated items have a parent type.
+    while (type._item !== null) {
+      const parent = type._item.parent;
+      if (!(parent instanceof Y.AbstractType)) break;
+      type = parent;
+    }
+    if (!extras.has(type)) return true;
+  }
+  return false;
+}
+
 export interface YdocCompaction {
   /** The replacement state update (a fresh doc — new epoch, new clientIDs). */
   update: Uint8Array;
