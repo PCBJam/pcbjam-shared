@@ -1,0 +1,105 @@
+import { z } from 'zod';
+const empty = z.object({}).strict();
+const id = z.string().min(1).max(128);
+const revision = z.number().int().positive().safe();
+const document = z.string().uuid();
+const page = { cursor: z.number().int().min(0).max(50000), limit: z.number().int().min(1).max(100) };
+const key = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/);
+const request = (permission: string | null, input: z.ZodTypeAny) => ({ permission, input });
+/** The complete host operation allowlist. Tests must cover every entry. */
+export const METHODS = {
+    'context.get': request(null, empty),
+    'project.getInfo': request('project:read-info', empty),
+    'documents.list': request('project:read-info', z.object(page).strict()),
+    'documents.getCurrent': request('documents:read', empty),
+    'documents.snapshot': request('documents:read', z.object({ document, revision }).strict()),
+    'documents.poll': request('documents:read', z.object({ document, since: revision }).strict()),
+    'items.list': request('documents:read', z.object({ document, revision, ...page, types: z.array(z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/)).max(8) }).strict()),
+    'items.get': request('documents:read', z.object({ document, revision, ids: z.array(id).min(1).max(100).refine(v => new Set(v).size === v.length) }).strict()),
+    'selection.get': request('editor:read-selection', empty),
+    'storage.get': request('storage:local', z.object({ key }).strict()),
+    'storage.set': request('storage:local', z.object({ key, value: z.unknown().refine(v => v !== undefined), expectedRevision: z.number().int().min(0).safe() }).strict()),
+    'storage.delete': request('storage:local', z.object({ key, expectedRevision: z.number().int().min(0).safe() }).strict()),
+    'storage.list': request('storage:local', empty),
+    'files.choose': request('files:choose', z.object({ extensions: z.array(z.enum(['.kicad_sym', '.kicad_mod', '.txt', '.json'])).min(1).max(4) }).strict()),
+    'files.readText': request('files:choose', z.object({ handle: id }).strict()),
+    'files.close': request('files:choose', z.object({ handle: id }).strict()),
+    'files.save': request('files:save', z.object({ name: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,90}\.(txt|json|csv|kicad_sym|kicad_mod|kicad_sch|kicad_pcb)$/), text: z.string().max(512 * 1024) }).strict()),
+    'editor.requestPlacement': request('editor:place-items', z.object({ label: z.string().min(1).max(100), sexpr: z.string().max(512 * 1024) }).strict()),
+} as const;
+export type Method = keyof typeof METHODS;
+export const LIMITS = Object.freeze({ snapshotBytes: 1024 * 1024, pageItems: 100, fileBytes: 4 * 1024 * 1024, exportBytes: 512 * 1024, storageBytes: 256 * 1024, storageValueBytes: 16 * 1024, storageKeys: 64 });
+/** Bound before stringify/recursive schema work. Return a detached JSON value. */
+export function boundedJSON(value: unknown, maxBytes: number): any {
+    let nodes = 0, units = 0;
+    const seen = new Set<object>();
+    function visit(v: any, depth: number): any {
+        if (++nodes > 100000 || depth > 48)
+            throw new Error('Data exceeds structure limits');
+        if (typeof v === 'string') {
+            units += v.length;
+            if (units > maxBytes)
+                throw new Error('Data exceeds size limit');
+            return v;
+        }
+        if (v === null || typeof v === 'boolean')
+            return v;
+        if (typeof v === 'number' && Number.isFinite(v))
+            return v;
+        if (!v || typeof v !== 'object' || seen.has(v))
+            throw new Error('Expected JSON data');
+        seen.add(v);
+        let result: any;
+        if (Array.isArray(v))
+            result = v.map(x => visit(x, depth + 1));
+        else {
+            if (Object.getPrototypeOf(v) !== Object.prototype && Object.getPrototypeOf(v) !== null)
+                throw new Error('Expected plain JSON object');
+            result = Object.create(null);
+            for (const [k, item] of Object.entries(v)) {
+                units += k.length;
+                if (units > maxBytes)
+                    throw new Error('Data exceeds size limit');
+                result[k] = visit(item, depth + 1);
+            }
+        }
+        seen.delete(v);
+        return result;
+    }
+    const copy = visit(value, 0), serialized = JSON.stringify(copy);
+    if (new TextEncoder().encode(serialized).length > maxBytes)
+        throw new Error('Data exceeds size limit');
+    return copy;
+}
+export interface DocumentAdapter {
+    projectInfo(): {
+        id: string;
+        scope: string;
+        name: string;
+    };
+    catalog(): Array<{
+        name: string;
+        kind: string;
+        current: boolean;
+    }>;
+    revision(): number;
+    items(cursor: number, limit: number, types: string[]): {
+        items: Array<{
+            id: string;
+            type: string;
+            parent: string | null;
+        }>;
+        nextCursor: number | null;
+    };
+    getItems(ids: string[]): unknown[];
+    snapshot(): {
+        root: string;
+        items: unknown[];
+        layout: unknown[];
+        libSymbols: string[];
+    };
+    selection(): {
+        revision: number;
+        ids: string[];
+    };
+}

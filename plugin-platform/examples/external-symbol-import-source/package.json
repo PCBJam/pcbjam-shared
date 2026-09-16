@@ -1,0 +1,25 @@
+{
+  "name": "pcbjam-external-symbol-plugin",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.logic.json && tsc -p tsconfig.ui.json",
+    "build": "npm run typecheck && node scripts/build.mjs",
+    "dev": "node scripts/watch.mjs"
+  },
+  "dependencies": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.28",
+    "@types/react-dom": "18.3.7",
+    "esbuild": "0.27.3",
+    "fflate": "0.8.2",
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "apiVersion": 1,
+  "id": "external-symbol-import",
+  "name": "External Symbol Import",
+  "version": "0.3.0",
+  "description": "Choose a KiCad symbol library from your computer and place a symbol in the current schematic.",
+  "main": "main.js",
+  "ui": "ui.html",
+  "surfaces": [
+    "editor:eeschema"
+  ],
+  "permissions": [
+    "ui:custom",
+    "ui:project-data",
+    "files:choose",
+    "editor:place-items"
+  ]
+}

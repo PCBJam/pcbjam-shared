@@ -1,0 +1,35 @@
+{
+  "name": "@pcbjam/plugin-platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    "./api": "./src/package-api.ts",
+    "./*": "./*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "quickjs-emscripten": "0.32.0",
+    "zod": "3.25.76",
+    "yjs": "^13.6.18"
+  },
+  "devDependencies": {
+    "esbuild": "0.27.3",
+    "typescript": "^5.7.3",
+    "@types/node": "^22.0.0",
+    "fflate": "0.8.2",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "@types/react": "18.3.28",
+    "@types/react-dom": "18.3.7",
+    "unified": "11.0.5",
+    "remark-parse": "11.0.0",
+    "remark-gfm": "4.0.1",
+    "remark-rehype": "11.1.2",
+    "rehype-stringify": "10.0.1"
+  }
+}
