@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 export const LIMITS = { archive: 8 * 1024 * 1024, total: 12 * 1024 * 1024, file: 4 * 1024 * 1024, files: 32 };
 export { default as PERMISSIONS } from './api-permissions.json' with { type: 'json' };
 import PERMISSIONS from './api-permissions.json' with { type: 'json' };
+import {validateEndpoints,backendPermissions} from './backend-contract.mjs';
 const fail = message => { throw new Error(message); };
 const metadataPath = name => name.split('/').some(part => part === '__MACOSX') || name.split('/').at(-1) === '.DS_Store' || name.split('/').at(-1).startsWith('._');
 function validPath(name) {
@@ -91,15 +92,18 @@ export function validatePackage(input, { legacyDigest = false } = {}) {
   const get = name => files.find(f => f.path === name)?.text;
   if (Buffer.byteLength(get('manifest.json') ?? '') > 16384) fail('Manifest exceeds 16 KiB');
   const manifest = JSON.parse(get('manifest.json') ?? fail('Missing manifest.json'));
-  exact(manifest, ['apiVersion', 'id', 'name', 'version', 'description', 'main', 'ui', 'surfaces', 'permissions']);
+  exact(manifest, ['apiVersion', 'id', 'name', 'version', 'description', 'main', 'ui', 'surfaces', 'permissions', 'endpoints']);
+  const endpoints = validateEndpoints(manifest.endpoints);
+  const requestedBackendPermissions=backendPermissions(endpoints);
   if (manifest.apiVersion !== 1 || typeof manifest.id !== 'string' || !/^[a-z][a-z0-9-]{2,63}$/.test(manifest.id) || typeof manifest.version !== 'string' || manifest.version.length > 32 || !/^\d+\.\d+\.\d+$/.test(manifest.version)) fail('Unsupported API version, plugin ID or version');
   if (typeof manifest.name !== 'string' || manifest.name.length < 1 || manifest.name.length > 80 || typeof manifest.description !== 'string' || manifest.description.length > 300) fail('Invalid plugin name or description');
   if (manifest.main !== 'main.js' || manifest.ui !== 'ui.html' || !get('main.js') || !get('ui.html')) fail('main.js and ui.html are required');
   if (Buffer.byteLength(get('main.js')) > 1024 * 1024 || Buffer.byteLength(get('ui.html')) > 512 * 1024) fail('Logic/UI entry exceeds its limit');
-  for (const [key, allowed] of [['surfaces', ['editor:eeschema', 'editor:pcbnew']], ['permissions', Object.keys(PERMISSIONS)]]) {
+  for (const [key, allowed] of [['surfaces', ['editor:eeschema', 'editor:pcbnew']], ['permissions', [...Object.keys(PERMISSIONS), ...Object.keys(requestedBackendPermissions)]]]) {
     const values = manifest[key];
     if (!Array.isArray(values) || !values.length || values.length > allowed.length || new Set(values).size !== values.length || values.some(v => !allowed.includes(v))) fail(`Unsupported ${key}`);
   }
+  if(Object.keys(requestedBackendPermissions).some(p=>!manifest.permissions.includes(p))) fail('Backend declarations require their network and identity permissions');
   if (!manifest.permissions.includes('ui:custom') || !manifest.permissions.includes('ui:project-data')) fail('Custom UI and data disclosure permissions are required');
   if (/<script\b[^>]*\bsrc\s*=|<link\b[^>]*\bhref\s*=/i.test(get('ui.html'))) fail('Bundle scripts and styles inline in ui.html; remote/module imports are not supported');
   files.sort((a, b) => legacyDigest ? a.path.localeCompare(b.path) : (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
@@ -107,6 +111,6 @@ export function validatePackage(input, { legacyDigest = false } = {}) {
   const fileMetadata = Object.fromEntries(files.map(f => [f.path, {
     sha256: createHash('sha256').update(f.text).digest('hex'), bytes: Buffer.byteLength(f.text),
   }]));
-  const policyDigest = createHash('sha256').update(JSON.stringify({ apiVersion: 1, permissions: [...manifest.permissions].sort() })).digest('hex');
-  return { digest, manifest, files, fileMetadata, policyDigest, validationVersion: 2 };
+  const policyDigest = createHash('sha256').update(JSON.stringify({ apiVersion: 1, permissions: [...manifest.permissions].sort(), ...(endpoints?{backendPolicyVersion:1,endpoints}: {}) })).digest('hex');
+  return { digest, manifest, files, fileMetadata, policyDigest, validationVersion: endpoints ? 3 : 2 };
 }

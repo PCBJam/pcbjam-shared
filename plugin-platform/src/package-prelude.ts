@@ -34,6 +34,7 @@ declare const __uuid: () => string;
                 throw new Error('Invalid or duplicate plugin command');
             handlers.set(command, handler);
         },
+        http: Object.freeze({request:(endpointId:string,options:object)=>call('http.request',{...options,endpointId})}),
         context: Object.freeze({ get: () => call('context.get') }),
         project: Object.freeze({ getInfo: () => call('project.getInfo') }),
         documents: Object.freeze({
@@ -82,7 +83,7 @@ declare const __uuid: () => string;
             if (message.ok)
                 entry.resolve(message.result);
             else
-                entry.reject(new Error(message.error));
+                entry.reject(Object.assign(new Error(message.error),typeof message.code==='string'&&/^[A-Z_]{1,40}$/.test(message.code)?{code:message.code}:{}));
         } });
     delete (globalThis as any).__sendHost;
     delete (globalThis as any).__sendResult;

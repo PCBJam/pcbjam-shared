@@ -12,7 +12,7 @@ const ROOT=path.dirname(fileURLToPath(import.meta.url));
 const PAGES = [
   ['0008-local-plugin-development.md', 'guide.html', ''],
   ['0009-plugin-api-and-permissions.md', 'guide-api.html', '/api'],
-  ['0010-plugin-security-and-testing.md', 'guide-security.html', '/security'],
+  ['0010-plugin-security-and-testing.md', 'guide-architecture.html', '/architecture'],
 ];
 const escape = text => String(text).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const textOf = node => node.value ?? (node.children ?? []).map(textOf).join('');
@@ -45,6 +45,7 @@ export async function buildGuide(output, {base='/plugin-guide',sourceDir=path.jo
             const url = node.url;
             const related = pages.find(([file]) => url.split('#')[0] === file);
             if (related) node.url = BASE + related[2] + (url.includes('#') ? '#' + url.split('#')[1] : '');
+            else if (url.startsWith('download/')) node.url = BASE + '/' + url;
             else if (url.endsWith('/examples/external-symbol-import')) node.url = BASE + '#example-package';
             else if (url.endsWith('/examples/external-symbol-import/sdk.d.ts')) node.url = BASE + '/download/sdk.d.ts';
             else if (/^https?:\/\//i.test(url)) node.data = {hProperties:{target:'_blank',rel:'noopener noreferrer'}};
@@ -71,11 +72,11 @@ export async function buildGuide(output, {base='/plugin-guide',sourceDir=path.jo
               const code = child.children.find(c => c.tagName === 'code');
               const language = code?.properties?.className?.find(c => c.startsWith('language-'))?.slice(9);
               child.properties = {...child.properties, 'data-language': language ?? 'Files'};
-              if (!route && language === 'mermaid') {
+              if (route === '/architecture' && language === 'mermaid') {
                 node.children[i] = element('figure', {className:['architecture']}, [
                   element('figcaption', {}, [text('One request, four steps')]),
-                  element('ol', {}, ['Plugin UI','QuickJS in Worker','PCBJam checks + your confirmation','Native editor placement'].map(label => element('li', {}, [text(label)]))),
-                  element('p', {}, [text('The user’s canvas click commits the item through the editor’s normal Undo and collaboration flow.')]),
+                  element('ol', {}, ['1. Plugin UI','2. QuickJS in Worker','3. Trusted host checks','4. Editor and document'].map(label => element('li', {}, [text(label)]))),
+                  element('p', {}, [text('Requests travel through the trusted host. Results return as copied data along the same path.')]),
                 ]);
               }
             } else walk(child);
@@ -88,9 +89,9 @@ export async function buildGuide(output, {base='/plugin-guide',sourceDir=path.jo
       .use(remarkRehype).use(polish).use(rehypeStringify).process(markdown));
     const toc = sections.map(s => `<li><a href="#${escape(s.id)}">${escape(s.label)}</a></li>`).join('');
     const example = route ? '' : `<section class="downloads" id="example-package" aria-label="Example plugin downloads">
-      <div><span class="eyebrow">TYPESCRIPT + REACT STARTER</span><h2>External Symbol Import</h2><p>Edit readable TypeScript and React source, or install the built example to try it.</p></div>
-      <div class="download-links"><a class="primary" href="${BASE}/download/external-symbol-import-source.zip" download>Download TypeScript + React source <span aria-hidden="true">↓</span></a>
-      <a href="${BASE}/download/external-symbol-import.zip" download>Download installable plugin ZIP <span aria-hidden="true">↓</span></a>
+      <div><span class="eyebrow">DOWNLOADABLE EXAMPLE</span><h2>Start with TypeScript + React</h2><p>Source to edit, or a compiled symbol-import plugin to install.</p></div>
+      <div class="download-links"><a class="primary" href="${BASE}/download/external-symbol-import-source.zip" download>Download source <span aria-hidden="true">↓</span></a>
+      <a href="${BASE}/download/external-symbol-import.zip" download>Download installable ZIP <span aria-hidden="true">↓</span></a>
       <a href="${BASE}/download/sample-symbols.kicad_sym" download>Sample symbol library <span aria-hidden="true">↓</span></a>
       <a href="${BASE}/download/sdk.d.ts" download>SDK type declarations <span aria-hidden="true">↓</span></a></div>
     </section>`;
@@ -98,10 +99,10 @@ export async function buildGuide(output, {base='/plugin-guide',sourceDir=path.jo
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${route ? escape(title) : 'Plugin developer guide'} · PCBJam</title><link rel="stylesheet" href="${BASE}/guide.css"></head>
 <body><a class="skip-link" href="#content">Skip to guide</a>
-<header class="site-header"><a class="brand" href="${BASE}" aria-label="PCBJam plugin developer guide"><span class="brand-mark" aria-hidden="true">P</span>PCBJam <span class="divider">/</span><span class="header-label">Developers</span></a><span class="badge">Preview SDK</span></header>
-<div class="layout"><aside class="contents"><details open><summary>On this page</summary><nav aria-label="Guide sections"><ul>${toc}</ul></nav></details>
-<nav aria-label="Developer references"><a class="related" href="${BASE}">Developer guide</a><a class="related" href="${BASE}/api">API and permissions catalog</a><a class="related" href="${BASE}/security">Security and tests</a>${legacy?`<a class="related" href="${BASE}/plan">Platform implementation plan</a>`:''}</nav></aside>
-<main id="content"><div class="intro"><p class="eyebrow">${route ? 'REFERENCE' : 'PLUGIN DEVELOPMENT'}</p><h1>${route ? escape(title) : 'Build a plugin for PCBJam'}</h1><p class="lead">${route ? 'Companion documentation for the plugin platform.' : 'Your logic. Your interface. A small API that connects them to the editor.'}</p></div>
+<header class="site-header"><a class="brand" href="${BASE}" aria-label="PCBJam plugin developer guide"><span class="brand-mark" aria-hidden="true">P</span>PCBJam <span class="divider">/</span><span class="header-label">Developers</span></a><span class="badge">SDK v1</span></header>
+<div class="layout"><aside class="contents"><nav class="page-nav" aria-label="Developer documentation">${PAGES.map(([, , pageRoute], index) => `<a href="${BASE + pageRoute}"${route === pageRoute ? ' aria-current="page"' : ''}>${['Build a plugin','Available APIs','Architecture'][index]}</a>`).join('')}</nav>
+<details open><summary>On this page</summary><nav aria-label="Guide sections"><ul>${toc}</ul></nav></details></aside>
+<main id="content"><div class="intro"><p class="eyebrow">PLUGIN DEVELOPMENT</p><h1>${escape(title)}</h1><p class="lead">${route === '/api' ? 'What you can call, which permissions you need, and the limits.' : route === '/architecture' ? 'How the UI, QuickJS and trusted host work together.' : 'Three files, a small API, and your own interface.'}</p></div>
 ${example}<article>${html}</article><footer>PCBJam developer documentation · Generated from the repository guide.<a href="#content">Back to top ↑</a></footer></main></div></body></html>`);
   }
   await copyFile(path.join(ROOT,'guide.css'),path.join(output,'guide.css'));
@@ -111,7 +112,10 @@ ${example}<article>${html}</article><footer>PCBJam developer documentation · Ge
   if(!legacy){
     const {rename,rm}=await import('node:fs/promises');
     await rename(path.join(output,'guide.html'),path.join(output,'index.html'));
-    for(const name of ['api','security']){await mkdir(path.join(output,name),{recursive:true});await rename(path.join(output,`guide-${name}.html`),path.join(output,name,'index.html'));}
+    for(const name of ['api','architecture']){await mkdir(path.join(output,name),{recursive:true});await rename(path.join(output,`guide-${name}.html`),path.join(output,name,'index.html'));}
+    // Keep old bookmarks working without adding a fourth page to navigation.
+    await mkdir(path.join(output,'security'),{recursive:true});
+    await copyFile(path.join(output,'architecture/index.html'),path.join(output,'security/index.html'));
     await rm(path.join(output,'download'),{recursive:true,force:true});
     await rename(path.join(output,'guide-downloads'),path.join(output,'download'));
     await copyFile(path.join(output,'download/external-symbol-import/sdk.d.ts'),path.join(output,'download/sdk.d.ts'));

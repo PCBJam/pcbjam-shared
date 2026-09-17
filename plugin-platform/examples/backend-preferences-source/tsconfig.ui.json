@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "lib": ["ES2022", "DOM", "DOM.Iterable"], "jsx": "react-jsx" },
+  "include": ["src/ui/**/*.ts", "src/ui/**/*.tsx", "src/contracts.ts", "types/ui.d.ts"]
+}

@@ -1,3 +1,4 @@
+import {validateBackendRequest} from '../backend-contract.mjs';
 import { z } from 'zod';
 const empty = z.object({}).strict();
 const id = z.string().min(1).max(128);
@@ -8,6 +9,8 @@ const key = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/);
 const request = (permission: string | null, input: z.ZodTypeAny) => ({ permission, input });
 /** The complete host operation allowlist. Tests must cover every entry. */
 export const METHODS = {
+    // Dynamic endpoint grants are checked by both the host and server.
+    'http.request': request(null, z.unknown().transform((value,ctx)=>{try{return validateBackendRequest(value);}catch{ctx.addIssue({code:z.ZodIssueCode.custom,message:'Invalid backend request'});return z.NEVER;}})),
     'context.get': request(null, empty),
     'project.getInfo': request('project:read-info', empty),
     'documents.list': request('project:read-info', z.object(page).strict()),

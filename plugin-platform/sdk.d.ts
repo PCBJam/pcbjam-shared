@@ -6,9 +6,11 @@ type PCBJamDocumentRef = {document:string;revision:number};
 type PCBJamItemSummary = {id:string;type:string;parent:string|null};
 type PCBJamItem = PCBJamItemSummary & {body:PCBJamSlot[]};
 // BEGIN GENERATED HOST METHODS
-type PCBJamHostMethod = "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "items.list" | "items.get" | "selection.get" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "editor.requestPlacement";
+type PCBJamHostMethod = "http.request" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "items.list" | "items.get" | "selection.get" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "editor.requestPlacement";
 // END GENERATED HOST METHODS
 declare const pcbjam: {
+  /** Approved HTTPS backend; no arbitrary URLs, headers or API keys. */
+  http:{request(endpointId:string,request:{method:'GET';path:string}|{method:'POST';path:string;json:PCBJamJSON}):Promise<{status:number;headers:Record<string,string>;body:PCBJamJSON}>};
   handle(command:string,handler:(params:any)=>unknown|Promise<unknown>):void;
   context:{get():Promise<{
     tool:string;fileName:string;readOnly:boolean;canPlaceItems:boolean;

@@ -1,109 +1,109 @@
-# Plugin security and testing
+# Plugin architecture
 
-**Preview SDK v1.** This page explains the boundaries your plugin must respect
-and the cases to test before sharing a package. See the [developer guide](0008-local-plugin-development.md)
-and [API reference](0009-plugin-api-and-permissions.md) for callable methods.
+A plugin has **logic**, **UI** and a **manifest**. PCBJam runs the two code parts
+separately and controls their access to the editor.
 
-## Where your code runs
+## The four parts
 
-Your logic runs in QuickJS inside a dedicated browser Worker. QuickJS has bounded
-CPU turns, stack and heap. It has no browser, Node.js, network, cookie or native
-editor access. PCBJam supplies a small SDK that sends validated requests through
-a trusted wrapper. Results are copies; you never receive a `Y.Doc`, WASM pointer,
-`Module` object or shared editor memory.
+| Part | Job |
+|---|---|
+| UI iframe | Runs the plugin's HTML, CSS and optional React in its own floating panel. |
+| Worker + QuickJS | Runs `main.js` away from the editor's UI thread, with CPU and memory limits. |
+| Trusted host | PCBJam's own code. Supplies the SDK connection, validates requests and checks permissions. |
+| Editor | Owns the native KiCad/WASM engine and collaborative Yjs document. Executes approved operations. |
 
-Your custom UI runs in a separate iframe with an opaque origin and
-`sandbox="allow-scripts"`. Its Content Security Policy restricts scripts, styles,
-network requests, frames and browser features. Bundle React, JavaScript and CSS
-inside the package. Do not depend on remote fonts, CDNs or a development server.
-The UI can call commands that your logic registered; it cannot call host APIs
-directly. PCBJam checks the channel independently of the convenience SDK.
+PCBJam starts the Worker **directly**, separately from the UI iframe. Inside the
+Worker, PCBJam's wrapper creates QuickJS and exposes the limited `pcbjam` API.
+Uploaded logic runs inside QuickJS, not as unrestricted Worker JavaScript.
 
-Iframe JavaScript does not have QuickJS's CPU or memory budgets. CSP blocks the
-network channels tested by PCBJam, but arbitrary UI is not a guarantee of zero
-data disclosure. Treat information passed to your custom UI as disclosed to
-that plugin. Only request design access when the feature needs it.
+The wrapper is the connection and permission boundary: without it, your isolated
+code could calculate things but could not ask PCBJam to read a document or place
+a symbol. The trusted host handles those requests through specific adapters.
 
-## What authorizes a request
+## One API call
 
-A signed-in user uploads a private release and reviews its requested permissions.
-The release is immutable and pinned by content hashes. Opening it creates an
-activation tied to that user, session, installed release, current project and
-current document. Each host request checks the installed grants and fresh server
-access before doing work. Long-running actions are checked again after waiting
-for a picker, confirmation or data load.
+```mermaid
+flowchart LR
+  UI["Plugin UI"] -->|"registered command"| Q["QuickJS in Worker"]
+  Q -->|"SDK request"| H["Trusted host: validate and authorize"]
+  H -->|"approved operation"| E["Editor and document"]
+```
 
-An API key is not required for the browser SDK. A key pasted into your plugin
-would be visible to anyone who has its package. Backend identity signing and
-outbound proxy requests are not available in this preview.
+For example, a button calls `pcbjamUI.call('inspect')`. PCBJam forwards that to
+the plugin's `inspect` handler in QuickJS. The handler calls `pcbjam.items.list()`;
+the trusted host checks the request and reads the current document.
+The result returns along the same path to the UI.
 
-Closing the panel, switching documents or accounts, disabling, updating or
-uninstalling a plugin stops its instance and invalidates temporary handles.
-Other tabs detect server revocation through their next request or a periodic
-check, normally within two seconds plus request time. This is not instantaneous
-revocation of information already delivered. Network failures fail closed.
+Communication uses validated messages and copied data. Plugins never receive
+the editor's `Module`, a `Y.Doc`, a WASM pointer or shared editor memory.
+Reading a large design therefore has a copying cost; use paged item reads.
 
-## User-approved effects
+## Permissions and isolation
 
-File selection, downloads and placement confirmations belong to PCBJam outside
-plugin-controlled HTML. You cannot read arbitrary paths or silently save a file.
-A selected file handle belongs to one instance and expires when it stops.
+The manifest requests permissions; the user approves them at installation.
+Account access is controlled by a database flag, checked on every request.
+Opening a plugin creates a temporary server-authorized activation tied to the
+signed-in user, session, installed release, project and document. Each host call
+checks those grants and current access. Calls waiting on prompts or data loads
+are checked again before continuing. Authentication stays in trusted PCBJam code;
+plugins need no API key and receive no session credentials.
 
-Hosted symbol placement requires a writable schematic, an enabled placement
-capability and user approval. A separate trusted Worker checks a bounded format
-allowlist before the live native parser receives the proposal. Unsupported
-resources, simulation fields, external definitions and footprint placement are
-rejected. The promise resolves after native placement or cancellation; errors
-reject it. The editor's normal commit provides Undo and collaboration.
+QuickJS logic has no DOM, Node.js, browser storage or direct network API.
+It has a 64 MiB heap and a one-second CPU budget per execution turn.
+The iframe has an opaque origin, `sandbox="allow-scripts"` and a restrictive
+Content Security Policy. It can manipulate its own DOM and call registered
+commands, but cannot access PCBJam's DOM or invoke host APIs directly.
+File pickers and placement confirmations live outside plugin HTML.
 
-These checks reduce the attack surface. They are not a certification that the
-native editor or browser is free of vulnerabilities. Native placement remains
-independently switchable by the deployment operator.
+QuickJS limits apply to logic, not arbitrary iframe JavaScript. Treat data sent
+to a plugin's UI as disclosed to that plugin; the sandbox is not a promise of
+zero data disclosure or a vulnerability-free browser.
 
-## Storage and release lifecycle
+Symbol placement also passes through a separate trusted validation Worker before
+reaching the native editor. The normal native commit provides Undo and collaboration.
 
-Installs and grants are private to the signed-in account. Plugin storage is local
-to a browser and scoped to the account, plugin and project. Another plugin cannot
-select that namespace. Writes use a revision check to avoid overwriting another
-tab's changes. Disable retains data. Reset and uninstall revoke its namespace;
-cleanup runs when the account refreshes the plugin list. Browser eviction can
-remove settings at any time, so handle missing keys.
+## Requests to your backend
 
-Upload a new manifest version whenever package bytes change. Updates require
-permission review and invalidate old instances. A runtime upgrade can require
-rebuilding and reinstalling a release during this preview. There is no silent
-permission expansion, public marketplace or plugin backend delegation.
+`pcbjam.http.request()` follows the same host boundary, then reaches PCBJam's
+server. The server rechecks the session, installation, project access, user
+grants and the exact endpoint policy approved in Postgres. A separate private
+transport resolves DNS, rejects private/special addresses and pins the TLS
+connection to a validated public IP while verifying the original hostname.
+It has no database, R2 or signing credentials. It never follows redirects.
 
-## Test your plugin
+For identity-bearing requests, PCBJam signs a 60-second assertion containing a
+plugin-specific user ID, audience, method, URL and body hash. Signing keys stay
+on PCBJam's server; the backend gets public keys from the fixed issuer's JWKS
+endpoint. The backend verifies the signature and claims and atomically consumes
+the request ID in durable storage before handling it. This proves an authorized
+request from that PCBJam session, not that a human reviewed each action. The
+backend still owns its own authorization and data validation.
 
-- Build the downloadable source in a fresh folder using `npm ci` and
-  `npm run build`. Install the compiled ZIP or `dist/plugin`, not source code.
-- Test first launch, restart, close/reopen, disable/enable, update, reset and
-  uninstall. Test a second browser: installs follow the account; settings do not.
-- Remove each requested permission and confirm that unavailable features show a
-  useful explanation. Use `context.get()` to discover current capabilities.
-- Try read-only projects, switching documents/accounts while a prompt is open,
-  lost project access, network failures and cancelled file dialogs.
-- Test malformed/large files and missing library parents. Do not assume every
-  KiCad symbol form is accepted. Display a validation failure to the user.
-- For symbol placement, assert no document edit before approval and canvas click.
-  Test Esc, parse errors, Undo and visibility in another collaborative editor.
-- Test storage conflicts, missing settings, quota errors and browser-data clearing.
-- Keep React in UI code. Check that logic does not import browser globals and
-  that dependencies are bundled rather than fetched at runtime.
+Cancellation prevents further work where possible; it cannot undo a request the
+backend has already processed. Revocation blocks new requests but does not revoke
+an already issued signature before its short expiry. Uninstall/reset in PCBJam
+does not delete data saved on the third-party backend.
 
-## Platform checks and limits
+## Installation and lifecycle
 
-PCBJam's automated suites exercise package traversal, duplicate entries,
-compression bombs, release tampering, every registered SDK method's positive and
-permission-denial paths, forged handles, invalid messages, bounded outputs,
-QuickJS runaway code, UI isolation and instance teardown. Browser boundary suites
-run against Chromium, Firefox and WebKit. The native editor has a separate test
-requiring a compatible freshly built WASM artifact.
+Uploads become immutable, hashed releases in **private R2 storage**. The database
+stores ownership, installed versions and approved permissions. Installations
+follow the user's account across browsers. This is private installation;
+a public marketplace is not available yet.
 
-The hosted service also has tests using Postgres and the production Cloudflare
-Worker bundle with private RPC and R2 emulation: cookie authentication, ownership,
-permission review, stale grants, one-use tickets, revocation and storage epochs.
-Local emulation is useful evidence; deployed HTTPS/header checks and the native
-placement/Undo/collaboration test remain rollout gates. No coverage percentage,
-zero-egress guarantee or absence of vulnerabilities is claimed.
+PCBJam verifies package/runtime integrity before execution. A separate UI service
+delivers the iframe through a short-lived, single-use ticket. Matching runtime
+assets provide the Worker, QuickJS and SDK.
+
+Closing the panel or switching documents stops the instance and cancels pending
+work. Disable, update and uninstall revoke activations; another open tab notices
+on its next check, normally within two seconds plus request time.
+Previously delivered data cannot be revoked.
+
+Plugin settings use a host-controlled IndexedDB namespace for the account,
+project and plugin. They stay in that browser. Disable preserves them; reset
+and uninstall revoke the namespace. Selected file handles and UI state disappear
+when the instance stops.
+
+[Build a plugin](0008-local-plugin-development.md) ·
+[Available APIs](0009-plugin-api-and-permissions.md).

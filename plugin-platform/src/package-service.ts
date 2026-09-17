@@ -20,16 +20,16 @@ export async function boundedResponse(response:Response, maxBytes:number) {
     for(const chunk of chunks){result.set(chunk,offset);offset+=chunk.byteLength;}return result;
   }catch(error){await reader.cancel().catch(()=>{});throw error;}finally{reader.releaseLock();}
 }
-export async function platformRequest(path:string, method='GET', data?:unknown, signal?:AbortSignal) {
+export async function platformRequest(path:string, method='GET', data?:unknown, signal?:AbortSignal, timeoutMs=10000) {
   if(!configuration)throw new Error('Plugin platform is not configured');
-  const deadline=AbortSignal.timeout(10000);
+  const deadline=AbortSignal.timeout(timeoutMs);
   const response=await fetch(configuration.apiBase+'/api/plugin-platform/v1/'+path,{
     method,credentials:'include',redirect:'error',cache:'no-store',signal:signal?AbortSignal.any([signal,deadline]):deadline,
     headers:{'Content-Type':'application/json','X-PCBJam-Plugin-Platform':'1'},
     ...(data===undefined?{}:{body:JSON.stringify(data)}),
   });
   const result=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(await boundedResponse(response,8*1024*1024)));
-  if(!response.ok)throw new Error(result.error??'Plugin operation failed');
+  if(!response.ok)throw Object.assign(new Error(result.error??'Plugin operation failed'), typeof result.code==='string'&&/^[A-Z_]{1,40}$/.test(result.code)?{code:result.code}:{});
   return result;
 }
 export async function sha256(bytes:Uint8Array) {

@@ -1,0 +1,25 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  padding: 22px;
+  background: #121a25;
+  color: #e2e8f0;
+  font: 14px/1.55 system-ui, sans-serif;
+}
+h1 { font-size: 21px; line-height: 1.25; margin: 0 0 12px; }
+p { color: #a2b1c4; margin: 0 0 18px; }
+button, select { font: inherit; width: 100%; border-radius: 7px; padding: 10px 12px; }
+button {
+  cursor: pointer;
+  background: #62b9f2;
+  color: #102132;
+  border: 0;
+  font-weight: 650;
+  margin: 0 0 14px;
+}
+button:disabled, select:disabled { opacity: .45; cursor: default; }
+select { background: #1d2938; color: #e2e8f0; border: 1px solid #43536a; margin: 8px 0 16px; }
+label { display: block; color: #c6d7e9; }
+.file { overflow-wrap: anywhere; font-size: 12px; color: #a2b1c4; margin-bottom: 14px; }
+.note { font-size: 12px; color: #8196ad; margin-top: 20px; border-top: 1px solid #2b394c; padding-top: 16px; }
+.status { white-space: pre-wrap; font-size: 13px; }

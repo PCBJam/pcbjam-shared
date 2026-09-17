@@ -1,3 +1,4 @@
+import {backendPermissions, validateBackendRequest, BACKEND_LIMITS, type BackendEndpoint} from '../backend-contract.mjs';
 const runtimeAsset = (name: string) => new URL(name, import.meta.url).href;
 import { METHODS, LIMITS, boundedJSON, type Method, type DocumentAdapter } from './package-api';
 import { storageCall } from './package-storage';
@@ -13,6 +14,7 @@ export interface PluginDescriptor {
     installed?: boolean;
     enabled?: boolean;
     fileMetadata?: Record<string, {sha256:string;bytes:number}>;
+    backends?: Array<BackendEndpoint & {endpoint:string;registrationId?:string;policyDigest:string;status:string;ready:boolean;audience?:string;issuer?:string}>;
     digest: string;
     manifest: {
         id: string;
@@ -21,6 +23,7 @@ export interface PluginDescriptor {
         description: string;
         surfaces: string[];
         permissions: string[];
+        endpoints?: Record<string,BackendEndpoint>;
     };
 }
 export interface EditorContext {
@@ -130,6 +133,7 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             throw new Error('Plugin is unavailable in this editor');
     };
     const available = (method: string) => {
+        if(method==='http.request')return !!activation && Object.entries(options.plugin.manifest.endpoints??{}).some(([name,p])=>Object.keys(backendPermissions({[name]:p})).every(grant=>grants.includes(grant)));
         if (method === 'context.get' || method.startsWith('files.') && method !== 'files.save')
             return true;
         if (method === 'editor.requestPlacement')
@@ -197,6 +201,13 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
         check();
         const context = options.context();
         switch (method) {
+            case 'http.request': {
+                const endpoint=options.plugin.manifest.endpoints?.[params.endpointId];
+                if(!endpoint)throw new Error('Undeclared backend');
+                validateBackendRequest(params,endpoint);
+                for(const permission of Object.keys(backendPermissions({[params.endpointId]:endpoint})))requirePermission(permission);
+                return platformRequest('activations/'+activation!.id+'/http','POST',params,signal,BACKEND_LIMITS.hostDeadlineMs);
+            }
             case 'context.get': return { tool: context.tool, fileName: context.fileName, readOnly: context.readOnly, canPlaceItems: available('editor.requestPlacement') && grants.includes('editor:place-items'),
                 methods: Object.keys(METHODS).filter(name => available(name) && (!METHODS[name as Method].permission || grants.includes(METHODS[name as Method].permission!))), limits: LIMITS };
             case 'project.getInfo': {
@@ -304,7 +315,7 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             default: throw new Error('Unknown PCBJam API method');
         }
     }
-    const methodLimit = (method: string) => method === 'files.readText' ? 5 * 1024 * 1024 : LIMITS.snapshotBytes;
+    const methodLimit = (method: string) => method === 'http.request' ? BACKEND_LIMITS.resultBytes : method === 'files.readText' ? 5 * 1024 * 1024 : LIMITS.snapshotBytes;
     options.signal.addEventListener('abort', dispose, { once: true });
     try {
         options.signal.throwIfAborted();
@@ -377,7 +388,7 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
                 }
             }).catch(error => {
                 if (!closed)
-                    channel.port1.postMessage({ type: 'host-result', id: message.id, ok: false, error: String(error.message).slice(0, 400) });
+                    channel.port1.postMessage({ type: 'host-result', id: message.id, ok: false, error: String(error.message).slice(0, 400), ...(typeof error.code==='string'&&/^[A-Z_]{1,40}$/.test(error.code)?{code:error.code}:{}) });
             });
         };
         worker.onerror = () => fail('Plugin Worker failed');
