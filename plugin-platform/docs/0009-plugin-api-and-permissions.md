@@ -29,6 +29,7 @@ permissions. `context.get()` needs no additional permission.
 | `items.list({...ref, ...page, types})` | `documents:read` | Paged item IDs, types and parents at an exact revision; optional type filter. |
 | `items.get({...ref, ids, partial?})` | `documents:read` | Canonical bodies for up to 100 unique item IDs in the current document. With `partial: true`, oversized items return `{id, error}` instead of failing the call. |
 | `selection.get()` | `editor:read-selection` | Current item IDs, document revision and separate selection revision. |
+| `editor.select({document, ids})` | `editor:select` | Replace the editor selection; items a collaborator holds are reported as `held` and left alone. |
 | `storage.get(key)` | `storage:local` | Value, found flag and namespace revision for a key. |
 | `storage.set({key, value, expectedRevision})` | `storage:local` | Write JSON with expectedRevision; return the new namespace revision. |
 | `storage.delete({key, expectedRevision})` | `storage:local` | Delete a key with expectedRevision; return the new namespace revision. |
@@ -163,6 +164,15 @@ File selection, downloads and placement approval use **PCBJam-owned controls**.
   a PNG are refused.
 - A plugin UI cannot start a download by itself; every file goes through the
   user's confirmation above.
+- `editor.select({document, ids})` replaces the user's selection with up to 500
+  items of the current document; an empty list clears it. It returns
+  `{selected, held, missing}`. In a shared session a selection also claims the
+  item, so anything a collaborator has selected right now is left alone and
+  listed in `held` — show that to the user rather than treating it as an
+  error. `missing` ids are not in the document. The call rejects while the
+  user has an editor tool running (a move, a route), and the selection changes
+  just after the call returns: read it back with `selection.get()` if you need
+  to confirm. Selecting is available in read-only sessions too.
 - `editor.requestPlacement()` accepts a bounded, self-contained schematic symbol
   with an embedded definition. It requires a writable schematic and enabled
   placement capability. It resolves to `{status: 'placed'}` after the user's
@@ -179,6 +189,7 @@ File selection, downloads and placement approval use **PCBJam-owned controls**.
 | Snapshot or item response | 1 MiB serialized JSON; use small item batches for large designs. |
 | Item page / explicit item batch | 100 items; documents over 50,000 items are refused. |
 | File catalog / selection | 5,000 catalog entries; 1,000 selected IDs. |
+| Plugin-made selection | 500 items per call. |
 | Chosen file / text download | 4 MiB / 512 KiB. |
 | Web page / image download | 8 MiB of HTML including PCBJam's policy line / 4 MiB PNG. |
 | Storage | 64 keys, 16 KiB per value, 256 KiB per namespace. |
@@ -203,7 +214,8 @@ You do not need timers to stay under the host-call rate: the host delays for you
 
 There is no raw WASM/pointer access, direct Yjs mutation, sibling-document loading,
 change subscription, user-profile API, OAuth delegation
-signing. The only current write operation is confirmed symbol placement.
+signing. The only current document write is confirmed symbol placement;
+`editor.select()` changes the selection, not the design.
 The only UI surface is a floating panel in the schematic or PCB editor.
 
 [Build a plugin](0008-local-plugin-development.md) ·

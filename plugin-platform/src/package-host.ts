@@ -32,6 +32,8 @@ export interface EditorContext {
     fileName: string;
     readOnly: boolean;
     canPlaceItems: boolean;
+    /** Read on every call: the engine module can finish loading after the plugin mounts. */
+    canSelectItems?: boolean;
 }
 export interface PackageHostOptions {
     plugin: PluginDescriptor;
@@ -49,6 +51,9 @@ export interface PackageHostOptions {
     /** Stable trusted account/project binding, never supplied by a plugin. */
     storageBinding?(): string | null;
     authorize?(signal: AbortSignal): Promise<void>;
+    /** Replace the editor selection. Must never take an item another collaborator holds, and must
+     *  return only ids it was given. Absent where the engine cannot do this. */
+    selectItems?(ids: string[], signal: AbortSignal): Promise<{ selected: string[]; held: string[]; missing: string[] }>;
     /** Draw the confirmation, authorize `method`, then download `bytes` as a file; never open or render them. */
     saveFile?(proposal: {
         name: string;
@@ -157,6 +162,8 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
         if(method==='http.request')return !!activation && Object.entries(options.plugin.manifest.endpoints??{}).some(([name,p])=>Object.keys(backendPermissions({[name]:p})).every(grant=>grants.includes(grant)));
         if (SAVES.has(method))
             return !!options.saveFile;
+        if (method === 'editor.select')
+            return !!options.selectItems && !!options.documents && options.context().canSelectItems === true;
         if (method === 'context.get' || method.startsWith('files.'))
             return true;
         if (method === 'editor.requestPlacement')
@@ -312,6 +319,15 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
                 if (selection.ids.length > 1000)
                     throw new Error('Selection exceeds limits');
                 return { document: documentHandle, revision: options.documents!.revision(), selectionRevision: selection.revision, ids: selection.ids };
+            }
+            case 'editor.select': {
+                getDocument(params, false);
+                const result = await options.selectItems!(params.ids, signal);
+                check();
+                // The adapter is trusted code, but what a plugin receives is still limited to what it asked about.
+                const asked = new Set<string>(params.ids);
+                const only = (value: unknown) => Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && asked.has(entry)) : [];
+                return { selected: only(result?.selected), held: only(result?.held), missing: only(result?.missing) };
             }
             case 'storage.get':
             case 'storage.set':

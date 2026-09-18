@@ -8,5 +8,6 @@
   "project:read-info": "Read metadata and file names in the current project",
   "documents:read": "Read the current editor document, including all its items and embedded symbols",
   "editor:read-selection": "Read selected item IDs in the current editor",
+  "editor:select": "Change which items are selected in the current editor",
   "storage:local": "Store local data for this plugin, account and project"
 }

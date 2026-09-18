@@ -8,7 +8,7 @@ type PCBJamItem = PCBJamItemSummary & {body:PCBJamSlot[]};
 /** TOO_LARGE: over the response limits on its own. DEFERRED: did not fit in this response; request it again. */
 type PCBJamItemError = {id:string;error:'TOO_LARGE'|'DEFERRED'};
 // BEGIN GENERATED HOST METHODS
-type PCBJamHostMethod = "http.request" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "items.list" | "items.get" | "selection.get" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "editor.requestPlacement";
+type PCBJamHostMethod = "http.request" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "editor.requestPlacement";
 // END GENERATED HOST METHODS
 /** Plugin logic only, and only while a command is being handled: at most 32 pending, 60 s each,
  *  all cancelled when the command settles. An exception thrown from a callback stops the plugin. */
@@ -23,7 +23,7 @@ declare const pcbjam: {
     methods:PCBJamHostMethod[];
     /** Host calls over hostCallsPerWindow are delayed, never rejected. Keep at most pendingHostCalls
      *  in flight: await each call. UI commands over their window stop the plugin. */
-    limits:{snapshotBytes:number;pageItems:number;fileBytes:number;exportBytes:number;storageBytes:number;storageValueBytes:number;storageKeys:number;htmlBytes:number;imageBytes:number;
+    limits:{snapshotBytes:number;pageItems:number;fileBytes:number;exportBytes:number;storageBytes:number;storageValueBytes:number;storageKeys:number;htmlBytes:number;imageBytes:number;selectItems:number;
       responseBytes:number;responseNodes:number;hostCallsPerWindow:number;hostCallWindowMs:number;pendingHostCalls:number;
       exportSliceMs:number;exportSliceChars:number;exportTotalChars:number;readLeaseMs:number;
       uiCommandsPerWindow:number;uiCommandWindowMs:number;uiCommandBytes:number;commandTimeoutMs:number};
@@ -80,6 +80,10 @@ declare const pcbjam: {
   editor:{
     /** Confirms native tool handoff, not successful parsing/placement/saving. */
     requestPlacement(proposal:{label:string;sexpr:string}):Promise<{status:'placed'|'queued'|'cancelled'}>;
+    /** Replace the editor selection with up to 500 items of the current document (`[]` clears it). Needs
+     *  `editor:select`. `held` items are selected by a collaborator right now and were left alone; `missing`
+     *  ids are not in the document. Rejects while the user has a tool running. */
+    select(options:{document:string;ids:string[]}):Promise<{selected:string[];held:string[];missing:string[]}>;
   };
   randomUUID():string;
 };

@@ -95,7 +95,7 @@ declare const __clearTimer: (message: string) => void;
             readText: (handle: string) => call('files.readText', { handle }),
             close: (handle: string) => call('files.close', { handle }),
         }),
-        editor: Object.freeze({ requestPlacement: (proposal: unknown) => call('editor.requestPlacement', proposal) }),
+        editor: Object.freeze({ requestPlacement: (proposal: unknown) => call('editor.requestPlacement', proposal), select: (options: unknown) => call('editor.select', options) }),
         randomUUID: () => uuid(),
     });
     // setTimeout/clearTimeout exist so logic can pause between steps. They work only while a

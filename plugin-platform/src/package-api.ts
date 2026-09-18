@@ -22,6 +22,8 @@ export const METHODS = {
     'items.list': request('documents:read', z.object({ document, revision, ...page, types: z.array(z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/)).max(8) }).strict()),
     'items.get': request('documents:read', z.object({ document, revision, ids: z.array(id).min(1).max(100).refine(v => new Set(v).size === v.length), partial: z.boolean().optional() }).strict()),
     'selection.get': request('editor:read-selection', empty),
+    // Replaces the selection; items a collaborator holds are reported as held, never taken.
+    'editor.select': request('editor:select', z.object({ document, ids: z.array(id.max(64)).max(500).refine(v => new Set(v).size === v.length) }).strict()),
     'storage.get': request('storage:local', z.object({ key }).strict()),
     'storage.set': request('storage:local', z.object({ key, value: z.unknown().refine(v => v !== undefined), expectedRevision: z.number().int().min(0).safe() }).strict()),
     'storage.delete': request('storage:local', z.object({ key, expectedRevision: z.number().int().min(0).safe() }).strict()),
@@ -36,7 +38,7 @@ export const METHODS = {
     'editor.requestPlacement': request('editor:place-items', z.object({ label: z.string().min(1).max(100), sexpr: z.string().max(512 * 1024) }).strict()),
 } as const;
 export type Method = keyof typeof METHODS;
-export const LIMITS = Object.freeze({ snapshotBytes: 1024 * 1024, pageItems: 100, fileBytes: 4 * 1024 * 1024, exportBytes: 512 * 1024, storageBytes: 256 * 1024, storageValueBytes: 16 * 1024, storageKeys: 64, htmlBytes: 8 * 1024 * 1024, imageBytes: 4 * 1024 * 1024,
+export const LIMITS = Object.freeze({ snapshotBytes: 1024 * 1024, pageItems: 100, fileBytes: 4 * 1024 * 1024, exportBytes: 512 * 1024, storageBytes: 256 * 1024, storageValueBytes: 16 * 1024, storageKeys: 64, htmlBytes: 8 * 1024 * 1024, imageBytes: 4 * 1024 * 1024, selectItems: 500,
     // Enforcement values, published through context.get() so plugins can plan reads.
     // Host calls over the window are delayed, not rejected. The runtime Worker refuses a
     // fifth call in flight; the host repeats that bound in case the Worker is bypassed.
