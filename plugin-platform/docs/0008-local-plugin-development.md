@@ -4,6 +4,26 @@
 optional. Sign into PCBJam to install it. Ask PCBJam to enable plugin access for your
 account before installing your first plugin. You do not need PCBJam's source code.
 
+## What a plugin can do
+
+| You want to… | Use | Permission |
+|---|---|---|
+| Read the open schematic or board, including very large ones | `documents.export()`, or `items.list()` / `items.get()` for a few items | `documents:read` |
+| Draw the board without doing geometry yourself (pads, arcs and text arrive as polygons) | `board.geometry()`, PCB editor only | `documents:read` |
+| Know what the user selected, or select parts for them | `selection.get()`, `editor.select()` | `editor:read-selection`, `editor:select` |
+| Give the user a file: CSV, JSON, a KiCad file, a PNG | `files.save()`, `files.saveImage()` | `files:save` |
+| Give the user a standalone web page that works offline | `files.saveHtml()` | `files:save-html` |
+| Read a file the user picks | `files.choose()`, `files.readText()` | `files:choose` |
+| Remember settings per project | `storage.*` | `storage:local` |
+| Place a symbol in a schematic | `editor.requestPlacement()` | `editor:place-items` |
+| Call your own server | `http.request()` | `network:<name>`, after PCBJam approves the routes |
+
+Every call, its arguments and its limits are in [Available APIs](0009-plugin-api-and-permissions.md).
+What is deliberately not possible: network access from logic or UI other than
+your approved backend, reading projects that are not open, editing the design
+other than by confirmed symbol placement, and anything running while no command
+is being handled.
+
 ## Download and build
 
 Download the [TypeScript + React starter](download/external-symbol-import-source.zip)
@@ -120,12 +140,106 @@ Call the command from your UI. This complete `ui.html` works without a build:
 ```
 
 React components use the same `pcbjamUI.call()` from event handlers. Keep React
-in UI code; logic has no DOM, Node.js, `fetch` or native timers. Bundle CSS into
-`ui.html`; runtime-injected styles are restricted.
+in UI code; logic has no DOM, Node.js or `fetch`. Logic does have `setTimeout`
+and `clearTimeout`, but only while it is handling a command: pending timers are
+cancelled when the command settles, so nothing runs in the background. Bundle CSS
+into `ui.html`; runtime-injected styles are restricted. Embedded `data:` and
+`blob:` images work in the UI; images, fonts or scripts from a server do not,
+and inline `style="…"` attributes are blocked (set styles from script instead).
+
+A message from the UI to logic is limited to 64,000 characters. Build anything
+large, such as a page for `files.saveHtml()`, in logic, from data logic read
+itself, and send the UI only what it displays.
 
 Register commands at startup, call host APIs inside handlers, and pass only JSON
 arguments/results. Validate incoming arguments. Allow one UI command at a time
 and handle errors. The [SDK declarations](download/sdk.d.ts) provide autocomplete.
+
+## Example: a parts list that highlights and exports
+
+A board plugin in the style of an interactive BOM: group the parts, draw their
+pads, select a group on the board when its row is clicked, and export a
+standalone page. It shows the three habits that matter on real boards.
+
+`manifest.json` asks for exactly what it uses:
+
+<!-- example:parts-list manifest.json -->
+```json
+{
+  "apiVersion": 1,
+  "id": "parts-list-example",
+  "name": "Parts list",
+  "description": "Groups parts, highlights them on the board and exports a page.",
+  "version": "0.1.0",
+  "main": "main.js",
+  "ui": "ui.html",
+  "surfaces": ["editor:pcbnew"],
+  "permissions": ["ui:custom", "ui:project-data", "documents:read", "editor:select", "files:save-html"]
+}
+```
+
+`main.js`:
+
+<!-- example:parts-list main.js -->
+```js
+let loaded = null;
+
+// 1. Read in slices and keep only what you need. The callback sees each batch once;
+//    nothing is retained for you, which is what lets a large board fit in 64 MiB.
+async function load() {
+  const ref = await pcbjam.documents.getCurrent();
+  const groups = new Map(), parts = [];
+  let bbox = null;
+  await pcbjam.board.geometry({ document: ref.document, revision: ref.revision }, records => {
+    for (const record of records) {
+      if (record.$ === 'board') bbox = record.bbox;
+      if (record.$ !== 'footprint' || record.attrs.excludeFromBom) continue;
+      const key = record.value + '\u0000' + record.footprint;
+      let group = groups.get(key);
+      if (!group) groups.set(key, group = { value: record.value, footprint: record.footprint, refs: [], ids: [] });
+      group.refs.push(record.ref);
+      group.ids.push(record.id);
+      // Pads are already polygons on the board, in millimetres: no rotation or rounding maths here.
+      parts.push({ id: record.id, side: record.side, pads: record.pads.flatMap(pad => (pad.polygons[record.side] ?? []).map(polygon => polygon.outline)) });
+    }
+  });
+  loaded = { document: ref.document, bbox, groups: [...groups.values()], parts };
+  return loaded;
+}
+
+// 2. The design can change while you read. That is normal: read its new revision and start again.
+pcbjam.handle('load', async () => {
+  for (let attempt = 0; ; attempt++) {
+    try { return await load(); }
+    catch (error) { if (attempt >= 3 || !/Document changed/.test(error.message)) throw error; }
+  }
+});
+
+// `held` parts are selected by a collaborator right now and were left alone: tell the user, it is not an error.
+pcbjam.handle('select', ({ ids }) => pcbjam.editor.select({ document: loaded.document, ids }));
+
+// 3. Design text is user data. Escape it before it becomes HTML, in your UI and in anything you export.
+const escapeHtml = text => String(text).replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';');
+
+// Build the page here, in logic: a message from ui.html to logic is limited to 64,000 characters.
+// The saved page cannot use the network, so inline everything it needs.
+pcbjam.handle('export', async () => {
+  const data = loaded ?? await load();
+  const rows = data.groups.map(group => `<tr><td>${group.refs.length}</td><td>${escapeHtml(group.value)}</td><td>${escapeHtml(group.footprint)}</td><td>${escapeHtml(group.refs.join(', '))}</td></tr>`);
+  const html = `<title>Parts list</title><style>td{padding:2px 8px}</style><table><tr><th>Qty</th><th>Value</th><th>Footprint</th><th>References</th></tr>${rows.join('')}</table>`;
+  return pcbjam.files.saveHtml({ name: 'parts-list.html', html });
+});
+```
+
+In `ui.html`, call `pcbjamUI.call('load')`, draw `parts[].pads` on a canvas
+(they are closed outlines in millimetres; `bbox` gives you the scale), call
+`pcbjamUI.call('select', { ids })` when a row is clicked, and
+`pcbjamUI.call('export')` from a button. `export` resolves to
+`{status: 'download-requested'}` or `{status: 'cancelled'}`: the user confirms
+every download, so treat a cancel as a normal outcome. Check
+`(await pcbjam.context.get()).methods` before offering a feature:
+`board.geometryStart` and `editor.select` are absent on editor builds that
+predate them and in the schematic editor.
 
 ## Authentication and permissions
 

@@ -36,7 +36,25 @@ The result returns along the same path to the UI.
 
 Communication uses validated messages and copied data. Plugins never receive
 the editor's `Module`, a `Y.Doc`, a WASM pointer or shared editor memory.
-Reading a large design therefore has a copying cost; use paged item reads.
+Reading a large design therefore has a copying cost, and that copy happens on
+the thread that draws the editor.
+
+## Large reads never hold the editor
+
+Copying a whole board in one go blocked the editor for up to a second on a slow
+laptop (measured in Chromium, Firefox and WebKit on real boards), and a fixed
+chunk size did not help: one filled zone can be several megabytes by itself.
+`documents.export()` and `board.geometry()` are therefore **time-sliced**. The
+editor works for about 8 ms, hands over at most 256 KiB of text, rests for as
+long as it worked, and continues; it can stop in the middle of a single item.
+Data crosses as newline-delimited JSON text because a string passes to the
+Worker almost for free, while a tree of objects is copied node by node.
+A read is pinned to one document revision and stops with `Document changed…`
+if the design moves on, so a plugin never sees a mix of old and new. One such
+read runs at a time per plugin, up to 32 MiB.
+`tools/plugin-runtime-poc/scripts/bench-export.mjs` re-measures this and fails
+if any slice holds the thread longer than 50 ms; the worst recorded slice was
+13.4 ms with the CPU slowed six times.
 
 ## Permissions and isolation
 
@@ -44,12 +62,20 @@ The manifest requests permissions; the user approves them at installation.
 Account access is controlled by a database flag, checked on every request.
 Opening a plugin creates a temporary server-authorized activation tied to the
 signed-in user, session, installed release, project and document. Each host call
-checks those grants and current access. Calls waiting on prompts or data loads
-are checked again before continuing. Authentication stays in trusted PCBJam code;
+checks those grants and current access, before the work and again before the
+result is delivered, so a call that waited on a prompt cannot complete after
+access ended. Plain reads of the document that is already open in the tab may
+reuse a server check made within the last two seconds (the same interval at
+which every running plugin is re-checked anyway); anything with an effect
+outside the plugin — files, placement, selection, backend requests, storage
+writes — is checked on every call. Authentication stays in trusted PCBJam code;
 plugins need no API key and receive no session credentials.
 
 QuickJS logic has no DOM, Node.js, browser storage or direct network API.
-It has a 64 MiB heap and a one-second CPU budget per execution turn.
+It has a 64 MiB heap and a one-second CPU budget per execution turn. Its timers
+exist only while a command is being handled and are cancelled when it settles.
+At most four host calls may be in flight; calls beyond 40 in ten seconds are
+delayed by the host rather than refused, so a plain read loop needs no pacing.
 The iframe has an opaque origin, `sandbox="allow-scripts"` and a restrictive
 Content Security Policy. It can manipulate its own DOM and call registered
 commands, but cannot access PCBJam's DOM or invoke host APIs directly.
@@ -66,6 +92,56 @@ zero data disclosure or a vulnerability-free browser.
 
 Symbol placement also passes through a separate trusted validation Worker before
 reaching the native editor. The normal native commit provides Undo and collaboration.
+
+## Files a plugin can save
+
+Every file goes through a confirmation PCBJam draws, and PCBJam performs the
+download. The UI iframe has **no download permission**, by design: a download
+from `https://elsewhere.example/?data=…` is a network request that does not
+navigate the frame, so nothing would show it and the navigation watchdog would
+not see it — a silent way out for design data.
+
+Text, JSON, CSV and KiCad files are inert. An HTML page is not: it is plugin
+code, with design data inside it, that runs outside PCBJam when the user opens
+the file. `files.saveHtml()` therefore has its own permission, the confirmation
+says the file contains code, and PCBJam — not the plugin — writes the first
+bytes of the page: a Content-Security-Policy that allows inline script, inline
+style and embedded images, fonts and media, and nothing over the network. A
+policy the page declares itself can only tighten ours, because browsers enforce
+all policies at once. `scripts/test-saved-html.mjs` opens hostile saved pages as
+real local files in three engines and asserts that their own code runs and that
+no request leaves (fetch, XHR, beacon, WebSocket, form post, image, script,
+stylesheet, frame). What it cannot stop is the page sending the user to another
+address, for instance from a link they click. Files are only ever downloaded,
+never opened by PCBJam: a plugin's page must not run on PCBJam's origin.
+`files.saveImage()` accepts PNG only and checks the bytes; SVG can carry script
+and is not accepted.
+
+## Changing the selection
+
+`editor.select()` replaces the user's selection. In a shared session a selection
+is also a claim on the item, and when two people hold the same item the winner
+is decided by user ID, not by who was first — acceptable between people, who
+rarely grab the same part in the same second, but a plugin selects in bulk
+without looking and could pull a part out of a collaborator's hands mid-move.
+The engine therefore never takes an item another client holds: it is reported
+as `held`. Only the item ID is reported; who holds it is other users' presence,
+which no plugin permission covers. The call is refused while the user has a tool
+running or a file is loading, and a refused call changes nothing.
+
+## Board shapes
+
+`board.geometry()` returns shapes the engine computed. It is a read-only walk of
+the live board that returns early while a file is loading, as every engine read
+that walks the model must (see `docs/features/async/18-embind-audit.md`).
+Nothing a plugin writes reaches the C++ side: the request is two flags, and the
+resume cursor is produced by the engine and range-checked when it comes back. It
+carries the board's change counter, so a board edited between two slices is
+refused rather than resumed with shifted positions. It exposes the same board
+`documents:read` already covers, so it needs no further permission.
+
+Both engine-backed calls are feature-detected: on an editor build that predates
+them they are simply absent from `context.get().methods`.
 
 ## Requests to your backend
 

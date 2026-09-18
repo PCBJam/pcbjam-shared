@@ -44,6 +44,30 @@ permissions. `context.get()` needs no additional permission.
 | `editor.requestPlacement({label, sexpr})` | `editor:place-items` | Confirmed symbol placement: placed or cancelled. |
 <!-- END GENERATED HOST API -->
 
+## Permissions
+
+What the user is shown, and approves, when installing. Request only what your
+feature uses: every extra line is a reason to decline.
+
+<!-- BEGIN GENERATED PERMISSIONS -->
+| Permission | Shown to the user as | Calls it unlocks |
+|---|---|---|
+| `ui:custom` | Run a custom interface in a sandboxed iframe | — |
+| `ui:project-data` | Disclose plugin results to its custom interface | — |
+| `files:choose` | Read local files you explicitly choose for this plugin | `files.choose`, `files.readText`, `files.close` |
+| `files:save` | Request a text or image file download, confirmed by you | `files.save`, `files.saveImage` |
+| `files:save-html` | Request a web page download, confirmed by you; the page contains this plugin's code, which runs when you open the file | `files.saveHtml` |
+| `editor:place-items` | Request item placement, confirmed by you in the editor | `editor.requestPlacement` |
+| `project:read-info` | Read metadata and file names in the current project | `project.getInfo`, `documents.list` |
+| `documents:read` | Read the current editor document, including all its items and embedded symbols | `documents.getCurrent`, `documents.snapshot`, `documents.poll`, `documents.exportStart`, `documents.exportRead`, `board.geometryStart`, `items.list`, `items.get` |
+| `editor:read-selection` | Read selected item IDs in the current editor | `selection.get` |
+| `editor:select` | Change which items are selected in the current editor | `editor.select` |
+| `storage:local` | Store local data for this plugin, account and project | `storage.get`, `storage.set`, `storage.delete`, `storage.list` |
+<!-- END GENERATED PERMISSIONS -->
+
+`network:<name>` and `backend:identity:<name>` are declared per backend; see
+[Backend requests](#backend-requests).
+
 ## SDK helpers
 
 These execute inside QuickJS; they do not grant additional access.
