@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  compareDriftLayouts,
   compareKicadItems,
   compareSlots,
   docDelta,
@@ -140,5 +141,45 @@ describe("driftDocDelta", () => {
     );
     const d = driftDocDelta(doc, doc);
     expect(d).toEqual({ added: [], updated: [], removed: [], reordered: [] });
+  });
+});
+
+/**
+ * Field report 2026-09-18: a swapped Si5351B left its definition in the additive
+ * `kdoc_libsymbols` map; KiCad's screen dropped it with its last user, so the
+ * layouts differed forever with zero item changes.
+ */
+describe("compareDriftLayouts — orphaned Y-side lib_symbols are not drift", () => {
+  const R = `(symbol "Device:R" (property "Reference" "R" (at 0 0 0)))`;
+  const C = `(symbol "Device:C" (property "Reference" "C" (at 0 0 0)))`;
+  const sch = (defs: string, syms: string) =>
+    fileToDoc(`(kicad_sch (version 20250114) (generator "eeschema") (lib_symbols ${defs}) ${syms})`);
+  const placedR = `(symbol (lib_id "Device:R") (at 1 1 0) (uuid "s-r"))`;
+  const placedC = `(symbol (lib_id "Device:C") (at 2 2 0) (uuid "s-c"))`;
+
+  it("excuses a definition only the Y.Doc has when nothing references it", () => {
+    expect(compareDriftLayouts(sch(`${R} ${C}`, placedR), sch(R, placedR))).toBe("equal");
+  });
+
+  it("still reports a REFERENCED definition the editor save lacks", () => {
+    expect(compareDriftLayouts(sch(`${R} ${C}`, `${placedR} ${placedC}`), sch(R, `${placedR} ${placedC}`))).toBe(
+      "different",
+    );
+  });
+
+  it("still reports a definition only the editor save has", () => {
+    expect(compareDriftLayouts(sch(R, placedR), sch(`${R} ${C}`, placedR))).toBe("different");
+  });
+
+  it("still reports a shared definition whose content differs", () => {
+    const R2 = R.replace('"R"', '"RR"');
+    expect(compareDriftLayouts(sch(R, placedR), sch(R2, placedR))).toBe("different");
+  });
+
+  it("honours lib_name as the reference key", () => {
+    const named = `(symbol (lib_name "R_1") (lib_id "Device:R") (at 1 1 0) (uuid "s-r"))`;
+    const R1 = R.replace('"Device:R"', '"R_1"');
+    expect(compareDriftLayouts(sch(`${R1} ${C}`, named), sch(R1, named))).toBe("equal");
+    expect(compareDriftLayouts(sch(`${R1} ${R}`, named), sch(R1, named))).toBe("equal");
   });
 });

@@ -8,8 +8,11 @@
 
 import { z } from "zod";
 import {
+  args,
   kicadItemSchema,
+  scalar,
   slotSchema,
+  unquoteAtom,
   type KicadDoc,
   type KicadItem,
   type Slot,
@@ -162,4 +165,61 @@ export function driftDocDelta(
     if (!(uuid in next.items)) delta.removed.push(uuid);
   }
   return delta;
+}
+
+/** Lib ids a doc's placed symbols reference — keyed like KiCad's screen map
+ *  (`SCH_SYMBOL::GetSchSymbolLibraryName`: `lib_name` when set, else `lib_id`). */
+function referencedLibIds(items: Record<string, KicadItem>): Set<string> {
+  const used = new Set<string>();
+  for (const item of Object.values(items)) {
+    if (item.type !== "symbol") continue;
+    const ref = scalar(item.body, "lib_name") ?? scalar(item.body, "lib_id");
+    if (ref !== undefined) used.add(unquoteAtom(ref));
+  }
+  return used;
+}
+
+function libDefId(def: Slot): string | undefined {
+  if (!("k" in def) || def.k !== "symbol") return undefined;
+  const id = args(def.v)[0];
+  return id === undefined ? undefined : unquoteAtom(id);
+}
+
+/**
+ * `compareSlots` for the two document LAYOUTS of a drift check, excusing one
+ * known non-drift: ORPHANED `lib_symbols` definitions on the Y.Doc side.
+ *
+ * `kdoc_libsymbols` is additive by design (a peer's not-yet-applied placement
+ * must never lose its definition), while KiCad's screen drops a definition
+ * together with its last user (`SCH_SCREEN::Remove`). So after the first
+ * delete/swap the Y.Doc legitimately carries a definition the editor save
+ * lacks — harmless on materialize (an unused embedded symbol), and reported
+ * forever otherwise (field report 2026-09-18, a swapped Si5351B).
+ *
+ * Deliberately narrow — a definition is dropped from the comparison only when
+ * it is absent from the editor save AND no placed symbol in the Y.Doc
+ * references it. A referenced definition the save lacks, a definition the
+ * Y.Doc lacks, or one whose content differs all stay real drift.
+ */
+export function compareDriftLayouts(ydocDoc: KicadDoc, wasmDoc: KicadDoc): SlotsRelation {
+  const wasmIds = new Set<string>();
+  for (const slot of wasmDoc.layout) {
+    if (!("k" in slot) || slot.k !== "lib_symbols") continue;
+    for (const def of slot.v) {
+      const id = libDefId(def);
+      if (id !== undefined) wasmIds.add(id);
+    }
+  }
+  const used = referencedLibIds(ydocDoc.items);
+  const layout = ydocDoc.layout.map((slot): Slot => {
+    if (!("k" in slot) || slot.k !== "lib_symbols") return slot;
+    return {
+      k: slot.k,
+      v: slot.v.filter((def) => {
+        const id = libDefId(def);
+        return id === undefined || wasmIds.has(id) || used.has(id);
+      }),
+    };
+  });
+  return compareSlots(layout, wasmDoc.layout);
 }
