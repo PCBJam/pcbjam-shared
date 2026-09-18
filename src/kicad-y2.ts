@@ -311,6 +311,67 @@ export function slotsFromNode(node: YNode): Slot[] {
   return normalizedKeys(node).map((key) => decodeChild(key, node.get(key)));
 }
 
+/**
+ * Pausable `JSON.stringify(slotsFromNode(body))` (also accepts a v1 plain
+ * `Slot[]` body). Text goes to `emit`; whenever `pause()` answers true the
+ * generator yields, so a caller on a UI thread can stop between any two slots —
+ * a filled zone is one item with hundreds of thousands of them. `omit` drops
+ * `(k …)` children with those heads at any depth, unwalked. The caller must
+ * not resume after the document has changed: keys are read per node, lazily.
+ */
+export function* streamBodyJson(
+  body: unknown,
+  emit: (text: string) => void,
+  pause: () => boolean,
+  omit: ReadonlySet<string> = new Set(),
+): Generator<void, void, void> {
+  function* slots(value: unknown, depth: number): Generator<void, void, void> {
+    if (depth > 48) throw new Error("Document structure exceeds limits");
+    emit("[");
+    let first = true;
+    if (value instanceof Y.Map) {
+      for (const key of normalizedKeys(value as YNode)) {
+        const child = (value as YNode).get(key);
+        if (key.startsWith(ATOM_PREFIX)) {
+          emit((first ? "" : ",") + '{"atom":' + JSON.stringify(String(child)) + "}");
+        } else if (key.startsWith(ITEM_PREFIX)) {
+          emit((first ? "" : ",") + '{"item":' + JSON.stringify(key.slice(ITEM_PREFIX.length)) + "}");
+        } else {
+          const kind = keyKind(key);
+          if (omit.has(kind)) continue;
+          emit((first ? "" : ",") + '{"k":' + JSON.stringify(kind) + ',"v":');
+          yield* slots(child instanceof Y.Map ? child : (child ?? []), depth + 1);
+          emit("}");
+        }
+        first = false;
+        if (pause()) yield;
+      }
+    } else if (Array.isArray(value)) {
+      for (const slot of value as Slot[]) {
+        if (!slot || typeof slot !== "object") throw new Error("Invalid document data");
+        if ("atom" in slot && typeof slot.atom === "string") {
+          emit((first ? "" : ",") + '{"atom":' + JSON.stringify(slot.atom) + "}");
+        } else if ("item" in slot && typeof slot.item === "string") {
+          emit((first ? "" : ",") + '{"item":' + JSON.stringify(slot.item) + "}");
+        } else if ("k" in slot && typeof slot.k === "string") {
+          if (omit.has(slot.k)) continue;
+          emit((first ? "" : ",") + '{"k":' + JSON.stringify(slot.k) + ',"v":');
+          const v: Slot[] = slot.v ?? [];
+          // `(xy 1 2)`-sized leaves are the bulk of a point list: no generator each.
+          if (Array.isArray(v) && v.length <= 8 && v.every((c) => c && typeof (c as { atom?: unknown }).atom === "string")) {
+            emit("[" + v.map((c) => '{"atom":' + JSON.stringify((c as { atom: string }).atom) + "}").join(",") + "]");
+          } else yield* slots(v, depth + 1);
+          emit("}");
+        } else throw new Error("Invalid document data");
+        first = false;
+        if (pause()) yield;
+      }
+    } else throw new Error("Invalid document data");
+    emit("]");
+  }
+  yield* slots(body ?? [], 0);
+}
+
 // ── The v2 differ: write a new body into an existing node ─────────────────────
 
 /**

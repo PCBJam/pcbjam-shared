@@ -1,6 +1,6 @@
 import {backendPermissions, validateBackendRequest, BACKEND_LIMITS, type BackendEndpoint} from '../backend-contract.mjs';
 const runtimeAsset = (name: string) => new URL(name, import.meta.url).href;
-import { METHODS, LIMITS, boundedJSON, type Method, type DocumentAdapter } from './package-api';
+import { METHODS, LIMITS, LEASED_READS, boundedJSON, type Method, type DocumentAdapter } from './package-api';
 import { storageCall } from './package-storage';
 import { platformConfiguration, platformRequest, verifyText, runtimeAssets } from './package-service';
 export { configurePlatform } from './package-service';
@@ -117,10 +117,14 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
     const binding = options.storageBinding?.() ?? null;
     let activation: {id:string;grants:string[];userId:string;pluginId:string;storageEpoch:number;uiOrigin:string;placementEnabled:boolean} | undefined;
     let grants=options.plugin.manifest.permissions;
-    const authorize=async(method='context.get')=>{
+    // Keyed by permission: a lease only ever vouches for the grant the server actually checked.
+    const leases=new Map<string,number>();
+    const authorize=async(method='context.get',fresh=false)=>{
         check();await options.authorize?.(signal);check();
         if(platformConfiguration()) {
             if(!activation)throw new Error('Plugin activation is missing');
+            const permission=(Object.hasOwn(METHODS,method)?METHODS[method as Method].permission:null)??'';
+            if(!fresh&&LEASED_READS.has(method)&&performance.now()-(leases.get(permission)??-Infinity)<LIMITS.readLeaseMs)return;
             // A throttled check is not a denial: wait out the server's one-minute window
             // instead of ending the plugin. Nothing is delivered while unauthorized.
             for(let attempt=0;;attempt++) {
@@ -132,6 +136,7 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
                     fail('Plugin access ended. Reopen the plugin to continue.');throw error;
                 }
             }
+            leases.set(permission,performance.now());
             check();
         }
     };
@@ -163,13 +168,14 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
         return revision;
     };
     let uiTimes: number[] = [], hostTimes: number[] = [], pendingHost = 0;
+    let exportSession: { id: string; revision: number; cursor: ReturnType<DocumentAdapter['openExport']>; chars: number; lastEnd: number; lastCost: number } | undefined;
     const sleep = (ms: number) => new Promise<void>((resolve, reject) => {
         const done = () => { clearTimeout(timer); signal.removeEventListener('abort', done); if (signal.aborted) reject(new Error('Plugin stopped')); else resolve(); };
         const timer = setTimeout(done, ms);
         signal.addEventListener('abort', done, { once: true });
     });
-    // Guest logic has no timers, so an error here would only be retried in a tight
-    // loop. Delay calls over the window in arrival order instead.
+    // An error here would mostly be retried in a tight loop. Delay calls over the
+    // window in arrival order instead, so a plain read loop needs no pacing of its own.
     let paceQueue: Promise<void> = Promise.resolve();
     const pace = () => paceQueue = paceQueue.then(async () => {
         for (;;) {
@@ -194,6 +200,7 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
         if(activation)void platformRequest('activations/'+activation.id,'DELETE').catch(()=>{});
         window.removeEventListener('message', handshake);
         files.clear();
+        exportSession = undefined;
         worker?.terminate();
         frame?.remove();
         channel.port1.close();
@@ -259,6 +266,31 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
                 const revision = getDocument(params);
                 const value = options.documents!.snapshot();
                 return boundedJSON({ revision, root: value.root, items: value.items, layout: value.layout, libSymbols: value.libSymbols }, LIMITS.snapshotBytes);
+            }
+            case 'documents.exportStart': {
+                const revision = getDocument(params);
+                // One export per instance: starting another abandons the previous walk.
+                exportSession = { id: crypto.randomUUID(), revision, cursor: options.documents!.openExport({ types: params.types, omit: params.omit, layout: params.layout, libSymbols: params.libSymbols }), chars: 0, lastEnd: 0, lastCost: 0 };
+                return { export: exportSession.id, revision };
+            }
+            case 'documents.exportRead': {
+                const session = exportSession;
+                if (!session || session.id !== params.export)
+                    throw new Error('Invalid or finished export');
+                // Rest at least as long as the last slice ran, so export never takes over half of the UI thread.
+                const rest = session.lastCost - (performance.now() - session.lastEnd);
+                if (rest > 0) { await sleep(rest); check(); }
+                if (exportSession !== session)
+                    throw new Error('Invalid or finished export');
+                const started = performance.now();
+                let part: { text: string; done: boolean };
+                try { part = session.cursor.read(LIMITS.exportSliceMs, LIMITS.exportSliceChars); }
+                catch (error) { exportSession = undefined; throw error; }
+                session.lastEnd = performance.now(); session.lastCost = session.lastEnd - started;
+                session.chars += part.text.length;
+                if (session.chars > LIMITS.exportTotalChars) { exportSession = undefined; throw new Error('Export exceeds size limit'); }
+                if (part.done) exportSession = undefined;
+                return { revision: session.revision, text: part.text, done: part.done };
             }
             case 'items.list': {
                 const revision = getDocument(params);
@@ -402,7 +434,8 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
                 fail('Plugin API rate limit exceeded');
                 return;
             }
-            void pace().then(() => callHost(message.method, message.params)).then(async result => {
+            // Export slices are bounded by their own time budget and rest period, not by the call window.
+            void (message.method === 'documents.exportRead' ? Promise.resolve() : pace()).then(() => callHost(message.method, message.params)).then(async result => {
                 if(activation)await authorize(message.method);
                 if (!closed) {
                     check();
@@ -472,7 +505,7 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             if (checking || closed)
                 return;
             checking = true;
-            void (activation ? authorize().then(()=>({plugins:[pkg]})) : listPlugins()).then(({ plugins }) => {
+            void (activation ? authorize('context.get',true).then(()=>({plugins:[pkg]})) : listPlugins()).then(({ plugins }) => {
                 if (!closed && !plugins.some(p => p.digest === pkg.digest))
                     fail('Plugin was removed or updated');
             }).catch(error => { if (!closed && error?.code !== 'RATE_LIMITED') // throttled: host calls are blocked on the same check

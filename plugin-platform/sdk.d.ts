@@ -8,8 +8,12 @@ type PCBJamItem = PCBJamItemSummary & {body:PCBJamSlot[]};
 /** TOO_LARGE: over the response limits on its own. DEFERRED: did not fit in this response; request it again. */
 type PCBJamItemError = {id:string;error:'TOO_LARGE'|'DEFERRED'};
 // BEGIN GENERATED HOST METHODS
-type PCBJamHostMethod = "http.request" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "items.list" | "items.get" | "selection.get" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "editor.requestPlacement";
+type PCBJamHostMethod = "http.request" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "items.list" | "items.get" | "selection.get" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "editor.requestPlacement";
 // END GENERATED HOST METHODS
+/** Plugin logic only, and only while a command is being handled: at most 32 pending, 60 s each,
+ *  all cancelled when the command settles. An exception thrown from a callback stops the plugin. */
+declare function setTimeout(callback:(...args:any[])=>unknown,ms?:number,...args:any[]):number;
+declare function clearTimeout(id:number):void;
 declare const pcbjam: {
   /** Approved HTTPS backend; no arbitrary URLs, headers or API keys. */
   http:{request(endpointId:string,request:{method:'GET';path:string}|{method:'POST';path:string;json:PCBJamJSON}):Promise<{status:number;headers:Record<string,string>;body:PCBJamJSON}>};
@@ -21,6 +25,7 @@ declare const pcbjam: {
      *  in flight: await each call. UI commands over their window stop the plugin. */
     limits:{snapshotBytes:number;pageItems:number;fileBytes:number;exportBytes:number;storageBytes:number;storageValueBytes:number;storageKeys:number;
       responseBytes:number;responseNodes:number;hostCallsPerWindow:number;hostCallWindowMs:number;pendingHostCalls:number;
+      exportSliceMs:number;exportSliceChars:number;exportTotalChars:number;readLeaseMs:number;
       uiCommandsPerWindow:number;uiCommandWindowMs:number;uiCommandBytes:number;commandTimeoutMs:number};
   }>};
   project:{getInfo():Promise<{id:string;scope:string;name:string;readOnly:boolean}>};
@@ -29,6 +34,12 @@ declare const pcbjam: {
     list(options?:{cursor?:number;limit?:number}):Promise<{files:{name:string;kind:string;current:boolean}[];nextCursor:number|null}>;
     getCurrent():Promise<PCBJamDocumentRef & {name:string;readOnly:boolean}>;
     snapshot(ref:PCBJamDocumentRef):Promise<{revision:number;root:string;items:PCBJamItem[];layout:PCBJamSlot[];libSymbols:string[]}>;
+    /** The whole document without the snapshot size limit. The editor copies it a few milliseconds at a
+     *  time, so large boards do not stall the UI; a changed document rejects and you start again.
+     *  `types` keeps only those item types; `omit` drops child forms by name at any depth, e.g.
+     *  ['filled_polygon'] for zone fills. With `onItems`, batches are delivered as they arrive and not
+     *  retained (`items` stays empty), which keeps memory low on big boards. */
+    export(options:PCBJamDocumentRef & {types?:string[];omit?:string[];layout?:boolean;libSymbols?:boolean},onItems?:(items:PCBJamItem[])=>unknown|Promise<unknown>):Promise<{revision:number;root:string;items:PCBJamItem[];count:number;layout:PCBJamSlot[]|null;libSymbols:string[]}>;
     /** Pure serialization occurs in QuickJS after the bounded snapshot read. */
     getSexpr(ref:PCBJamDocumentRef):Promise<{revision:number;text:string}>;
     poll(options:{document:string;since:number}):Promise<{revision:number;changed:boolean}>;

@@ -17,6 +17,8 @@ export const METHODS = {
     'documents.getCurrent': request('documents:read', empty),
     'documents.snapshot': request('documents:read', z.object({ document, revision }).strict()),
     'documents.poll': request('documents:read', z.object({ document, since: revision }).strict()),
+    'documents.exportStart': request('documents:read', z.object({ document, revision, types: z.array(z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/)).max(8), omit: z.array(z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/)).max(8), layout: z.boolean(), libSymbols: z.boolean() }).strict()),
+    'documents.exportRead': request('documents:read', z.object({ export: z.string().uuid() }).strict()),
     'items.list': request('documents:read', z.object({ document, revision, ...page, types: z.array(z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/)).max(8) }).strict()),
     'items.get': request('documents:read', z.object({ document, revision, ids: z.array(id).min(1).max(100).refine(v => new Set(v).size === v.length), partial: z.boolean().optional() }).strict()),
     'selection.get': request('editor:read-selection', empty),
@@ -37,7 +39,18 @@ export const LIMITS = Object.freeze({ snapshotBytes: 1024 * 1024, pageItems: 100
     // fifth call in flight; the host repeats that bound in case the Worker is bypassed.
     // Two hosted authorization checks per call must stay under the server's per-user budget.
     responseBytes: 1024 * 1024, responseNodes: 100000, hostCallsPerWindow: 40, hostCallWindowMs: 10000, pendingHostCalls: 4,
+    // Whole-document export: copy for at most exportSliceMs on the UI thread, then yield.
+    exportSliceMs: 8, exportSliceChars: 256 * 1024, exportTotalChars: 32 * 1024 * 1024,
+    // A hosted authorization this recent is reused for LEASED_READS; the revocation poll runs at the same interval.
+    readLeaseMs: 2000,
     uiCommandsPerWindow: 20, uiCommandWindowMs: 10000, uiCommandBytes: 64000, commandTimeoutMs: 120000 });
+/**
+ * Reads of the already-open document whose effect ends inside this tab. They may reuse a
+ * hosted authorization up to LIMITS.readLeaseMs old. Everything with an effect outside the
+ * plugin (files, placement, backends, storage writes) is authorized per call.
+ */
+export const LEASED_READS: ReadonlySet<string> = new Set(['context.get', 'project.getInfo', 'documents.list', 'documents.getCurrent', 'documents.snapshot', 'documents.poll',
+    'documents.exportStart', 'documents.exportRead', 'items.list', 'items.get', 'selection.get']);
 /** Bound before stringify/recursive schema work. Return a detached JSON value. */
 export function boundedJSON(value: unknown, maxBytes: number): any {
     let nodes = 0, units = 0;
@@ -102,6 +115,10 @@ export interface DocumentAdapter {
     };
     /** partial: items over the limits come back as {id, error} instead of failing the call. */
     getItems(ids: string[], partial?: boolean): unknown[];
+    openExport(request: { types: string[]; omit: string[]; layout: boolean; libSymbols: boolean }): {
+        /** Newline-delimited JSON text; throws once the document has changed. */
+        read(budgetMs: number, maxChars: number): { text: string; done: boolean };
+    };
     snapshot(): {
         root: string;
         items: unknown[];

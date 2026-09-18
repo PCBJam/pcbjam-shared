@@ -24,6 +24,8 @@ permissions. `context.get()` needs no additional permission.
 | `documents.getCurrent()` | `documents:read` | Current document handle, name, revision and read-only state. |
 | `documents.snapshot(ref)` | `documents:read` | Bounded canonical content at an exact document revision. |
 | `documents.poll({document, since})` | `documents:read` | Whether content changed since a revision; no event subscription. |
+| `documents.exportStart({...ref, types, omit, layout, libSymbols})` | `documents:read` | Used by `documents.export()`: begins a whole-document read pinned to this revision. One per running plugin. |
+| `documents.exportRead({export})` | `documents:read` | Used by `documents.export()`: the next slice of newline-delimited JSON records and whether it was the last. |
 | `items.list({...ref, ...page, types})` | `documents:read` | Paged item IDs, types and parents at an exact revision; optional type filter. |
 | `items.get({...ref, ids, partial?})` | `documents:read` | Canonical bodies for up to 100 unique item IDs in the current document. With `partial: true`, oversized items return `{id, error}` instead of failing the call. |
 | `selection.get()` | `editor:read-selection` | Current item IDs, document revision and separate selection revision. |
@@ -78,6 +80,37 @@ back as `{id, error}` while the other items are returned normally:
 `TOO_LARGE` means the item cannot be read through this call at all;
 `DEFERRED` means it did not fit in what was left of this response, so request
 it again, alone or in a smaller batch. An unknown ID still fails the call.
+
+### Read a whole board
+
+`documents.snapshot()` is limited to 1 MiB, which a real PCB rarely fits. Use
+`documents.export()` for the whole document:
+
+```js
+const ref = await pcbjam.documents.getCurrent();
+const byType = {};
+const result = await pcbjam.documents.export(
+  { document: ref.document, revision: ref.revision, types: ['footprint', 'pad'], omit: ['filled_polygon'] },
+  items => { for (const item of items) byType[item.type] = (byType[item.type] ?? 0) + 1; },
+);
+```
+
+The editor copies the document a few milliseconds at a time and rests in
+between, so the user's editor stays responsive however large the board is; one
+huge zone is spread over several slices. Consequences for your code:
+
+- Pass `onItems` for big boards. Each batch is delivered once and not kept, so
+  convert it to your own compact form and let it go. Without `onItems`, all
+  items are collected into `result.items`, which must fit the 64 MiB heap.
+- `types` keeps only those item types. `omit` drops child forms by name at any
+  depth. Zone fills (`filled_polygon`) are most of a large board's bytes: omit
+  them unless you draw them.
+- The export is pinned to `revision`. If the document changes, it rejects with
+  `Document changed…`; read the new revision and start again.
+- One export runs at a time per plugin; starting another abandons the first.
+  The total is capped at 32 MiB of JSON text.
+- `layout: true` and `libSymbols: true` add the top-level order and embedded
+  library symbols, as in a snapshot.
 
 Handles and revisions belong to this running instance. Only the active document
 is readable; `documents.list()` lists project file names without opening them.
@@ -140,11 +173,18 @@ File selection, downloads and placement approval use **PCBJam-owned controls**.
 | Response structure | 100,000 JSON nodes, 48 nesting levels. |
 | Host calls | 40 per 10 seconds per running plugin. Calls over that are **delayed, not rejected**, so a sequential read loop simply slows down. At most 4 calls may be in flight: `await` each one. A fifth is rejected with `Too many pending API calls`. |
 | UI commands | 20 per 10 seconds, 64,000 characters each, one at a time; exceeding this stops the plugin. Pace them with timers in `ui.html`. |
+| Whole-document export | 32 MiB of JSON text; slices of at most 256 KiB after at most 8 ms of copying, each followed by an equal rest. Not counted in the host-call window. |
 | Command duration | 120 seconds from UI command to result, including delayed host calls. |
 | Account request budget | Shared by all your running plugins and tabs. When exhausted, host calls wait for the next minute once, then fail with `error.code === 'RATE_LIMITED'`; the plugin keeps running. |
 
-The same numbers are in `(await pcbjam.context.get()).limits`. Plugin logic has
-no timers: rely on the host's delay rather than retrying in a loop.
+The same numbers are in `(await pcbjam.context.get()).limits`.
+
+Plugin logic has `setTimeout` and `clearTimeout` (no `setInterval`), for pausing
+between steps: `await new Promise(done => setTimeout(done, 200))`. They work only
+while a command is being handled; up to 32 may be pending, each at most 60
+seconds, and all are cancelled when the command settles, so logic never runs in
+the background. An exception thrown from a timer callback stops the plugin.
+You do not need timers to stay under the host-call rate: the host delays for you.
 
 There is no raw WASM/pointer access, direct Yjs mutation, sibling-document loading,
 change subscription, user-profile API, OAuth delegation

@@ -3,9 +3,11 @@ export {};
 declare const __sendHost: (message: string) => void;
 declare const __sendResult: (message: string) => void;
 declare const __uuid: () => string;
+declare const __setTimer: (message: string) => void;
+declare const __clearTimer: (message: string) => void;
 // All these objects/functions live INSIDE QuickJS. Only strings cross native callbacks.
 (() => {
-    const send = __sendHost, result = __sendResult, uuid = __uuid;
+    const send = __sendHost, result = __sendResult, uuid = __uuid, setTimer = __setTimer, clearTimer = __clearTimer;
     const parse = JSON.parse.bind(JSON), stringify = JSON.stringify.bind(JSON);
     const pending = new Map<number, {
         resolve(value: unknown): void;
@@ -41,6 +43,35 @@ declare const __uuid: () => string;
             list: (options: any = {}) => call('documents.list', { cursor: 0, limit: 50, ...options }),
             getCurrent: () => call('documents.getCurrent'),
             snapshot: (options: unknown) => call('documents.snapshot', options),
+            // Whole document, fetched in UI-thread-friendly slices. With onItems the caller sees each
+            // batch once and nothing is retained, which is what keeps large boards inside the heap.
+            export: async (options: any = {}, onItems?: (items: unknown[]) => unknown) => {
+                if (onItems !== undefined && typeof onItems !== 'function')
+                    throw new Error('onItems must be a function');
+                const { document, revision, types = [], omit = [], layout = false, libSymbols = false, ...extra } = options ?? {};
+                const started: any = await call('documents.exportStart', { document, revision, types, omit, layout, libSymbols, ...extra });
+                const result: any = { revision: started.revision, root: '', items: [], count: 0, layout: null, libSymbols: [] };
+                let rest = '';
+                for (;;) {
+                    const part: any = await call('documents.exportRead', { export: started.export });
+                    const lines = (rest + part.text).split('\n');
+                    rest = lines.pop()!;
+                    const batch: unknown[] = [];
+                    for (const line of lines) {
+                        const record = parse(line);
+                        if (record.$ === 'root') result.root = record.value;
+                        else if (record.$ === 'layout') result.layout = record.value;
+                        else if (record.$ === 'libSymbol') result.libSymbols.push(record.text);
+                        else batch.push(record);
+                    }
+                    result.count += batch.length;
+                    if (onItems) { if (batch.length) await onItems(batch); }
+                    else for (const item of batch) result.items.push(item);
+                    if (part.done) break;
+                }
+                if (rest) throw new Error('Export ended inside a record');
+                return result;
+            },
             poll: (options: unknown) => call('documents.poll', options),
             getSexpr: async (options: unknown) => { const snapshot: any = await call('documents.snapshot', options); return { revision: snapshot.revision, text: serializeSnapshot(snapshot) }; },
         }),
@@ -65,15 +96,44 @@ declare const __uuid: () => string;
         editor: Object.freeze({ requestPlacement: (proposal: unknown) => call('editor.requestPlacement', proposal) }),
         randomUUID: () => uuid(),
     });
+    // setTimeout/clearTimeout exist so logic can pause between steps. They work only while a
+    // command is being handled and are cancelled when it settles: nothing runs in the background.
+    const timeouts = new Map<number, { callback: (...args: unknown[]) => unknown; args: unknown[] }>();
+    let nextTimer = 0, handling = false;
+    Object.defineProperty(globalThis, 'setTimeout', { value: (callback: unknown, ms?: unknown, ...args: unknown[]) => {
+            if (typeof callback !== 'function')
+                throw new TypeError('setTimeout needs a function');
+            if (!handling)
+                throw new Error('Timers are only available while handling a command');
+            if (timeouts.size >= 32)
+                throw new Error('Too many timers');
+            const id = ++nextTimer, delay = Number(ms);
+            timeouts.set(id, { callback: callback as (...args: unknown[]) => unknown, args });
+            setTimer(stringify({ id, ms: delay >= 0 ? Math.min(delay, 60000) : 0 }));
+            return id;
+        } });
+    Object.defineProperty(globalThis, 'clearTimeout', { value: (id: unknown) => {
+            if (typeof id === 'number' && timeouts.delete(id))
+                clearTimer(stringify({ id }));
+        } });
+    Object.defineProperty(globalThis, '__timer', { value: (text: string) => {
+            const id = parse(text).id, entry = timeouts.get(id);
+            if (!entry)
+                return;
+            timeouts.delete(id);
+            entry.callback(...entry.args);
+        } });
     Object.defineProperty(globalThis, 'pcbjam', { value: api });
     Object.defineProperty(globalThis, '__dispatch', { value: (text: string) => {
             const message = parse(text);
+            handling = true;
+            const settle = (reply: string) => { handling = false; timeouts.clear(); result(reply); };
             Promise.resolve().then(() => {
                 const handler = handlers.get(message.command);
                 if (!handler)
                     throw new Error('Unknown plugin command');
                 return handler(message.params);
-            }).then(value => result(stringify({ id: message.id, ok: true, result: value ?? null }))).catch(error => result(stringify({ id: message.id, ok: false, error: String(error?.message ?? error).slice(0, 400) })));
+            }).then(value => settle(stringify({ id: message.id, ok: true, result: value ?? null }))).catch(error => settle(stringify({ id: message.id, ok: false, error: String(error?.message ?? error).slice(0, 400) })));
         } });
     Object.defineProperty(globalThis, '__hostResult', { value: (text: string) => {
             const message = parse(text), entry = pending.get(message.id);
@@ -88,4 +148,6 @@ declare const __uuid: () => string;
     delete (globalThis as any).__sendHost;
     delete (globalThis as any).__sendResult;
     delete (globalThis as any).__uuid;
+    delete (globalThis as any).__setTimer;
+    delete (globalThis as any).__clearTimer;
 })();

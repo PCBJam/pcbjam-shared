@@ -8,8 +8,11 @@ addEventListener('message', async (event: MessageEvent) => {
   let vm: QuickJSContext | undefined, runtime: QuickJSRuntime | undefined, closed = false;
   let deadline = Infinity, activeId = 0, lastCommand = 0, lastHost = 0;
   const pendingHost = new Set<number>();
+  // Timers live only inside the command that set them, so logic can wait but never runs in the background.
+  const timers = new Map<number, ReturnType<typeof setTimeout>>(); let lastTimer = 0;
+  const clearTimers = () => { for (const timer of timers.values()) clearTimeout(timer); timers.clear(); };
   const fatal = (error: unknown) => {
-    if (closed) return; closed = true;
+    if (closed) return; closed = true; clearTimers();
     port.postMessage({ type: 'fatal', error: String(error instanceof Error ? error.message : error).slice(0, 400) });
     // Host always terminates the worker; never dispose a VM inside its callback.
   };
@@ -56,8 +59,24 @@ addEventListener('message', async (event: MessageEvent) => {
         const message = JSON.parse(text);
         exact(message, message?.ok === true ? ['id', 'ok', 'result'] : ['id', 'ok', 'error']);
         if (!activeId || message.id !== activeId || pendingHost.size || typeof message.ok !== 'boolean' || (!message.ok && (typeof message.error !== 'string' || message.error.length > 400))) throw new Error('Invalid plugin result');
-        activeId = 0;
+        activeId = 0; clearTimers();
         port.postMessage(message.ok ? { type: 'result', id: message.id, ok: true, result: message.result } : { type: 'result', id: message.id, ok: false, error: message.error });
+      },
+      __setTimer(text: string) {
+        const message = JSON.parse(text);
+        exact(message, ['id', 'ms']);
+        if (!activeId || !Number.isSafeInteger(message.id) || message.id <= lastTimer || timers.size >= 32 || typeof message.ms !== 'number' || !(message.ms >= 0 && message.ms <= 60000)) throw new Error('Invalid timer');
+        const id = lastTimer = message.id;
+        timers.set(id, setTimeout(() => {
+          if (closed || !timers.delete(id)) return;
+          try { turn(() => invoke('__timer', JSON.stringify({ id }))); } catch (error) { fatal(error); }
+        }, message.ms));
+      },
+      __clearTimer(text: string) {
+        const message = JSON.parse(text);
+        exact(message, ['id']);
+        const timer = timers.get(message.id);
+        if (timer !== undefined) { clearTimeout(timer); timers.delete(message.id); }
       },
     })) {
       const fn = vm.newFunction(name, handle => {
