@@ -37,6 +37,8 @@ permissions. `context.get()` needs no additional permission.
 | `files.readText(handle)` | `files:choose` | Read a chosen file through its instance-bound handle. |
 | `files.close(handle)` | `files:choose` | Release a file handle; resolves to null. |
 | `files.save({name, text})` | `files:save` | Trusted text download confirmation; download-requested or cancelled. |
+| `files.saveHtml({name, html})` | `files:save-html` | Trusted download confirmation for a standalone web page; PCBJam prepends a policy that blocks all network access from the saved file. |
+| `files.saveImage({name, base64})` | `files:save` | Trusted download confirmation for a PNG; bytes that are not a PNG are refused. |
 | `editor.requestPlacement({label, sexpr})` | `editor:place-items` | Confirmed symbol placement: placed or cancelled. |
 <!-- END GENERATED HOST API -->
 
@@ -149,6 +151,18 @@ File selection, downloads and placement approval use **PCBJam-owned controls**.
   `.kicad_sym`, `.kicad_mod`, `.kicad_sch` or `.kicad_pcb`.
   It returns `{status: 'download-requested'}` or `{status: 'cancelled'}`;
   download handoff is not proof of a saved file.
+- `files.saveHtml({name, html})` saves a standalone `.html` page, up to 8 MiB,
+  and needs the separate `files:save-html` permission because the page contains
+  your code. PCBJam writes a policy line before your first byte that blocks all
+  network access from the saved file: inline scripts, inline styles and `data:`
+  or `blob:` images, fonts and media work; CDN scripts, web fonts, remote
+  images, `fetch` and form posts do not. Inline everything. Build the page in
+  logic (`main.js`): messages from `ui.html` to logic are limited to 64 KiB.
+- `files.saveImage({name, base64})` saves a `.png` of up to 4 MiB under
+  `files:save`. Pass plain base64 without a `data:` prefix; bytes that are not
+  a PNG are refused.
+- A plugin UI cannot start a download by itself; every file goes through the
+  user's confirmation above.
 - `editor.requestPlacement()` accepts a bounded, self-contained schematic symbol
   with an embedded definition. It requires a writable schematic and enabled
   placement capability. It resolves to `{status: 'placed'}` after the user's
@@ -166,6 +180,7 @@ File selection, downloads and placement approval use **PCBJam-owned controls**.
 | Item page / explicit item batch | 100 items; documents over 50,000 items are refused. |
 | File catalog / selection | 5,000 catalog entries; 1,000 selected IDs. |
 | Chosen file / text download | 4 MiB / 512 KiB. |
+| Web page / image download | 8 MiB of HTML including PCBJam's policy line / 4 MiB PNG. |
 | Storage | 64 keys, 16 KiB per value, 256 KiB per namespace. |
 | Parse, print and diff | 524,288 input/output characters as applicable, 48 nesting levels, 12,000 forms. |
 | Document serialization | 1,048,576 output characters; CPU budget still applies. |

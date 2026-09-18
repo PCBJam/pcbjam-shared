@@ -30,10 +30,13 @@ export const METHODS = {
     'files.readText': request('files:choose', z.object({ handle: id }).strict()),
     'files.close': request('files:choose', z.object({ handle: id }).strict()),
     'files.save': request('files:save', z.object({ name: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,90}\.(txt|json|csv|kicad_sym|kicad_mod|kicad_sch|kicad_pcb)$/), text: z.string().max(512 * 1024) }).strict()),
+    // Active content gets its own grant. The host, not the plugin, writes the first bytes of the page.
+    'files.saveHtml': request('files:save-html', z.object({ name: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,90}\.html$/), html: z.string().max(8 * 1024 * 1024) }).strict()),
+    'files.saveImage': request('files:save', z.object({ name: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,90}\.png$/), base64: z.string().min(16).max(Math.ceil(4 * 1024 * 1024 / 3) * 4) }).strict()),
     'editor.requestPlacement': request('editor:place-items', z.object({ label: z.string().min(1).max(100), sexpr: z.string().max(512 * 1024) }).strict()),
 } as const;
 export type Method = keyof typeof METHODS;
-export const LIMITS = Object.freeze({ snapshotBytes: 1024 * 1024, pageItems: 100, fileBytes: 4 * 1024 * 1024, exportBytes: 512 * 1024, storageBytes: 256 * 1024, storageValueBytes: 16 * 1024, storageKeys: 64,
+export const LIMITS = Object.freeze({ snapshotBytes: 1024 * 1024, pageItems: 100, fileBytes: 4 * 1024 * 1024, exportBytes: 512 * 1024, storageBytes: 256 * 1024, storageValueBytes: 16 * 1024, storageKeys: 64, htmlBytes: 8 * 1024 * 1024, imageBytes: 4 * 1024 * 1024,
     // Enforcement values, published through context.get() so plugins can plan reads.
     // Host calls over the window are delayed, not rejected. The runtime Worker refuses a
     // fifth call in flight; the host repeats that bound in case the Worker is bypassed.
@@ -44,6 +47,28 @@ export const LIMITS = Object.freeze({ snapshotBytes: 1024 * 1024, pageItems: 100
     // A hosted authorization this recent is reused for LEASED_READS; the revocation poll runs at the same interval.
     readLeaseMs: 2000,
     uiCommandsPerWindow: 20, uiCommandWindowMs: 10000, uiCommandBytes: 64000, commandTimeoutMs: 120000 });
+/**
+ * First bytes of every page saved through files.saveHtml. A saved page runs the plugin's code
+ * outside PCBJam, with the user's design inside it; this keeps it from loading or sending anything.
+ * A meta policy only governs what follows it, so it must come before any plugin byte. It cannot
+ * stop the page navigating itself elsewhere: the consent text says the file contains code.
+ */
+export const SAVED_HTML_PREFIX = '<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'unsafe-inline\'; style-src \'unsafe-inline\'; img-src data: blob:; font-src data:; media-src data: blob:; base-uri \'none\'; form-action \'none\'">\n';
+const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+/** Decode and prove it is a PNG: the name says image, so the bytes must not be a page or a program. */
+export function pngBytes(base64: string): Uint8Array {
+    let binary: string;
+    try { binary = atob(base64); }
+    catch { throw new Error('Image is not valid base64'); }
+    if (binary.length > LIMITS.imageBytes)
+        throw new Error('Export exceeds size limit');
+    if (binary.length < 16 || PNG_MAGIC.some((byte, index) => binary.charCodeAt(index) !== byte))
+        throw new Error('Image is not a PNG');
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++)
+        bytes[i] = binary.charCodeAt(i);
+    return bytes;
+}
 /**
  * Reads of the already-open document whose effect ends inside this tab. They may reuse a
  * hosted authorization up to LIMITS.readLeaseMs old. Everything with an effect outside the

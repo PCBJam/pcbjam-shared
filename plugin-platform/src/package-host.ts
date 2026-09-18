@@ -1,6 +1,6 @@
 import {backendPermissions, validateBackendRequest, BACKEND_LIMITS, type BackendEndpoint} from '../backend-contract.mjs';
 const runtimeAsset = (name: string) => new URL(name, import.meta.url).href;
-import { METHODS, LIMITS, LEASED_READS, boundedJSON, type Method, type DocumentAdapter } from './package-api';
+import { METHODS, LIMITS, LEASED_READS, SAVED_HTML_PREFIX, pngBytes, boundedJSON, type Method, type DocumentAdapter } from './package-api';
 import { storageCall } from './package-storage';
 import { platformConfiguration, platformRequest, verifyText, runtimeAssets } from './package-service';
 export { configurePlatform } from './package-service';
@@ -49,9 +49,14 @@ export interface PackageHostOptions {
     /** Stable trusted account/project binding, never supplied by a plugin. */
     storageBinding?(): string | null;
     authorize?(signal: AbortSignal): Promise<void>;
+    /** Draw the confirmation, authorize `method`, then download `bytes` as a file; never open or render them. */
     saveFile?(proposal: {
         name: string;
-        text: string;
+        /** Present for kind 'text' only. */
+        text?: string;
+        kind: 'text' | 'html' | 'image';
+        bytes: Uint8Array;
+        method: string;
     }, signal: AbortSignal): Promise<{
         status: 'download-requested' | 'cancelled';
     }>;
@@ -147,14 +152,15 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
         if (!options.plugin.manifest.surfaces.includes('editor:' + options.context().tool))
             throw new Error('Plugin is unavailable in this editor');
     };
+    const SAVES = new Set(['files.save', 'files.saveHtml', 'files.saveImage']);
     const available = (method: string) => {
         if(method==='http.request')return !!activation && Object.entries(options.plugin.manifest.endpoints??{}).some(([name,p])=>Object.keys(backendPermissions({[name]:p})).every(grant=>grants.includes(grant)));
-        if (method === 'context.get' || method.startsWith('files.') && method !== 'files.save')
+        if (SAVES.has(method))
+            return !!options.saveFile;
+        if (method === 'context.get' || method.startsWith('files.'))
             return true;
         if (method === 'editor.requestPlacement')
             return !options.context().readOnly && options.context().canPlaceItems && (!platformConfiguration()||activation?.placementEnabled===true);
-        if (method === 'files.save')
-            return !!options.saveFile;
         if (method.startsWith('storage.'))
             return binding !== null;
         return !!options.documents;
@@ -312,10 +318,14 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             case 'storage.delete':
             case 'storage.list':
                 return storageCall(activation ? JSON.stringify(['hosted',platformConfiguration()!.apiBase,activation.userId,activation.pluginId,activation.storageEpoch,options.documents!.projectInfo().id]) : JSON.stringify([options.plugin.manifest.id, binding]), method, params, signal, check);
-            case 'files.save': {
-                if (new TextEncoder().encode(params.text).length > LIMITS.exportBytes)
+            case 'files.save':
+            case 'files.saveHtml':
+            case 'files.saveImage': {
+                const kind = method === 'files.save' ? 'text' as const : method === 'files.saveHtml' ? 'html' as const : 'image' as const;
+                const bytes = kind === 'image' ? pngBytes(params.base64) : new TextEncoder().encode(kind === 'html' ? SAVED_HTML_PREFIX + params.html : params.text);
+                if (bytes.length > (kind === 'text' ? LIMITS.exportBytes : kind === 'html' ? LIMITS.htmlBytes : LIMITS.imageBytes))
                     throw new Error('Export exceeds size limit');
-                const result = await options.saveFile!(params, signal);
+                const result = await options.saveFile!({ name: params.name, kind, bytes, method, ...(kind === 'text' ? { text: params.text } : {}) }, signal);
                 check();
                 if (result.status !== 'download-requested' && result.status !== 'cancelled')
                     throw new Error('Invalid download result');

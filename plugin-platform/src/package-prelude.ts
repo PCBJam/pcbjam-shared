@@ -89,6 +89,8 @@ declare const __clearTimer: (message: string) => void;
         sexpr: Object.freeze({ parse: parseSexpr, print, diff }),
         files: Object.freeze({
             save: (proposal: unknown) => call('files.save', proposal),
+            saveHtml: (proposal: unknown) => call('files.saveHtml', proposal),
+            saveImage: (proposal: unknown) => call('files.saveImage', proposal),
             choose: (options: unknown) => call('files.choose', options),
             readText: (handle: string) => call('files.readText', { handle }),
             close: (handle: string) => call('files.close', { handle }),

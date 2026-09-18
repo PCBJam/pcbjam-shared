@@ -8,7 +8,7 @@ type PCBJamItem = PCBJamItemSummary & {body:PCBJamSlot[]};
 /** TOO_LARGE: over the response limits on its own. DEFERRED: did not fit in this response; request it again. */
 type PCBJamItemError = {id:string;error:'TOO_LARGE'|'DEFERRED'};
 // BEGIN GENERATED HOST METHODS
-type PCBJamHostMethod = "http.request" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "items.list" | "items.get" | "selection.get" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "editor.requestPlacement";
+type PCBJamHostMethod = "http.request" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "items.list" | "items.get" | "selection.get" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "editor.requestPlacement";
 // END GENERATED HOST METHODS
 /** Plugin logic only, and only while a command is being handled: at most 32 pending, 60 s each,
  *  all cancelled when the command settles. An exception thrown from a callback stops the plugin. */
@@ -23,7 +23,7 @@ declare const pcbjam: {
     methods:PCBJamHostMethod[];
     /** Host calls over hostCallsPerWindow are delayed, never rejected. Keep at most pendingHostCalls
      *  in flight: await each call. UI commands over their window stop the plugin. */
-    limits:{snapshotBytes:number;pageItems:number;fileBytes:number;exportBytes:number;storageBytes:number;storageValueBytes:number;storageKeys:number;
+    limits:{snapshotBytes:number;pageItems:number;fileBytes:number;exportBytes:number;storageBytes:number;storageValueBytes:number;storageKeys:number;htmlBytes:number;imageBytes:number;
       responseBytes:number;responseNodes:number;hostCallsPerWindow:number;hostCallWindowMs:number;pendingHostCalls:number;
       exportSliceMs:number;exportSliceChars:number;exportTotalChars:number;readLeaseMs:number;
       uiCommandsPerWindow:number;uiCommandWindowMs:number;uiCommandBytes:number;commandTimeoutMs:number};
@@ -70,6 +70,12 @@ declare const pcbjam: {
     close(handle:string):Promise<null>;
     /** Confirms browser download handoff, not successful saving to disk. */
     save(proposal:{name:string;text:string}):Promise<{status:'download-requested'|'cancelled'}>;
+    /** A standalone .html page (needs `files:save-html`), at most 8 MiB. PCBJam writes a network-blocking
+     *  policy before your first byte: inline scripts, inline styles and data:/blob: images, fonts and media
+     *  work; anything loaded from or sent to a server does not. Build the page in logic, not in ui.html. */
+    saveHtml(proposal:{name:string;html:string}):Promise<{status:'download-requested'|'cancelled'}>;
+    /** A .png from base64 (no data: prefix), at most 4 MiB decoded; anything that is not a PNG is refused. */
+    saveImage(proposal:{name:string;base64:string}):Promise<{status:'download-requested'|'cancelled'}>;
   };
   editor:{
     /** Confirms native tool handoff, not successful parsing/placement/saving. */

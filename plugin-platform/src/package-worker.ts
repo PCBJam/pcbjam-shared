@@ -82,7 +82,7 @@ addEventListener('message', async (event: MessageEvent) => {
       const fn = vm.newFunction(name, handle => {
         try {
           if (vm!.typeof(handle) !== 'string') throw new Error('API expects serialized JSON');
-          const text = vm!.getString(handle); if (text.length > 4 * 1024 * 1024) throw new Error('Plugin message is too large');
+          const text = vm!.getString(handle); if (text.length > 12 * 1024 * 1024) throw new Error('Plugin message is too large'); // an 8 MiB page plus JSON escaping; the host bounds each method
           callback(text);
         } catch (error) { fatal(error); }
         return vm!.undefined;
