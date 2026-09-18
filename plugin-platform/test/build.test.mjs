@@ -35,6 +35,10 @@ test('rendered HTML integrity and CSP include the injected SDK and inline styles
   assert.equal(ui.digest,createHash('sha256').update(ui.body).digest('hex'));
   assert(ui.headers['Content-Security-Policy'].includes("sandbox allow-scripts;"));
   assert(!ui.headers['Content-Security-Policy'].includes('allow-same-origin'));
+  const directive=name=>ui.headers['Content-Security-Policy'].split('; ').find(part=>part.startsWith(name+' '));
+  assert.equal(directive('img-src'),'img-src data: blob:');
+  assert.equal(directive('connect-src'),"connect-src 'none'");
+  for(const name of ['font-src','media-src','style-src-attr'])assert.equal(directive(name),undefined);
   for(const match of ui.body.matchAll(/<(script|style)>([\s\S]*?)<\/(?:script|style)>/g))assert(ui.headers['Content-Security-Policy'].includes(createHash('sha256').update(match[2]).digest('base64')));
   assert.throws(()=>renderPluginUI('','', 'https://evil.example', ['https://editor.example']));
 });

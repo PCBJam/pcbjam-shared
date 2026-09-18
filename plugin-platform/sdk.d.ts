@@ -5,6 +5,8 @@ type PCBJamSlot = {atom:string} | {k:string;v:PCBJamSlot[]} | {item:string};
 type PCBJamDocumentRef = {document:string;revision:number};
 type PCBJamItemSummary = {id:string;type:string;parent:string|null};
 type PCBJamItem = PCBJamItemSummary & {body:PCBJamSlot[]};
+/** TOO_LARGE: over the response limits on its own. DEFERRED: did not fit in this response; request it again. */
+type PCBJamItemError = {id:string;error:'TOO_LARGE'|'DEFERRED'};
 // BEGIN GENERATED HOST METHODS
 type PCBJamHostMethod = "http.request" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "items.list" | "items.get" | "selection.get" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "editor.requestPlacement";
 // END GENERATED HOST METHODS
@@ -15,7 +17,11 @@ declare const pcbjam: {
   context:{get():Promise<{
     tool:string;fileName:string;readOnly:boolean;canPlaceItems:boolean;
     methods:PCBJamHostMethod[];
-    limits:{snapshotBytes:number;pageItems:number;fileBytes:number;exportBytes:number;storageBytes:number;storageValueBytes:number;storageKeys:number};
+    /** Host calls over hostCallsPerWindow are delayed, never rejected. Keep at most pendingHostCalls
+     *  in flight: await each call. UI commands over their window stop the plugin. */
+    limits:{snapshotBytes:number;pageItems:number;fileBytes:number;exportBytes:number;storageBytes:number;storageValueBytes:number;storageKeys:number;
+      responseBytes:number;responseNodes:number;hostCallsPerWindow:number;hostCallWindowMs:number;pendingHostCalls:number;
+      uiCommandsPerWindow:number;uiCommandWindowMs:number;uiCommandBytes:number;commandTimeoutMs:number};
   }>};
   project:{getInfo():Promise<{id:string;scope:string;name:string;readOnly:boolean}>};
   documents:{
@@ -29,7 +35,9 @@ declare const pcbjam: {
   };
   items:{
     list(options:PCBJamDocumentRef & {cursor?:number;limit?:number;types?:string[]}):Promise<{revision:number;items:PCBJamItemSummary[];nextCursor:number|null}>;
-    get(options:PCBJamDocumentRef & {ids:string[]}):Promise<{revision:number;items:PCBJamItem[]}>;
+    get(options:PCBJamDocumentRef & {ids:string[];partial?:false}):Promise<{revision:number;items:PCBJamItem[]}>;
+    /** partial: one oversized item no longer fails the page; it comes back as {id, error}. */
+    get(options:PCBJamDocumentRef & {ids:string[];partial:true}):Promise<{revision:number;items:(PCBJamItem|PCBJamItemError)[]}>;
   };
   selection:{get():Promise<PCBJamDocumentRef & {selectionRevision:number;ids:string[]}>};
   storage:{

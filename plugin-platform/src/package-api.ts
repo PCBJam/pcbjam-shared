@@ -18,7 +18,7 @@ export const METHODS = {
     'documents.snapshot': request('documents:read', z.object({ document, revision }).strict()),
     'documents.poll': request('documents:read', z.object({ document, since: revision }).strict()),
     'items.list': request('documents:read', z.object({ document, revision, ...page, types: z.array(z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/)).max(8) }).strict()),
-    'items.get': request('documents:read', z.object({ document, revision, ids: z.array(id).min(1).max(100).refine(v => new Set(v).size === v.length) }).strict()),
+    'items.get': request('documents:read', z.object({ document, revision, ids: z.array(id).min(1).max(100).refine(v => new Set(v).size === v.length), partial: z.boolean().optional() }).strict()),
     'selection.get': request('editor:read-selection', empty),
     'storage.get': request('storage:local', z.object({ key }).strict()),
     'storage.set': request('storage:local', z.object({ key, value: z.unknown().refine(v => v !== undefined), expectedRevision: z.number().int().min(0).safe() }).strict()),
@@ -31,7 +31,13 @@ export const METHODS = {
     'editor.requestPlacement': request('editor:place-items', z.object({ label: z.string().min(1).max(100), sexpr: z.string().max(512 * 1024) }).strict()),
 } as const;
 export type Method = keyof typeof METHODS;
-export const LIMITS = Object.freeze({ snapshotBytes: 1024 * 1024, pageItems: 100, fileBytes: 4 * 1024 * 1024, exportBytes: 512 * 1024, storageBytes: 256 * 1024, storageValueBytes: 16 * 1024, storageKeys: 64 });
+export const LIMITS = Object.freeze({ snapshotBytes: 1024 * 1024, pageItems: 100, fileBytes: 4 * 1024 * 1024, exportBytes: 512 * 1024, storageBytes: 256 * 1024, storageValueBytes: 16 * 1024, storageKeys: 64,
+    // Enforcement values, published through context.get() so plugins can plan reads.
+    // Host calls over the window are delayed, not rejected. The runtime Worker refuses a
+    // fifth call in flight; the host repeats that bound in case the Worker is bypassed.
+    // Two hosted authorization checks per call must stay under the server's per-user budget.
+    responseBytes: 1024 * 1024, responseNodes: 100000, hostCallsPerWindow: 40, hostCallWindowMs: 10000, pendingHostCalls: 4,
+    uiCommandsPerWindow: 20, uiCommandWindowMs: 10000, uiCommandBytes: 64000, commandTimeoutMs: 120000 });
 /** Bound before stringify/recursive schema work. Return a detached JSON value. */
 export function boundedJSON(value: unknown, maxBytes: number): any {
     let nodes = 0, units = 0;
@@ -94,7 +100,8 @@ export interface DocumentAdapter {
         }>;
         nextCursor: number | null;
     };
-    getItems(ids: string[]): unknown[];
+    /** partial: items over the limits come back as {id, error} instead of failing the call. */
+    getItems(ids: string[], partial?: boolean): unknown[];
     snapshot(): {
         root: string;
         items: unknown[];

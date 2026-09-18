@@ -121,8 +121,17 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
         check();await options.authorize?.(signal);check();
         if(platformConfiguration()) {
             if(!activation)throw new Error('Plugin activation is missing');
-            try {await platformRequest('activations/'+activation.id+'/check','POST',{method},signal);}
-            catch(error){fail('Plugin access ended. Reopen the plugin to continue.');throw error;}
+            // A throttled check is not a denial: wait out the server's one-minute window
+            // instead of ending the plugin. Nothing is delivered while unauthorized.
+            for(let attempt=0;;attempt++) {
+                try {await platformRequest('activations/'+activation.id+'/check','POST',{method},signal);break;}
+                catch(error){
+                    // One wait fits inside the command timeout; after that the guest sees RATE_LIMITED.
+                    if((error as {code?:string}).code==='RATE_LIMITED'&&!attempt){await sleep(60000-Date.now()%60000+500);check();continue;}
+                    if((error as {code?:string}).code==='RATE_LIMITED')throw error;
+                    fail('Plugin access ended. Reopen the plugin to continue.');throw error;
+                }
+            }
             check();
         }
     };
@@ -153,7 +162,23 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             throw new Error('Document changed: get its current revision and retry');
         return revision;
     };
-    let uiTimes: number[] = [], hostTimes: number[] = [];
+    let uiTimes: number[] = [], hostTimes: number[] = [], pendingHost = 0;
+    const sleep = (ms: number) => new Promise<void>((resolve, reject) => {
+        const done = () => { clearTimeout(timer); signal.removeEventListener('abort', done); if (signal.aborted) reject(new Error('Plugin stopped')); else resolve(); };
+        const timer = setTimeout(done, ms);
+        signal.addEventListener('abort', done, { once: true });
+    });
+    // Guest logic has no timers, so an error here would only be retried in a tight
+    // loop. Delay calls over the window in arrival order instead.
+    let paceQueue: Promise<void> = Promise.resolve();
+    const pace = () => paceQueue = paceQueue.then(async () => {
+        for (;;) {
+            const now = performance.now();
+            hostTimes = hostTimes.filter(t => now - t < LIMITS.hostCallWindowMs);
+            if (hostTimes.length < LIMITS.hostCallsPerWindow) { hostTimes.push(now); return; }
+            await sleep(hostTimes[0]! + LIMITS.hostCallWindowMs - now);
+        }
+    });
     let readyResolve!: () => void, readyReject!: (error: Error) => void;
     const ready = new Promise<void>((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
     void ready.catch(() => { });
@@ -242,7 +267,7 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             }
             case 'items.get': {
                 const revision = getDocument(params);
-                return { revision, items: options.documents!.getItems(params.ids) };
+                return { revision, items: options.documents!.getItems(params.ids, params.partial === true) };
             }
             case 'selection.get': {
                 const selection = options.documents!.selection();
@@ -373,14 +398,11 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
                 return;
             }
             lastHost = message.id;
-            const now = performance.now();
-            hostTimes = hostTimes.filter(t => now - t < 10000);
-            hostTimes.push(now);
-            if (hostTimes.length > 60) {
+            if (++pendingHost > LIMITS.pendingHostCalls) {
                 fail('Plugin API rate limit exceeded');
                 return;
             }
-            void callHost(message.method, message.params).then(async result => {
+            void pace().then(() => callHost(message.method, message.params)).then(async result => {
                 if(activation)await authorize(message.method);
                 if (!closed) {
                     check();
@@ -390,7 +412,7 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             }).catch(error => {
                 if (!closed)
                     channel.port1.postMessage({ type: 'host-result', id: message.id, ok: false, error: String(error.message).slice(0, 400), ...(typeof error.code==='string'&&/^[A-Z_]{1,40}$/.test(error.code)?{code:error.code}:{}) });
-            });
+            }).finally(() => { pendingHost--; });
         };
         worker.onerror = () => fail('Plugin Worker failed');
         worker.postMessage({ type: 'init', wasm, prelude, main: pkg.main }, [channel.port2, wasm]);
@@ -421,15 +443,15 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             }
             try {
                 exact(message, ['id', 'command', 'params']);
-                if (!connected || activeId || !Number.isSafeInteger(message.id) || message.id <= lastUi || typeof message.command !== 'string' || !/^[a-z][a-zA-Z0-9.:-]{0,63}$/.test(message.command) || JSON.stringify(message).length > 64000)
+                if (!connected || activeId || !Number.isSafeInteger(message.id) || message.id <= lastUi || typeof message.command !== 'string' || !/^[a-z][a-zA-Z0-9.:-]{0,63}$/.test(message.command) || JSON.stringify(message).length > LIMITS.uiCommandBytes)
                     throw new Error('Invalid plugin UI request');
                 const now = performance.now();
-                uiTimes = uiTimes.filter(t => now - t < 10000);
+                uiTimes = uiTimes.filter(t => now - t < LIMITS.uiCommandWindowMs);
                 uiTimes.push(now);
-                if (uiTimes.length > 20)
+                if (uiTimes.length > LIMITS.uiCommandsPerWindow)
                     throw new Error('Plugin UI rate limit exceeded');
                 lastUi = activeId = message.id;
-                commandTimer = setTimeout(() => fail('Plugin action timed out'), 120000);
+                commandTimer = setTimeout(() => fail('Plugin action timed out'), LIMITS.commandTimeoutMs);
                 channel.port1.postMessage({ type: 'command', ...message });
             }
             catch (error) {
@@ -453,7 +475,7 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             void (activation ? authorize().then(()=>({plugins:[pkg]})) : listPlugins()).then(({ plugins }) => {
                 if (!closed && !plugins.some(p => p.digest === pkg.digest))
                     fail('Plugin was removed or updated');
-            }).catch(() => { if (!closed)
+            }).catch(error => { if (!closed && error?.code !== 'RATE_LIMITED') // throttled: host calls are blocked on the same check
                 fail('Plugin registry unavailable'); }).finally(() => { checking = false; });
         }, 2000);
         return { dispose };

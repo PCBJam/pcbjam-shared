@@ -25,7 +25,7 @@ permissions. `context.get()` needs no additional permission.
 | `documents.snapshot(ref)` | `documents:read` | Bounded canonical content at an exact document revision. |
 | `documents.poll({document, since})` | `documents:read` | Whether content changed since a revision; no event subscription. |
 | `items.list({...ref, ...page, types})` | `documents:read` | Paged item IDs, types and parents at an exact revision; optional type filter. |
-| `items.get({...ref, ids})` | `documents:read` | Canonical bodies for up to 100 unique item IDs in the current document. |
+| `items.get({...ref, ids, partial?})` | `documents:read` | Canonical bodies for up to 100 unique item IDs in the current document. With `partial: true`, oversized items return `{id, error}` instead of failing the call. |
 | `selection.get()` | `editor:read-selection` | Current item IDs, document revision and separate selection revision. |
 | `storage.get(key)` | `storage:local` | Value, found flag and namespace revision for a key. |
 | `storage.set({key, value, expectedRevision})` | `storage:local` | Write JSON with expectedRevision; return the new namespace revision. |
@@ -71,6 +71,13 @@ The result contains `{revision, items, nextCursor}`. Each item summary has
 to continue; `null` means finished. If the document changes, reread its revision
 and restart paging. Item bodies from `items.get()` contain ordered slots:
 `{atom}`, `{k, v}` or `{item}` references.
+
+A large filled zone can exceed the response limit by itself. By default that
+fails the whole `items.get()` call. Pass `partial: true` and such an entry comes
+back as `{id, error}` while the other items are returned normally:
+`TOO_LARGE` means the item cannot be read through this call at all;
+`DEFERRED` means it did not fit in what was left of this response, so request
+it again, alone or in a smaller batch. An unknown ID still fails the call.
 
 Handles and revisions belong to this running instance. Only the active document
 is readable; `documents.list()` lists project file names without opening them.
@@ -130,6 +137,14 @@ File selection, downloads and placement approval use **PCBJam-owned controls**.
 | Parse, print and diff | 524,288 input/output characters as applicable, 48 nesting levels, 12,000 forms. |
 | Document serialization | 1,048,576 output characters; CPU budget still applies. |
 | Private uploads | 32 retained releases, 64 MiB per account. |
+| Response structure | 100,000 JSON nodes, 48 nesting levels. |
+| Host calls | 40 per 10 seconds per running plugin. Calls over that are **delayed, not rejected**, so a sequential read loop simply slows down. At most 4 calls may be in flight: `await` each one. A fifth is rejected with `Too many pending API calls`. |
+| UI commands | 20 per 10 seconds, 64,000 characters each, one at a time; exceeding this stops the plugin. Pace them with timers in `ui.html`. |
+| Command duration | 120 seconds from UI command to result, including delayed host calls. |
+| Account request budget | Shared by all your running plugins and tabs. When exhausted, host calls wait for the next minute once, then fail with `error.code === 'RATE_LIMITED'`; the plugin keeps running. |
+
+The same numbers are in `(await pcbjam.context.get()).limits`. Plugin logic has
+no timers: rely on the host's delay rather than retrying in a loop.
 
 There is no raw WASM/pointer access, direct Yjs mutation, sibling-document loading,
 change subscription, user-profile API, OAuth delegation
