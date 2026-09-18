@@ -25,7 +25,8 @@ permissions. `context.get()` needs no additional permission.
 | `documents.snapshot(ref)` | `documents:read` | Bounded canonical content at an exact document revision. |
 | `documents.poll({document, since})` | `documents:read` | Whether content changed since a revision; no event subscription. |
 | `documents.exportStart({...ref, types, omit, layout, libSymbols})` | `documents:read` | Used by `documents.export()`: begins a whole-document read pinned to this revision. One per running plugin. |
-| `documents.exportRead({export})` | `documents:read` | Used by `documents.export()`: the next slice of newline-delimited JSON records and whether it was the last. |
+| `documents.exportRead({export})` | `documents:read` | Used by `documents.export()` and `board.geometry()`: the next slice of newline-delimited JSON records and whether it was the last. |
+| `board.geometryStart({...ref, include})` | `documents:read` | Used by `board.geometry()` (PCB editor): begins a read of the board as engine-computed shapes, pinned to this revision. |
 | `items.list({...ref, ...page, types})` | `documents:read` | Paged item IDs, types and parents at an exact revision; optional type filter. |
 | `items.get({...ref, ids, partial?})` | `documents:read` | Canonical bodies for up to 100 unique item IDs in the current document. With `partial: true`, oversized items return `{id, error}` instead of failing the call. |
 | `selection.get()` | `editor:read-selection` | Current item IDs, document revision and separate selection revision. |
@@ -114,6 +115,45 @@ huge zone is spread over several slices. Consequences for your code:
   The total is capped at 32 MiB of JSON text.
 - `layout: true` and `libSymbols: true` add the top-level order and embedded
   library symbols, as in a snapshot.
+
+### Draw the board
+
+In the PCB editor, `board.geometry()` gives you the board as shapes the editor
+already computed. You fill polygons; you do not reconstruct rounded or rotated
+pads, arcs, or text (text in an outline font cannot be reconstructed from file
+data at all).
+
+```js
+const ref = await pcbjam.documents.getCurrent();
+const { board, footprints, drawings } = await pcbjam.board.geometry(
+  { document: ref.document, revision: ref.revision },  // include: ['tracks', 'zones'] to add copper
+);
+for (const fp of footprints)
+  for (const pad of fp.pads)
+    for (const polygon of pad.polygons[fp.side] ?? []) fill(polygon.outline, polygon.holes);
+```
+
+| Record | Contents |
+|---|---|
+| `board` | `bbox` `[x1,y1,x2,y2]`, `outline` polygons (empty if the edge cuts do not close), `footprints` count, `nets` `{code: name}` when tracks or zones are included. |
+| footprint | `id`, `ref`, `value`, `footprint` (library id), `side` `'F'`/`'B'`, `pos`, `angle`, `bbox`, `attrs` `{smd, tht, dnp, excludeFromBom, excludeFromPos, boardOnly}`, `fields` (all, including hidden ones), `pads`, `drawings`. |
+| pad | `id`, `number`, `net` (name), optional `pinFunction`, `type` `'smd'`/`'tht'`/`'npth'`/`'connector'`, `pos`, `polygons` `{F: [...], B: [...]}` for the copper sides it is on, optional `hole` polygons. |
+| drawing | `layer` (`F.SilkS`, `B.SilkS`, `F.Fab`, `B.Fab`, `F.CrtYd`, `B.CrtYd`, `Edge.Cuts`), `polygons`, and for text `text`: `'reference'`, `'value'`, `'field'` or `'text'`. Line width is already part of the polygon. Hidden text is left out. |
+| track item | `{layer, width, start, end, net}`; an arc has `polygons` instead of `start`/`end`; a via is `{via, diameter, drill, net}`. `net` is a code into `board.nets`. |
+| zone | `id`, `layer`, `net`, `polygon`: one record per filled outline. |
+
+A polygon is `{outline: [[x, y], …], holes?: [[[x, y], …], …]}`. Lengths are
+millimetres, axes are KiCad's (Y grows downwards), angles are degrees. A ring
+such as an unfilled circle may arrive as one outline with a slit instead of an
+outline plus a hole; fill it the same way.
+
+It is delivered in short slices like `documents.export()`, with the same rules:
+pinned to `revision` (a changed board rejects with `Document changed…`, start
+again), one whole-document read at a time per plugin, 32 MiB in total, and an
+`onRecords` callback if you would rather not keep everything. It needs only
+`documents:read`: it is the same board, in a different form. It is absent from
+`context.get().methods` in the schematic editor and on editor builds that
+predate it.
 
 Handles and revisions belong to this running instance. Only the active document
 is readable; `documents.list()` lists project file names without opening them.
@@ -213,7 +253,7 @@ the background. An exception thrown from a timer callback stops the plugin.
 You do not need timers to stay under the host-call rate: the host delays for you.
 
 There is no raw WASM/pointer access, direct Yjs mutation, sibling-document loading,
-change subscription, user-profile API, OAuth delegation
+change subscription, schematic geometry, user-profile API, OAuth delegation
 signing. The only current document write is confirmed symbol placement;
 `editor.select()` changes the selection, not the design.
 The only UI surface is a floating panel in the schematic or PCB editor.

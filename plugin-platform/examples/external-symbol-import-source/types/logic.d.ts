@@ -6,9 +6,13 @@ type PCBJamDocumentRef = {document:string;revision:number};
 type PCBJamItemSummary = {id:string;type:string;parent:string|null};
 type PCBJamItem = PCBJamItemSummary & {body:PCBJamSlot[]};
 /** TOO_LARGE: over the response limits on its own. DEFERRED: did not fit in this response; request it again. */
+type PCBJamPolygon = {outline:[number,number][];holes?:[number,number][][]};
+type PCBJamGeometryDrawing = {layer:string;text?:'reference'|'value'|'field'|'text';polygons:PCBJamPolygon[]};
+/** `$` names the record: 'board' | 'footprint' | 'drawing' | 'tracks' | 'zone'. See the API guide for each shape. */
+type PCBJamGeometryRecord = {$:string;[key:string]:any};
 type PCBJamItemError = {id:string;error:'TOO_LARGE'|'DEFERRED'};
 // BEGIN GENERATED HOST METHODS
-type PCBJamHostMethod = "http.request" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "editor.requestPlacement";
+type PCBJamHostMethod = "http.request" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "board.geometryStart" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "editor.requestPlacement";
 // END GENERATED HOST METHODS
 /** Plugin logic only, and only while a command is being handled: at most 32 pending, 60 s each,
  *  all cancelled when the command settles. An exception thrown from a callback stops the plugin. */
@@ -76,6 +80,15 @@ declare const pcbjam: {
     saveHtml(proposal:{name:string;html:string}):Promise<{status:'download-requested'|'cancelled'}>;
     /** A .png from base64 (no data: prefix), at most 4 MiB decoded; anything that is not a PNG is refused. */
     saveImage(proposal:{name:string;base64:string}):Promise<{status:'download-requested'|'cancelled'}>;
+  };
+  board:{
+    /** PCB editor only. The open board as shapes the editor computed, so you draw polygons instead of re-deriving
+     *  pads, arcs and text: `board` (bbox, outline polygons, net names when tracks/zones are included), one record per
+     *  footprint (ref, value, side, pos, angle, bbox, attrs, fields, pads with per-side polygons and hole polygons,
+     *  drawings on silkscreen/fab/courtyard tagged reference|value|field|text), board drawings, and with `include`
+     *  tracks/vias and zone fills. Millimetres, KiCad axes (Y down), degrees. Fetched in slices like
+     *  documents.export(): rejects if the document changes; pass `onRecords` to process batches without keeping them. */
+    geometry(options:PCBJamDocumentRef & {include?:('tracks'|'zones')[]},onRecords?:(records:PCBJamGeometryRecord[])=>unknown|Promise<unknown>):Promise<{revision:number;board:PCBJamGeometryRecord|null;footprints:PCBJamGeometryRecord[];drawings:PCBJamGeometryDrawing[];tracks:PCBJamJSON[];zones:PCBJamGeometryRecord[];count:number}>;
   };
   editor:{
     /** Confirms native tool handoff, not successful parsing/placement/saving. */

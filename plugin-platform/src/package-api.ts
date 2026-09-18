@@ -19,6 +19,8 @@ export const METHODS = {
     'documents.poll': request('documents:read', z.object({ document, since: revision }).strict()),
     'documents.exportStart': request('documents:read', z.object({ document, revision, types: z.array(z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/)).max(8), omit: z.array(z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/)).max(8), layout: z.boolean(), libSymbols: z.boolean() }).strict()),
     'documents.exportRead': request('documents:read', z.object({ export: z.string().uuid() }).strict()),
+    // Same data as documents:read, as shapes the engine computed. The only inputs are two flags.
+    'board.geometryStart': request('documents:read', z.object({ document, revision, include: z.array(z.enum(['tracks', 'zones'])).max(2).refine(v => new Set(v).size === v.length) }).strict()),
     'items.list': request('documents:read', z.object({ document, revision, ...page, types: z.array(z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/)).max(8) }).strict()),
     'items.get': request('documents:read', z.object({ document, revision, ids: z.array(id).min(1).max(100).refine(v => new Set(v).size === v.length), partial: z.boolean().optional() }).strict()),
     'selection.get': request('editor:read-selection', empty),
@@ -77,7 +79,7 @@ export function pngBytes(base64: string): Uint8Array {
  * plugin (files, placement, backends, storage writes) is authorized per call.
  */
 export const LEASED_READS: ReadonlySet<string> = new Set(['context.get', 'project.getInfo', 'documents.list', 'documents.getCurrent', 'documents.snapshot', 'documents.poll',
-    'documents.exportStart', 'documents.exportRead', 'items.list', 'items.get', 'selection.get']);
+    'documents.exportStart', 'documents.exportRead', 'board.geometryStart', 'items.list', 'items.get', 'selection.get']);
 /** Bound before stringify/recursive schema work. Return a detached JSON value. */
 export function boundedJSON(value: unknown, maxBytes: number): any {
     let nodes = 0, units = 0;
@@ -144,7 +146,10 @@ export interface DocumentAdapter {
     getItems(ids: string[], partial?: boolean): unknown[];
     openExport(request: { types: string[]; omit: string[]; layout: boolean; libSymbols: boolean }): {
         /** Newline-delimited JSON text; throws once the document has changed. */
-        read(budgetMs: number, maxChars: number): { text: string; done: boolean };
+        read(budgetMs: number, maxChars: number): { text: string; done: boolean } | Promise<{ text: string; done: boolean }>;
+    };
+    openGeometry?(request: { tracks: boolean; zones: boolean }): {
+        read(budgetMs: number, maxChars: number): Promise<{ text: string; done: boolean }>;
     };
     snapshot(): {
         root: string;

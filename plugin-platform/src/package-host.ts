@@ -34,6 +34,7 @@ export interface EditorContext {
     canPlaceItems: boolean;
     /** Read on every call: the engine module can finish loading after the plugin mounts. */
     canSelectItems?: boolean;
+    canReadGeometry?: boolean;
 }
 export interface PackageHostOptions {
     plugin: PluginDescriptor;
@@ -162,6 +163,9 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
         if(method==='http.request')return !!activation && Object.entries(options.plugin.manifest.endpoints??{}).some(([name,p])=>Object.keys(backendPermissions({[name]:p})).every(grant=>grants.includes(grant)));
         if (SAVES.has(method))
             return !!options.saveFile;
+        if (method === 'board.geometryStart')
+            // The editor sets the flag for the PCB editor with a capable engine; the engine itself refuses anything else.
+            return !!options.documents?.openGeometry && options.context().canReadGeometry === true;
         if (method === 'editor.select')
             return !!options.selectItems && !!options.documents && options.context().canSelectItems === true;
         if (method === 'context.get' || method.startsWith('files.'))
@@ -181,7 +185,7 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
         return revision;
     };
     let uiTimes: number[] = [], hostTimes: number[] = [], pendingHost = 0;
-    let exportSession: { id: string; revision: number; cursor: ReturnType<DocumentAdapter['openExport']>; chars: number; lastEnd: number; lastCost: number } | undefined;
+    let exportSession: { id: string; revision: number; cursor: { read(budgetMs: number, maxChars: number): { text: string; done: boolean } | Promise<{ text: string; done: boolean }> }; chars: number; lastEnd: number; lastCost: number } | undefined;
     const sleep = (ms: number) => new Promise<void>((resolve, reject) => {
         const done = () => { clearTimeout(timer); signal.removeEventListener('abort', done); if (signal.aborted) reject(new Error('Plugin stopped')); else resolve(); };
         const timer = setTimeout(done, ms);
@@ -286,6 +290,12 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
                 exportSession = { id: crypto.randomUUID(), revision, cursor: options.documents!.openExport({ types: params.types, omit: params.omit, layout: params.layout, libSymbols: params.libSymbols }), chars: 0, lastEnd: 0, lastCost: 0 };
                 return { export: exportSession.id, revision };
             }
+            case 'board.geometryStart': {
+                const revision = getDocument(params);
+                // Shares the export session: one whole-document read per instance, same slicing, rest and size cap.
+                exportSession = { id: crypto.randomUUID(), revision, cursor: options.documents!.openGeometry!({ tracks: params.include.includes('tracks'), zones: params.include.includes('zones') }), chars: 0, lastEnd: 0, lastCost: 0 };
+                return { export: exportSession.id, revision };
+            }
             case 'documents.exportRead': {
                 const session = exportSession;
                 if (!session || session.id !== params.export)
@@ -297,8 +307,11 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
                     throw new Error('Invalid or finished export');
                 const started = performance.now();
                 let part: { text: string; done: boolean };
-                try { part = session.cursor.read(LIMITS.exportSliceMs, LIMITS.exportSliceChars); }
-                catch (error) { exportSession = undefined; throw error; }
+                try { part = await session.cursor.read(LIMITS.exportSliceMs, LIMITS.exportSliceChars); }
+                catch (error) { if (exportSession === session) exportSession = undefined; throw error; }
+                check();
+                if (exportSession !== session)
+                    throw new Error('Invalid or finished export');
                 session.lastEnd = performance.now(); session.lastCost = session.lastEnd - started;
                 session.chars += part.text.length;
                 if (session.chars > LIMITS.exportTotalChars) { exportSession = undefined; throw new Error('Export exceeds size limit'); }

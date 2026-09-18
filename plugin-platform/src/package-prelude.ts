@@ -30,6 +30,20 @@ declare const __clearTimer: (message: string) => void;
             reject(error);
         }
     });
+    /** Drain one whole-document session: newline-delimited JSON records, a batch per slice. */
+    const readRecords = async (session: string, onBatch: (records: any[]) => unknown) => {
+        let rest = '';
+        for (;;) {
+            const part: any = await call('documents.exportRead', { export: session });
+            const lines = (rest + part.text).split('\n');
+            rest = lines.pop()!;
+            const batch: any[] = [];
+            for (const line of lines) if (line) batch.push(parse(line));
+            if (batch.length) await onBatch(batch);
+            if (part.done) break;
+        }
+        if (rest) throw new Error('Export ended inside a record');
+    };
     const api = Object.freeze({
         handle(command: string, handler: (params: any) => unknown) {
             if (!/^[a-z][a-zA-Z0-9.:-]{0,63}$/.test(command) || handlers.size >= 32 || handlers.has(command) || typeof handler !== 'function')
@@ -51,25 +65,18 @@ declare const __clearTimer: (message: string) => void;
                 const { document, revision, types = [], omit = [], layout = false, libSymbols = false, ...extra } = options ?? {};
                 const started: any = await call('documents.exportStart', { document, revision, types, omit, layout, libSymbols, ...extra });
                 const result: any = { revision: started.revision, root: '', items: [], count: 0, layout: null, libSymbols: [] };
-                let rest = '';
-                for (;;) {
-                    const part: any = await call('documents.exportRead', { export: started.export });
-                    const lines = (rest + part.text).split('\n');
-                    rest = lines.pop()!;
-                    const batch: unknown[] = [];
-                    for (const line of lines) {
-                        const record = parse(line);
+                await readRecords(started.export, async batch => {
+                    const items: unknown[] = [];
+                    for (const record of batch) {
                         if (record.$ === 'root') result.root = record.value;
                         else if (record.$ === 'layout') result.layout = record.value;
                         else if (record.$ === 'libSymbol') result.libSymbols.push(record.text);
-                        else batch.push(record);
+                        else items.push(record);
                     }
-                    result.count += batch.length;
-                    if (onItems) { if (batch.length) await onItems(batch); }
-                    else for (const item of batch) result.items.push(item);
-                    if (part.done) break;
-                }
-                if (rest) throw new Error('Export ended inside a record');
+                    result.count += items.length;
+                    if (onItems) { if (items.length) await onItems(items); }
+                    else for (const item of items) result.items.push(item);
+                });
                 return result;
             },
             poll: (options: unknown) => call('documents.poll', options),
@@ -94,6 +101,29 @@ declare const __clearTimer: (message: string) => void;
             choose: (options: unknown) => call('files.choose', options),
             readText: (handle: string) => call('files.readText', { handle }),
             close: (handle: string) => call('files.close', { handle }),
+        }),
+        board: Object.freeze({
+            // The open PCB as shapes the engine computed. Records arrive as they are produced; with
+            // onRecords nothing is retained.
+            geometry: async (options: any = {}, onRecords?: (records: unknown[]) => unknown) => {
+                if (onRecords !== undefined && typeof onRecords !== 'function')
+                    throw new Error('onRecords must be a function');
+                const { document, revision, include = [], ...extra } = options ?? {};
+                const started: any = await call('board.geometryStart', { document, revision, include, ...extra });
+                const result: any = { revision: started.revision, board: null, footprints: [], drawings: [], tracks: [], zones: [], count: 0 };
+                await readRecords(started.export, async batch => {
+                    result.count += batch.length;
+                    if (onRecords) { await onRecords(batch); return; }
+                    for (const record of batch) {
+                        if (record.$ === 'board') result.board = record;
+                        else if (record.$ === 'footprint') result.footprints.push(record);
+                        else if (record.$ === 'drawing') result.drawings.push(record.item);
+                        else if (record.$ === 'tracks') for (const item of record.items) result.tracks.push(item);
+                        else if (record.$ === 'zone') result.zones.push(record);
+                    }
+                });
+                return result;
+            },
         }),
         editor: Object.freeze({ requestPlacement: (proposal: unknown) => call('editor.requestPlacement', proposal), select: (options: unknown) => call('editor.select', options) }),
         randomUUID: () => uuid(),
