@@ -2,6 +2,7 @@ import type {BackendEndpoint} from './backend-contract.mjs';
 export interface Manifest {
   apiVersion: 1; id: string; name: string; version: string; description: string;
   main: 'main.js'; ui: 'ui.html'; surfaces: string[]; permissions: string[]; endpoints?:Record<string,BackendEndpoint>;
+  uiSize?: {width: number; height: number};
 }
 export interface ValidatedPackage {
   digest: string; manifest: Manifest; files: {path: string; text: string}[];

@@ -92,7 +92,13 @@ export function validatePackage(input, { legacyDigest = false } = {}) {
   const get = name => files.find(f => f.path === name)?.text;
   if (Buffer.byteLength(get('manifest.json') ?? '') > 16384) fail('Manifest exceeds 16 KiB');
   const manifest = JSON.parse(get('manifest.json') ?? fail('Missing manifest.json'));
-  exact(manifest, ['apiVersion', 'id', 'name', 'version', 'description', 'main', 'ui', 'surfaces', 'permissions', 'endpoints']);
+  exact(manifest, ['apiVersion', 'id', 'name', 'version', 'description', 'main', 'ui', 'uiSize', 'surfaces', 'permissions', 'endpoints']);
+  if (Object.hasOwn(manifest, 'uiSize')) {
+    exact(manifest.uiSize, ['width', 'height']);
+    const { width, height } = manifest.uiSize;
+    if (!Number.isInteger(width) || width < 280 || width > 4096 || !Number.isInteger(height) || height < 240 || height > 4096)
+      fail('uiSize requires integer width (280–4096) and height (240–4096) in CSS pixels');
+  }
   const endpoints = validateEndpoints(manifest.endpoints);
   const requestedBackendPermissions=backendPermissions(endpoints);
   if (manifest.apiVersion !== 1 || typeof manifest.id !== 'string' || !/^[a-z][a-z0-9-]{2,63}$/.test(manifest.id) || typeof manifest.version !== 'string' || manifest.version.length > 32 || !/^\d+\.\d+\.\d+$/.test(manifest.version)) fail('Unsupported API version, plugin ID or version');

@@ -55,6 +55,11 @@ Content Security Policy. It can manipulate its own DOM and call registered
 commands, but cannot access PCBJam's DOM or invoke host APIs directly.
 File pickers and placement confirmations live outside plugin HTML.
 
+The host also owns the draggable, resizable window. Optional manifest `uiSize`
+dimensions are validated at upload and fitted to the viewport; they are a starting
+preference, not permission to change the host DOM. Resizing keeps the iframe and
+Worker running and leaves their sandbox and permissions unchanged.
+
 QuickJS limits apply to logic, not arbitrary iframe JavaScript. Treat data sent
 to a plugin's UI as disclosed to that plugin; the sandbox is not a promise of
 zero data disclosure or a vulnerability-free browser.

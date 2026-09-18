@@ -42,7 +42,7 @@ UI to 512 KiB. PCBJam never runs uploaded build scripts.
 
 ## Manifest
 
-All fields below are required. This plugin only reads basic editor context:
+This minimal manifest contains every required field. It only reads basic editor context:
 
 ```json
 {
@@ -67,10 +67,18 @@ All fields below are required. This plugin only reads basic editor context:
 | `main`, `ui` | Exactly `main.js` and `ui.html`. |
 | `surfaces` | Schematic: `editor:eeschema`. Board: `editor:pcbnew`. Choose one or both. |
 | `permissions` | Both UI permissions are required. Add only the [API permissions](0009-plugin-api-and-permissions.md) your feature uses. |
+| `uiSize` (optional) | Preferred floating window size: `{ "width": 640, "height": 480 }`. Integer CSS pixels; width 280–4096, height 240–4096. |
 
 `ui:custom` allows your iframe UI; `ui:project-data` allows passing logic results
 into it. Neither grants document reads. Unknown fields, surfaces and permissions
 are rejected.
+
+Without `uiSize`, the window starts at 360 × 560. Dimensions include PCBJam's
+header, status bar and confirmation area; the iframe fills the remaining space.
+PCBJam fits the window inside the viewport. Users can resize from either bottom
+corner (or focus a resize handle and use arrow keys; Shift makes larger steps).
+Their chosen size takes precedence over `uiSize` and is remembered per account
+and plugin in that browser. Make your UI responsive: resizing preserves its state.
 
 ## Write logic and UI
 

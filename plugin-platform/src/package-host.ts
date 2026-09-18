@@ -24,6 +24,7 @@ export interface PluginDescriptor {
         surfaces: string[];
         permissions: string[];
         endpoints?: Record<string,BackendEndpoint>;
+        uiSize?: {width: number; height: number};
     };
 }
 export interface EditorContext {
