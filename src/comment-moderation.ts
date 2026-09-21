@@ -63,10 +63,12 @@ export const moderatePayloadSchema = z.discriminatedUnion("kind", [
 ]);
 export type ModeratePayload = z.infer<typeof moderatePayloadSchema>;
 
-/** `/room/close-connections` body: by slug, or every read-only socket. */
+/** `/room/close-connections` body: by slug, every read-only socket, or all. */
 export const closeConnectionsPayloadSchema = z.object({
   slug: z.string().min(1).optional(),
   readOnly: z.boolean().optional(),
+  /** Every socket, writers included (the project / team was deleted). */
+  all: z.boolean().optional(),
   /** Board rooms: also run the banned-author tombstone pass for `slug`. */
   tombstone: z.boolean().optional(),
 });
