@@ -43,10 +43,42 @@ export interface GatewayFileChange {
   /** Row revision after the write; 0 with `deleted` for a removed row. */
   revision: number;
   deleted?: true;
+  /** With `deleted`: the row was renamed/moved, not trashed (project-page
+   *  0003) — the same batch carries the new path's own entry. */
+  movedTo?: string;
   /** Coarse writer class, for UX copy only. */
   origin: "editor" | "upload" | "job";
   /** Writer's user slug when a session wrote it; absent for machine writers. */
   by?: string;
+}
+
+/**
+ * Websocket close reasons of a file-op kick (project-page 0003 D7), sent with
+ * code 4403 like the project-delete kick. `file-moved` carries the new path
+ * after a `:` (`file-moved:dir/new.kicad_sch`) so the editor can link to it.
+ */
+export const FILE_OP_CLOSE_REMOVED = "file-removed";
+export const FILE_OP_CLOSE_MOVED = "file-moved";
+
+/** Path-gate reason while a file op is still working on the path. */
+export const FILE_OP_BUSY = "file-op-active";
+
+/** True for the reasons the per-doc gate reports for a removed / moved /
+ *  being-worked-on path — a 410 `suberr`, as opposed to an invalid file. */
+export function isFileOpGateReason(reason: string): boolean {
+  return reason === FILE_OP_BUSY || parseFileOpCloseReason(reason) !== null;
+}
+
+/** Parse a close / suberr reason; null when it is not a file-op one. */
+export function parseFileOpCloseReason(
+  reason: string,
+): { kind: "removed" } | { kind: "moved"; to: string | null } | null {
+  if (reason === FILE_OP_CLOSE_REMOVED) return { kind: "removed" };
+  if (reason === FILE_OP_CLOSE_MOVED) return { kind: "moved", to: null };
+  if (reason.startsWith(`${FILE_OP_CLOSE_MOVED}:`)) {
+    return { kind: "moved", to: reason.slice(FILE_OP_CLOSE_MOVED.length + 1) || null };
+  }
+  return null;
 }
 
 /** Cap on `changes` per `files` frame (project-sync 0002 §1): above it the
@@ -168,6 +200,7 @@ export function parseGatewayFileChange(raw: unknown): GatewayFileChange | null {
     path?: unknown;
     revision?: unknown;
     deleted?: unknown;
+    movedTo?: unknown;
     origin?: unknown;
     by?: unknown;
   };
@@ -178,6 +211,7 @@ export function parseGatewayFileChange(raw: unknown): GatewayFileChange | null {
   if (c.origin !== "editor" && c.origin !== "upload" && c.origin !== "job") return null;
   const out: GatewayFileChange = { path: c.path, revision: c.revision, origin: c.origin };
   if (c.deleted === true) out.deleted = true;
+  if (out.deleted && typeof c.movedTo === "string" && c.movedTo) out.movedTo = c.movedTo;
   if (typeof c.by === "string" && c.by) out.by = c.by;
   return out;
 }

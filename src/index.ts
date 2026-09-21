@@ -24,6 +24,7 @@ export * from "./items-wire.js";
 export * from "./drift.js";
 export * from "./sync-wire.js";
 export * from "./gateway-wire.js";
+export * from "./sheet-refs.js";
 export * from "./backend-wire.js";
 export * from "./presence-wire.js";
 export * from "./presence-colors.js";

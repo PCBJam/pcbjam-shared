@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  FILE_OP_BUSY,
   FILES_DOC_PATH,
+  isFileOpGateReason,
+  parseFileOpCloseReason,
   parseGatewayFileChange,
   parseGatewayServerMsg,
 } from "../src/gateway-wire";
@@ -52,6 +55,31 @@ describe("gateway `files` hint (project-sync 0002)", () => {
       revision: 1,
       origin: "upload",
     });
+  });
+
+  it("movedTo rides a deleted entry only (project-page 0003)", () => {
+    expect(
+      parseGatewayFileChange({ path: "a.kicad_sch", revision: 0, deleted: true, movedTo: "b.kicad_sch", origin: "upload" }),
+    ).toEqual({ path: "a.kicad_sch", revision: 0, deleted: true, movedTo: "b.kicad_sch", origin: "upload" });
+    // Without `deleted` it means nothing — dropped, not forwarded.
+    expect(parseGatewayFileChange({ path: "a", revision: 2, movedTo: "b", origin: "upload" })).toEqual({
+      path: "a",
+      revision: 2,
+      origin: "upload",
+    });
+  });
+
+  it("file-op close / gate reasons parse; a path may itself contain a colon", () => {
+    expect(parseFileOpCloseReason("file-removed")).toEqual({ kind: "removed" });
+    expect(parseFileOpCloseReason("file-moved")).toEqual({ kind: "moved", to: null });
+    expect(parseFileOpCloseReason("file-moved:hw/a:b.kicad_sch")).toEqual({
+      kind: "moved",
+      to: "hw/a:b.kicad_sch",
+    });
+    expect(parseFileOpCloseReason("deleted")).toBeNull();
+    expect(parseFileOpCloseReason("file-moved-ish")).toBeNull();
+    expect(isFileOpGateReason(FILE_OP_BUSY)).toBe(true);
+    expect(isFileOpGateReason("broken s-expr")).toBe(false);
   });
 
   it("the reserved channel name never collides with a project path", () => {

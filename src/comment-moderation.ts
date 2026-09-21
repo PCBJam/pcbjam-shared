@@ -71,6 +71,9 @@ export const closeConnectionsPayloadSchema = z.object({
   all: z.boolean().optional(),
   /** Board rooms: also run the banned-author tombstone pass for `slug`. */
   tombstone: z.boolean().optional(),
+  /** Close reason override (a file-op kick, project-page 0003). A websocket
+   *  close reason is capped at 123 bytes — longer ones are the caller's bug. */
+  reason: z.string().min(1).max(120).optional(),
 });
 export type CloseConnectionsPayload = z.infer<typeof closeConnectionsPayloadSchema>;
 
