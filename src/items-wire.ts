@@ -397,6 +397,16 @@ export function wireLibSymbols(wire: ItemsWireDelta): Record<string, string> {
 }
 
 /**
+ * The `kdoc_libsymbols` key a placed item resolves its definition under —
+ * keyed like KiCad's screen map (`SCH_SYMBOL::GetSchSymbolLibraryName`): a
+ * diverged local copy lives under its `lib_name`, everything else under `lib_id`.
+ */
+export function itemLibRef(item: KicadItem): string | undefined {
+  const ref = scalar(item.body, "lib_name") ?? scalar(item.body, "lib_id");
+  return ref === undefined ? undefined : unquoteAtom(ref);
+}
+
+/**
  * Render a `KicadDelta` into the items wire for the editor. `view` must contain
  * the delta's items AND their descendants (e.g. the post-apply Y items read back)
  * so each sexpr embeds its full subtree.
@@ -442,8 +452,9 @@ export function deltaToItemsWire(
     let sexpr = renderItem({ items: view }, uuid);
     const parent = view[uuid]?.parent ?? null;
     if (libDefs && parent === null) {
-      const libId = scalar(view[uuid]?.body ?? [], "lib_id");
-      const def = libId ? libDefs(unquoteAtom(libId)) : undefined;
+      const item = view[uuid];
+      const libRef = item ? itemLibRef(item) : undefined;
+      const def = libRef ? libDefs(libRef) : undefined;
       if (def) sexpr = `(lib_symbols ${def}) ${sexpr}`;
     }
     return { sexpr, parent, uuid };

@@ -749,9 +749,23 @@ export function applyDeltaToY(ydoc: Y.Doc, delta: KicadDelta, origin?: unknown):
  *   the saved file can't know about a peer's not-yet-applied placement, so
  *   absent defs are kept, never deleted).
  *
+ * `baseline` (2026-09-21 audit): the layout this editor last AGREED on — the
+ * file it opened, then each file it saved. Remote layout changes never reach
+ * the native model, so the saved file still carries this client's load-time
+ * settings; comparing it to the doc alone would write those stale values back
+ * over a peer's change the user never touched. With a baseline only the heads
+ * (and definitions) the file changed RELATIVE TO IT are reconciled — the
+ * user's actual edits; everything else in the doc is left to its last writer.
+ * Without one the whole file is authoritative (the pre-audit behaviour).
+ *
  * Returns true when anything changed.
  */
-export function syncLayoutToY(fileDoc: KicadDoc, ydoc: Y.Doc, origin?: unknown): boolean {
+export function syncLayoutToY(
+  fileDoc: KicadDoc,
+  ydoc: Y.Doc,
+  origin?: unknown,
+  baseline?: KicadDoc,
+): boolean {
   assertKicadDoc(fileDoc);
   const FROZEN = new Set(["net", "lib_symbols"]);
   let changed = false;
@@ -759,8 +773,10 @@ export function syncLayoutToY(fileDoc: KicadDoc, ydoc: Y.Doc, origin?: unknown):
   ydoc.transact(() => {
     // lib_symbols → the defs map, additive.
     const defs = libSymbolsFromLayout(fileDoc.layout, fileDoc.items);
+    const baseDefs = baseline ? libSymbolsFromLayout(baseline.layout, baseline.items) : undefined;
     const libs = kicadLibSymbolsMap(ydoc);
     for (const [id, def] of Object.entries(defs)) {
+      if (baseDefs && baseDefs[id] === def) continue; // untouched locally
       if (libs.get(id) !== def) {
         libs.set(id, def);
         changed = true;
@@ -781,6 +797,7 @@ export function syncLayoutToY(fileDoc: KicadDoc, ydoc: Y.Doc, origin?: unknown):
     };
 
     const fileGroups = groupsOf(fileDoc.layout);
+    const baseGroups = baseline ? groupsOf(baseline.layout) : undefined;
     const heads = new Set([...fileGroups.keys(), ...groupsOf(layout.toArray()).keys()]);
 
     for (const head of heads) {
@@ -788,6 +805,13 @@ export function syncLayoutToY(fileDoc: KicadDoc, ydoc: Y.Doc, origin?: unknown):
       const curGroup = cur.filter((s) => "k" in s && s.k === head);
       const fileGroup = fileGroups.get(head) ?? [];
       if (JSON.stringify(curGroup) === JSON.stringify(fileGroup)) continue;
+      // Untouched locally since the baseline: the doc's version is a peer's.
+      if (
+        baseGroups &&
+        JSON.stringify(baseGroups.get(head) ?? []) === JSON.stringify(fileGroup)
+      ) {
+        continue;
+      }
 
       // Replace the whole group: delete existing occurrences (reverse keeps
       // indices valid), then insert the file's at the first old position (or
