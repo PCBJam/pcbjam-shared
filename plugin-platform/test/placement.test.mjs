@@ -12,6 +12,19 @@ test('the downloadable importer produces valid base and inherited symbol proposa
   const library=readLibrary(await readFile(new URL('../examples/sample-symbols.kicad_sym',import.meta.url),'utf8'),'sample-symbols.kicad_sym');
   for(const name of library.names)validate(buildPlacement(library,name,'11111111-1111-4111-8111-111111111111').sexpr,'eeschema');
 });
+test('the shared symbol-lib builder produces valid proposals for every sample symbol, with the Footprint rewritten',async()=>{
+  const code=await build({entryPoints:[new URL('../../src/symbol-lib.ts',import.meta.url).pathname],bundle:true,write:false,format:'esm',platform:'node'});
+  const {resolveSymbolDefinition,withFootprintProperty,buildSymbolClipboard,unquote,isForm}=await import('data:text/javascript;base64,'+Buffer.from(code.outputFiles[0].contents).toString('base64'));
+  const text=await readFile(new URL('../examples/sample-symbols.kicad_sym',import.meta.url),'utf8');
+  for(const name of ['PluginResistor','PluginResistor_10k']){
+    const def=withFootprintProperty(resolveSymbolDefinition(text,name),'eda_cn:R_0603');
+    const {sexpr}=buildSymbolClipboard(def,'eda_cn',name,'11111111-1111-4111-8111-111111111111');
+    validate(sexpr,'eeschema');
+    assert.equal(unquote(def.find(n=>isForm(n,'property')&&unquote(n[1])==='Footprint')[2]),'eda_cn:R_0603');
+  }
+  // A Footprint value with a path is what the allowlist refuses; the rewrite is what keeps providers honest.
+  assert.throws(()=>validate(buildSymbolClipboard(withFootprintProperty(resolveSymbolDefinition(text,'PluginResistor'),'${KIPRJMOD}/x.pretty:Y'),'eda_cn','PluginResistor','11111111-1111-4111-8111-111111111111').sexpr,'eeschema'),/external footprint reference/);
+});
 const symbol=`(lib_symbols (symbol "test:Part" (pin_numbers hide) (pin_names (offset 0) hide)
   (property "Reference" "R" (at 0 0 90) (effects (font (size 1.27 1.27))))
   (symbol "Part_0_1" (rectangle (start -1 -2) (end 1 2) (stroke (width 0.25) (type default)) (fill (type none))))
@@ -20,6 +33,8 @@ const symbol=`(lib_symbols (symbol "test:Part" (pin_numbers hide) (pin_names (of
 
 test('accepts self-contained symbols, current and legacy visibility syntax',()=>{
   validate(symbol,'eeschema');
+  // KiCad ≤ 8 puts a bare `hide` at the end of a property's effects.
+  validate(symbol.replace('(property "Reference" "R" (at 0 0 90) (effects (font (size 1.27 1.27))))','(property "Reference" "R" (at 0 0 90) (effects (font (size 1.27 1.27)) hide))'),'eeschema');
   validate(symbol.replace('(pin_numbers hide)','(pin_numbers (hide yes))').replace('(offset 0) hide','(offset 0) (hide yes)'),'eeschema');
 });
 test('rejects resource-bearing forms, invalid geometry and ambiguous definitions',()=>{

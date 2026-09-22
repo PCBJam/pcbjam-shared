@@ -34,7 +34,9 @@ function fields(node:Form,start:number,allowed:string[],repeat:string[]=[]) {
   });
 }
 function effects(node:Form) {
-  for(const child of fields(node,1,['font','justify','hide'])){
+  // KiCad ≤ 8 wrote the legacy bare `hide` atom inside effects; KiCad 9 writes `(hide yes)`.
+  let rest=node.slice(1);if(rest.at(-1)==='hide')rest=rest.slice(0,-1);
+  for(const child of fields(['effects',...rest],1,['font','justify','hide'])){
     if(tag(child)==='font')for(const value of fields(child,1,['size','thickness','bold','italic'])){
       if(tag(value)==='size')coordinate(value,2,0.001,100);
       else if(tag(value)==='thickness')coordinate(value,1,0,10);

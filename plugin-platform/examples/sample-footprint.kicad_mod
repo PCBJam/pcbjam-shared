@@ -1,0 +1,103 @@
+(footprint "BGA96C80P9X16_750X1350X120"
+	(version 20241229)
+	(generator "pcbnew")
+	(generator_version "9.0")
+	(layer "F.Cu")
+	(descr "BGA, 0.80mm Pitch, Rect.; 96 Pin, 9 Columns X 16 Rows, 7.50mm X 13.50mm X 1.20mm H")
+	(property "Reference" "REF**"
+		(at 0 -8.826 0)
+		(layer "F.SilkS")
+		(uuid "3bf8179b-15fe-4212-81f8-aee7d8ca43aa")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "MT40A512M16LY-075-E"
+		(at 0 8.826 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "125f7733-5a50-4e27-aa13-93b6926cc0af")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(fp_line
+		(start -3.75 -6.75)
+		(end 3.75 -6.75)
+		(stroke
+			(width 0.2)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "a400fa1a-2abe-4b4a-8714-c6f91d0d5772")
+	)
+	(fp_line
+		(start -3.75 -6.6)
+		(end -3.6 -6.75)
+		(stroke
+			(width 0.2)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "f439f632-82a7-44ad-81ea-ed34a7565f5a")
+	)
+	(fp_line
+		(start -3.75 -6.55)
+		(end -3.55 -6.75)
+		(stroke
+			(width 0.2)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "d71b7793-1eaa-45b8-825d-e9d5ad702830")
+	)
+	(pad "A1" smd circle
+		(at -3.2 -6)
+		(size 0.4 0.4)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "e8ceafd6-c41a-4862-ab70-f45ebca9953b")
+	)
+	(pad "A2" smd circle
+		(at -2.4 -6)
+		(size 0.4 0.4)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "a47e867f-7b41-4d1c-977d-cb20b6bc8f69")
+	)
+	(pad "A3" smd circle
+		(at -1.6 -6)
+		(size 0.4 0.4)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "cc711754-b869-4dc4-8151-8045881f830f")
+	)
+	(pad "A7" smd circle
+		(at 1.6 -6)
+		(size 0.4 0.4)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "3291463e-f68e-4455-af6d-a8b7e97bd3c0")
+	)
+	(model "kicad-embed://BGA96C80P9X16_750X1350X120.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+	(embedded_files
+		(file
+			(name "datasheet.pdf")
+			(type other)
+			(data |KLUv/WBAAOUAAA==|)
+			(checksum "0000000000000000000000000000000000000000000000000000000000000000")
+		)
+	)
+)
