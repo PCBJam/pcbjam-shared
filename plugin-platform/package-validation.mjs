@@ -53,7 +53,10 @@ export function readZip(bytes) {
     if (ranges.some(([a, b]) => local < b && bodyStart + compressed > a)) fail('Overlapping ZIP entries');
     ranges.push([local, bodyStart + compressed]);
     const packed = bytes.subarray(bodyStart, bodyStart + compressed);
-    const body = method === 0 ? packed : inflateRawSync(packed, { maxOutputLength: Math.max(1, expanded) });
+    // Bound by the package file limit rather than the declared size: workerd's zlib
+    // rejects some streams whose declared size sits near its chunk boundary
+    // ("Memory limit exceeded"); the exact-size check below still applies.
+    const body = method === 0 ? packed : inflateRawSync(packed, { maxOutputLength: LIMITS.file + 1 });
     if (body.length !== expanded || crc32(body) !== crc) fail('ZIP content mismatch');
     if (directory) { if (body.length) fail('Directory contains data'); continue; }
     if (metadataPath(name)) continue; // Finder metadata is bounded/validated, never executable content.
