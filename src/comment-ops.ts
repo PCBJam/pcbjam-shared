@@ -133,7 +133,20 @@ export type CommentOpOutcome =
   | { ok: true; threadId: string; messageId?: string }
   | { ok: false; code: CommentOpRejectCode };
 
-/** `POST` target for a document's comment ops (per-segment encoded path). */
+/**
+ * `POST` target for a project's comment ops (git-integration 0001): the
+ * project comments document takes every op; a `createThread` op must carry
+ * `anchor.filePath`, which the backend checks against the project's files.
+ */
+export function projectCommentOpsUrl(scope: string, project: string): string {
+  return `/api/scopes/${encodeURIComponent(scope)}/projects/${encodeURIComponent(project)}/comments`;
+}
+
+/**
+ * Legacy per-document `POST` target (per-segment encoded path). Since
+ * git-integration 0001 the backend treats it as {@link projectCommentOpsUrl}
+ * with `anchor.filePath` taken from the URL; kept for older editor builds.
+ */
 export function commentOpsUrl(scope: string, project: string, filePath: string): string {
   const enc = filePath
     .split("/")
@@ -285,7 +298,7 @@ export function applyCommentOp(
         }
         const ok =
           op.type === "setResolved"
-            ? setThreadResolved(ydoc, op.threadId, op.resolved)
+            ? setThreadResolved(ydoc, op.threadId, op.resolved, undefined, now)
             : setThreadAnchor(ydoc, op.threadId, op.anchor);
         if (ok) outcome = { ok: true, threadId: op.threadId };
         return;

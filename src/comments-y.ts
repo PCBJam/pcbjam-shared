@@ -2,10 +2,15 @@ import * as Y from "yjs";
 import {
   commentMessageSchema,
   commentThreadSchema,
+  commentsLiftedMarkerSchema,
+  COMMENTS_LIFTED_KEY,
   Y_KDOC_COMMENTS,
   type CommentAnchor,
   type CommentMessage,
+  type CommentProvenance,
+  type CommentResolution,
   type CommentThread,
+  type CommentsLiftedMarker,
 } from "./comments-wire.js";
 import { args, field } from "./kicad-doc.js";
 import { kicadItemsMap, yToItemUnchecked } from "./kicad-y.js";
@@ -58,6 +63,8 @@ export function createThread(
     mentions?: string[];
     id?: string;
     now?: number;
+    /** Capture context (git-integration 0001, C-D3); absent until working copies exist. */
+    provenance?: CommentProvenance;
   },
 ): string {
   const threadId = opts.id ?? uid();
@@ -69,6 +76,9 @@ export function createThread(
     thread.set("id", threadId);
     thread.set("anchor", opts.anchor);
     thread.set("resolved", false);
+    if (opts.provenance && Object.keys(opts.provenance).length) {
+      thread.set("provenance", opts.provenance);
+    }
     thread.set("createdBy", opts.author);
     if (opts.authorName) thread.set("authorName", opts.authorName);
     if (opts.authorEmail) thread.set("authorEmail", opts.authorEmail);
@@ -203,14 +213,33 @@ export function setThreadAnchor(ydoc: Y.Doc, threadId: string, anchor: CommentAn
   return true;
 }
 
-/** Resolve (close) / reopen a thread. Independent LWW key — never conflicts
- *  with concurrent replies. */
-export function setThreadResolved(ydoc: Y.Doc, threadId: string, resolved: boolean): boolean {
+/**
+ * Resolve (close) / reopen a thread. Independent LWW key — never conflicts
+ * with concurrent replies. A resolve records where it happened (C-D8,
+ * `resolution`; `at` defaults to now); a reopen clears it and stamps
+ * `reopenedAt` so a later comments-file merge can tell a newer reopen from an
+ * older desktop resolve (design-comments §7.2, C-N1).
+ */
+export function setThreadResolved(
+  ydoc: Y.Doc,
+  threadId: string,
+  resolved: boolean,
+  resolution?: Partial<CommentResolution>,
+  now: number = Date.now(),
+): boolean {
   const thread = commentsYMap(ydoc).get(threadId);
 
   if (!thread) return false;
 
-  thread.set("resolved", resolved);
+  ydoc.transact(() => {
+    thread.set("resolved", resolved);
+    if (resolved) {
+      thread.set("resolution", { ...resolution, at: resolution?.at ?? now });
+    } else {
+      if (thread.has("resolution")) thread.delete("resolution");
+      thread.set("reopenedAt", now);
+    }
+  });
   return true;
 }
 
@@ -279,6 +308,10 @@ function threadToPlain(thread: Y.Map<unknown>): CommentThread | null {
     createdAt: thread.get("createdAt"),
     rootId: thread.get("rootId"),
     messages: list,
+    provenance: thread.get("provenance"),
+    resolution: thread.get("resolution"),
+    reopenedAt: thread.get("reopenedAt"),
+    origin: thread.get("origin"),
     ...(Object.keys(seen).length ? { seen } : {}),
     ...(Object.keys(reactions).length ? { reactions } : {}),
   });
@@ -286,16 +319,140 @@ function threadToPlain(thread: Y.Map<unknown>): CommentThread | null {
   return parsed.success ? parsed.data : null;
 }
 
-/** All threads as plain data (malformed entries dropped), oldest first. */
-export function listThreads(ydoc: Y.Doc): CommentThread[] {
+/**
+ * Which document a session is bound to, for {@link listThreads} filtering
+ * (git-integration 0001). `filePath` selects the threads anchored on that
+ * project file; a legacy thread without `anchor.filePath` (never lifted —
+ * only possible in a file doc) counts as the session's own. `sheetPath`,
+ * when given, additionally requires an equal `anchor.sheetPath` (a thread
+ * without one matches every instance of the sheet file).
+ */
+export interface ThreadFilter {
+  filePath: string;
+  sheetPath?: string;
+}
+
+/** True when `thread` belongs to the document `filter` describes. */
+export function threadMatches(thread: CommentThread, filter: ThreadFilter): boolean {
+  const fp = thread.anchor.filePath;
+  if (fp !== undefined && fp !== filter.filePath) return false;
+  if (filter.sheetPath !== undefined) {
+    const sp = thread.anchor.sheetPath;
+    if (sp !== undefined && sp !== filter.sheetPath) return false;
+  }
+  return true;
+}
+
+/**
+ * All threads as plain data (malformed entries dropped — including the
+ * `~lifted` marker), oldest first; with `filter`, only the threads of that
+ * document.
+ */
+export function listThreads(ydoc: Y.Doc, filter?: ThreadFilter): CommentThread[] {
   const out: CommentThread[] = [];
 
-  for (const thread of commentsYMap(ydoc).values()) {
+  for (const [key, thread] of commentsYMap(ydoc).entries()) {
+    if (key.startsWith("~") || !(thread instanceof Y.Map)) continue;
     const plain = threadToPlain(thread);
-    if (plain) out.push(plain);
+    if (plain && (!filter || threadMatches(plain, filter))) out.push(plain);
   }
 
   return out.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+}
+
+/** The lift marker a file doc carries once its threads moved (or null). */
+export function commentsLiftedMarker(ydoc: Y.Doc): CommentsLiftedMarker | null {
+  const raw = commentsYMap(ydoc).get(COMMENTS_LIFTED_KEY);
+  const parsed = commentsLiftedMarkerSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}
+
+/**
+ * Move a FILE doc's legacy threads into the PROJECT comments document
+ * (design-comments §8, C-D9). Idempotent by thread id: a thread the project
+ * doc already holds is skipped, sub-maps and per-user flat keys are copied
+ * verbatim, `anchor.filePath` is set to `filePath` (an existing value is
+ * kept), provenance stays absent. The source entries are then deleted and
+ * the `~lifted` marker written, so an old client reads an empty map. Runs as
+ * two transactions (one per doc); safe to run twice — the second run finds
+ * an empty source and returns 0. A source doc with no threads and no marker
+ * gets the marker too, so the lazy trigger stops re-checking it.
+ */
+export function liftLegacyComments(
+  fileDoc: Y.Doc,
+  projectDoc: Y.Doc,
+  filePath: string,
+  now: number = Date.now(),
+): { moved: number; skipped: number } {
+  const source = commentsYMap(fileDoc);
+  const target = commentsYMap(projectDoc);
+  let moved = 0;
+  let skipped = 0;
+  const entries: Array<[string, Y.Map<unknown>]> = [];
+  for (const [key, thread] of source.entries()) {
+    if (key.startsWith("~") || !(thread instanceof Y.Map)) continue;
+    entries.push([key, thread]);
+  }
+
+  projectDoc.transact(() => {
+    for (const [key, thread] of entries) {
+      if (target.has(key)) {
+        skipped += 1;
+        continue;
+      }
+      const copy = new Y.Map<unknown>();
+      for (const [k, v] of thread.entries()) {
+        if (v instanceof Y.Map) {
+          const sub = new Y.Map<unknown>();
+          for (const [mk, mv] of v.entries()) sub.set(mk, structuredCloneish(mv));
+          copy.set(k, sub);
+        } else if (k === "anchor" && v && typeof v === "object") {
+          const anchor = v as Record<string, unknown>;
+          copy.set(k, { ...anchor, filePath: typeof anchor.filePath === "string" ? anchor.filePath : filePath });
+        } else {
+          copy.set(k, structuredCloneish(v));
+        }
+      }
+      target.set(key, copy);
+      moved += 1;
+    }
+  });
+
+  fileDoc.transact(() => {
+    for (const [key] of entries) source.delete(key);
+    const marker: CommentsLiftedMarker = { at: now, count: moved + skipped };
+    source.set(COMMENTS_LIFTED_KEY, marker as unknown as Y.Map<unknown>);
+  });
+
+  return { moved, skipped };
+}
+
+/** Plain-value copy (Y.Map values here are JSON-ish: objects, numbers, strings). */
+function structuredCloneish<T>(v: T): T {
+  return v && typeof v === "object" ? (JSON.parse(JSON.stringify(v)) as T) : v;
+}
+
+/**
+ * A thread's state in a session bound to one document (design-comments
+ * §6.1): `anchored` when its item resolves (or it is item-less), `detached`
+ * when the file is present but the item is gone, `absent` when the thread's
+ * file is not part of the working copy at all.
+ */
+export type ThreadState = "anchored" | "detached" | "absent";
+
+export function detachedState(
+  thread: CommentThread,
+  ctx: {
+    /** Does the thread's file exist in this working copy? (Legacy threads without `filePath` → true.) */
+    fileExists: (filePath: string | undefined) => boolean;
+    /** Does the anchor item resolve in that file's document? Only consulted when `fileExists`. */
+    hasItem: (itemUuid: string, filePath: string | undefined) => boolean;
+  },
+): ThreadState {
+  const fp = thread.anchor.filePath;
+  if (!ctx.fileExists(fp)) return "absent";
+  if (thread.anchor.itemUuid && !ctx.hasItem(thread.anchor.itemUuid, fp)) return "detached";
+  return "anchored";
 }
 
 export function getThread(ydoc: Y.Doc, threadId: string): CommentThread | null {
@@ -400,6 +557,9 @@ export function observeComments(ydoc: Y.Doc, cb: () => void): () => void {
  * an `(at x y …)` field, the pin TRACKS it: position = item origin (file mm ×
  * `iuPerMm` — 1e6 for pcbnew, 1e4 for eeschema) + the stored offset. A deleted
  * item (or one with no position) detaches the pin to its captured `pos`.
+ *
+ * `ydoc` is the doc holding the ITEMS — since git-integration 0001 that is
+ * the FILE doc, while the thread itself lives in the project document.
  */
 export function resolveAnchor(
   ydoc: Y.Doc,

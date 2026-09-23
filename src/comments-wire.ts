@@ -17,6 +17,32 @@ import { z } from "zod";
 /** Y.Doc top-level key holding the comments map (threadId → thread Y.Map). */
 export const Y_KDOC_COMMENTS = "kdoc_comments";
 
+/**
+ * git-integration 0001 (design-comments C-D1): threads live in ONE project-
+ * scoped Yjs document, room `<scopeId>:<projectId>:~comments`, opened by
+ * every editor session of the project whatever file it edits. The `~` path
+ * can never collide with a project file (same reservation as `~presence`).
+ * Backends persist it exactly like a file room (`…/~comments.ydoc`).
+ */
+export const COMMENTS_DOC_PATH = "~comments";
+
+/**
+ * Marker key left in a FILE doc's `kdoc_comments` map once its threads were
+ * lifted into the project document (design-comments §8). Its value is a plain
+ * object, never a thread map, so an old client's `listThreads` drops it as
+ * malformed and sees an empty map — no duplicates, no resurrection. New
+ * clients skip `~`-prefixed keys.
+ */
+export const COMMENTS_LIFTED_KEY = "~lifted";
+
+export const commentsLiftedMarkerSchema = z.object({
+  /** ms epoch of the lift. */
+  at: z.number(),
+  /** Threads moved (informational). */
+  count: z.number().int().nonnegative(),
+});
+export type CommentsLiftedMarker = z.infer<typeof commentsLiftedMarkerSchema>;
+
 export const commentAnchorSchema = z.object({
   /**
    * KIID of the anchor item, when the comment was pinned to one. The pin then
@@ -32,7 +58,41 @@ export const commentAnchorSchema = z.object({
   pos: z.object({ x: z.number().finite(), y: z.number().finite() }),
   /** Pin position relative to the anchor item's origin (IU). */
   offset: z.object({ x: z.number().finite(), y: z.number().finite() }).optional(),
+  /**
+   * Project-relative path of the document the pin is on (git-integration
+   * 0001, C-D3). Absent only on legacy threads that were never lifted — a
+   * session bound to a file treats those as its own (design-comments §6.1).
+   */
+  filePath: z.string().optional(),
+  /**
+   * eeschema hierarchical sheet path within `filePath`, when the same sheet
+   * file is instantiated more than once. Absent = the file itself.
+   */
+  sheetPath: z.string().optional(),
 });
+
+/**
+ * Where a thread was written (C-D3): the working copy and its committed head
+ * ("introduced at"), the file room generation, and whether the copy had
+ * uncommitted edits to `filePath` at the time (C-N2). Schema only until
+ * working copies exist (git-integration 0004); every field optional.
+ */
+export const commentProvenanceSchema = z.object({
+  workingCopyId: z.string().optional(),
+  headCommit: z.string().optional(),
+  docGeneration: z.number().int().optional(),
+  dirtyAtWrite: z.boolean().optional(),
+});
+export type CommentProvenance = z.infer<typeof commentProvenanceSchema>;
+
+/** Where a thread was resolved (C-D8). */
+export const commentResolutionSchema = z.object({
+  workingCopyId: z.string().optional(),
+  headCommit: z.string().optional(),
+  /** ms epoch of the resolve. */
+  at: z.number(),
+});
+export type CommentResolution = z.infer<typeof commentResolutionSchema>;
 
 /**
  * Author identity, denormalized at write time.
@@ -96,6 +156,18 @@ export const commentThreadSchema = z.object({
   rootId: z.string().min(1),
   /** Ordered by (createdAt, id); index 0 is the root message. */
   messages: z.array(commentMessageSchema),
+  /** git-integration 0001: capture context (C-D3). Absent on legacy threads. */
+  provenance: commentProvenanceSchema.optional(),
+  /** Set by the resolve that closed the thread (C-D8); cleared on reopen. */
+  resolution: commentResolutionSchema.optional(),
+  /**
+   * ms epoch of the last reopen through the UI — the merge rule (design-
+   * comments §7.2, C-N1) compares it against an imported `resolution.at` so a
+   * newer reopen survives the merge and an older one is re-resolved.
+   */
+  reopenedAt: z.number().optional(),
+  /** `import`: the thread arrived through a comments-file merge (§7.2). */
+  origin: z.enum(["import"]).optional(),
   /**
    * Per-user seen watermarks (comments-ux 0001 C): slug → ms epoch of the
    * newest message that user has seen. Stored as flat `seen:<slug>` keys on

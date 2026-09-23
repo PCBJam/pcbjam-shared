@@ -377,6 +377,17 @@ export function presenceRoomId(scopeId: string, projectId: string): string {
 }
 
 /**
+ * The project-wide COMMENTS room (git-integration 0001, design-comments §5):
+ * one Yjs document per project holding every thread, opened by every editor
+ * session beside its file room(s). Persisted like a file room. The doc path
+ * constant lives in comments-wire.ts (`COMMENTS_DOC_PATH`); this is the
+ * room-id shorthand next to {@link presenceRoomId}.
+ */
+export function commentsRoomId(scopeId: string, projectId: string): string {
+  return collabRoomId(scopeId, projectId, "~comments");
+}
+
+/**
  * Connection params a Yjs provider sends to the sync backend (query string).
  * `token` is the (thin, for now) auth credential; backends MAY require it.
  */
