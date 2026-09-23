@@ -291,3 +291,43 @@ export function mergeCommentsFile(ydoc: Y.Doc, file: CommentsFile, now: number =
 
   return summary;
 }
+
+// --- update-in / update-out wrappers -------------------------------------------
+// The closed core never imports yjs itself (a second yjs copy would break
+// the `instanceof Y.Map` checks above — the dual-yjs trap); it hands encoded
+// updates in and gets encoded forward updates back, like ydoc-rewrite.ts.
+
+/** Export from an encoded document state (null = an empty document). */
+export function exportCommentsFromUpdate(
+  update: Uint8Array | null,
+  opts: { projectId?: string; now?: number } = {},
+): CommentsFile {
+  const doc = new Y.Doc();
+  try {
+    if (update) Y.applyUpdate(doc, update);
+    return exportComments(doc, opts);
+  } finally {
+    doc.destroy();
+  }
+}
+
+/**
+ * Merge a comments file into an encoded document state and return the
+ * FORWARD update (what changed, applied through the room) plus the summary.
+ * A null update = merging into an empty document.
+ */
+export function mergeCommentsFileUpdate(
+  update: Uint8Array | null,
+  file: CommentsFile,
+  now: number = Date.now(),
+): { update: Uint8Array; summary: CommentsMergeSummary } {
+  const doc = new Y.Doc();
+  try {
+    if (update) Y.applyUpdate(doc, update);
+    const before = Y.encodeStateVector(doc);
+    const summary = mergeCommentsFile(doc, file, now);
+    return { update: Y.encodeStateAsUpdate(doc, before), summary };
+  } finally {
+    doc.destroy();
+  }
+}

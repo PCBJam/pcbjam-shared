@@ -14,7 +14,9 @@ import {
   deleteThread,
   editMessage,
   exportComments,
+  exportCommentsFromUpdate,
   listThreads,
+  mergeCommentsFileUpdate,
   markThreadSeen,
   mergeCommentsFile,
   parseCommentsFile,
@@ -152,5 +154,22 @@ describe("mergeCommentsFile", () => {
     const empty = exportComments(new Y.Doc(), { now: 150 });
     mergeCommentsFile(doc, empty, 160);
     expect(listThreads(doc)).toHaveLength(1);
+  });
+});
+
+describe("update wrappers", () => {
+  it("export from bytes and merge as a forward update round-trip", () => {
+    const { doc, t1 } = seeded();
+    const file = exportCommentsFromUpdate(Y.encodeStateAsUpdate(doc), { now: 5 });
+    expect(file.threads.map((t) => t.id)).toContain(t1);
+    expect(exportCommentsFromUpdate(null).threads).toEqual([]);
+    const empty = new Y.Doc();
+    const { update, summary } = mergeCommentsFileUpdate(null, file, 6);
+    expect(summary.threadsImported).toBe(2);
+    Y.applyUpdate(empty, update);
+    expect(listThreads(empty).map((t) => t.id).sort()).toEqual(file.threads.map((t) => t.id).sort());
+    // Applying the forward update to the ORIGINAL document changes nothing it knows.
+    const again = mergeCommentsFileUpdate(Y.encodeStateAsUpdate(doc), file, 7);
+    expect(again.summary.threadsImported).toBe(0);
   });
 });
