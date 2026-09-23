@@ -17,6 +17,7 @@ account before installing your first plugin. You do not need PCBJam's source cod
 | Remember settings per project | `storage.*` | `storage:local` |
 | Place a symbol in a schematic | `editor.requestPlacement()` | `editor:place-items` |
 | Call your own server | `http.request()` | `network:<name>`, after PCBJam approves the routes |
+| Offer your parts catalog in the schematic editor, KiCad 10 Remote Symbols style | a `remote-provider` package, no code: [Remote Symbols](remote-symbols.md) | `provider:embed`, `provider:download`, `editor:place-items` |
 
 Every call, its arguments and its limits are in [Available APIs](0009-plugin-api-and-permissions.md).
 What is deliberately not possible: network access from logic or UI other than
@@ -283,4 +284,5 @@ settings; reset or uninstall revokes them. Test read-only documents, cancelled
 prompts and errors before sharing a package.
 
 Next: [Available APIs](0009-plugin-api-and-permissions.md) ·
-[Architecture](0010-plugin-security-and-testing.md).
+[Architecture](0010-plugin-security-and-testing.md) ·
+[Remote Symbols](remote-symbols.md).

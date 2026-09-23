@@ -13,6 +13,7 @@ const PAGES = [
   ['0008-local-plugin-development.md', 'guide.html', ''],
   ['0009-plugin-api-and-permissions.md', 'guide-api.html', '/api'],
   ['0010-plugin-security-and-testing.md', 'guide-architecture.html', '/architecture'],
+  ['remote-symbols.md', 'guide-remote-symbols.html', '/remote-symbols'],
 ];
 const escape = text => String(text).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const textOf = node => node.value ?? (node.children ?? []).map(textOf).join('');
@@ -100,9 +101,9 @@ export async function buildGuide(output, {base='/plugin-guide',sourceDir=path.jo
 <title>${route ? escape(title) : 'Plugin developer guide'} · PCBJam</title><link rel="stylesheet" href="${BASE}/guide.css"></head>
 <body><a class="skip-link" href="#content">Skip to guide</a>
 <header class="site-header"><a class="brand" href="${BASE}" aria-label="PCBJam plugin developer guide"><span class="brand-mark" aria-hidden="true">P</span>PCBJam <span class="divider">/</span><span class="header-label">Developers</span></a><span class="badge">SDK v1</span></header>
-<div class="layout"><aside class="contents"><nav class="page-nav" aria-label="Developer documentation">${PAGES.map(([, , pageRoute], index) => `<a href="${BASE + pageRoute}"${route === pageRoute ? ' aria-current="page"' : ''}>${['Build a plugin','Available APIs','Architecture'][index]}</a>`).join('')}</nav>
+<div class="layout"><aside class="contents"><nav class="page-nav" aria-label="Developer documentation">${PAGES.map(([, , pageRoute], index) => `<a href="${BASE + pageRoute}"${route === pageRoute ? ' aria-current="page"' : ''}>${['Build a plugin','Available APIs','Architecture','Remote Symbols'][index]}</a>`).join('')}</nav>
 <details open><summary>On this page</summary><nav aria-label="Guide sections"><ul>${toc}</ul></nav></details></aside>
-<main id="content"><div class="intro"><p class="eyebrow">PLUGIN DEVELOPMENT</p><h1>${escape(title)}</h1><p class="lead">${route === '/api' ? 'What you can call, which permissions you need, and the limits.' : route === '/architecture' ? 'How the UI, QuickJS and trusted host work together.' : 'Three files, a small API, and your own interface.'}</p></div>
+<main id="content"><div class="intro"><p class="eyebrow">PLUGIN DEVELOPMENT</p><h1>${escape(title)}</h1><p class="lead">${route === '/api' ? 'What you can call, which permissions you need, and the limits.' : route === '/architecture' ? 'How the UI, QuickJS and trusted host work together.' : route === '/remote-symbols' ? 'Show your KiCad 10 Remote Symbols panel inside PCBJam: a shim, two headers and a one-file package.' : 'Three files, a small API, and your own interface.'}</p></div>
 ${example}<article>${html}</article><footer>PCBJam developer documentation · Generated from the repository guide.<a href="#content">Back to top ↑</a></footer></main></div></body></html>`);
   }
   await copyFile(path.join(ROOT,'guide.css'),path.join(output,'guide.css'));
@@ -112,7 +113,7 @@ ${example}<article>${html}</article><footer>PCBJam developer documentation · Ge
   if(!legacy){
     const {rename,rm}=await import('node:fs/promises');
     await rename(path.join(output,'guide.html'),path.join(output,'index.html'));
-    for(const name of ['api','architecture']){await mkdir(path.join(output,name),{recursive:true});await rename(path.join(output,`guide-${name}.html`),path.join(output,name,'index.html'));}
+    for(const name of ['api','architecture','remote-symbols']){await mkdir(path.join(output,name),{recursive:true});await rename(path.join(output,`guide-${name}.html`),path.join(output,name,'index.html'));}
     // Keep old bookmarks working without adding a fourth page to navigation.
     await mkdir(path.join(output,'security'),{recursive:true});
     await copyFile(path.join(output,'architecture/index.html'),path.join(output,'security/index.html'));
