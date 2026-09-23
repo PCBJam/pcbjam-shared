@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Starter Parts</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { margin: 0; font: 14px/1.4 system-ui, sans-serif; padding: 12px; }
+    h1 { font-size: 16px; margin: 0 0 4px; }
+    .sub { opacity: .7; margin-bottom: 12px; }
+    .card { border: 1px solid #8884; border-radius: 8px; padding: 10px; margin-bottom: 8px; }
+    .card h2 { font-size: 14px; margin: 0 0 4px; }
+    .meta { font-size: 12px; opacity: .7; }
+    .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    button { font: inherit; padding: 6px 10px; border-radius: 6px; border: 1px solid #8886; background: #8882; cursor: pointer; }
+    button.primary { background: #2b6cb0; color: #fff; border-color: #2b6cb0; }
+    pre { white-space: pre-wrap; font: 12px/1.5 ui-monospace, monospace; border: 1px solid #8884; border-radius: 8px; padding: 8px; min-height: 60px; }
+  </style>
+  <!-- The PCBJam shim must run before the panel script below. -->
+  __SHIM__
+</head>
+<body>
+  <h1>Starter Parts</h1>
+  <div class="sub" id="session">Waiting for the PCBJam or KiCad session…</div>
+  <section id="parts"></section>
+  <div class="actions">
+    <button data-probe="CAPABILITIES">CAPABILITIES</button>
+    <button data-probe="GET_SOURCE_INFO">GET_SOURCE_INFO</button>
+  </div>
+  <pre id="log"></pre>
+  <script>
+    (() => {
+      const RPC_VERSION = 1;
+      const PARTS = __PARTS__;
+      const MANIFESTS = __MANIFESTS__;
+      const INLINE = __INLINE__;
+      const waiters = new Map();
+      let sessionId = null;
+      let messageCounter = 0;
+      const logEl = document.getElementById("log");
+      const log = (line) => { logEl.textContent += line + "\n"; };
+
+      // window.kicad is injected by desktop KiCad, or provided by the PCBJam shim.
+      function post(message) {
+        if (!window.kicad) { log("No KiCad bridge found."); return; }
+        window.kicad.postMessage(JSON.stringify(message));
+      }
+      // Every envelope carries exactly these keys; unknown keys make PCBJam drop the message.
+      function rpc(command, parameters = {}, data = "") {
+        if (!sessionId) return Promise.reject(new Error("No session yet."));
+        const envelope = { version: RPC_VERSION, session_id: sessionId, message_id: ++messageCounter, command, parameters, data };
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(() => { waiters.delete(envelope.message_id); reject(new Error("RPC timeout")); }, 60000);
+          waiters.set(envelope.message_id, (reply) => {
+            clearTimeout(timer);
+            reply.status === "ERROR" ? reject(new Error(reply.error_code + ": " + (reply.error_message || ""))) : resolve(reply);
+          });
+          post(envelope);
+        });
+      }
+      function handleIncoming(raw) {
+        let message = raw;
+        if (typeof message === "string") { try { message = JSON.parse(message); } catch { return; } }
+        if (!message || typeof message !== "object") return;
+        // PCBJam (and KiCad) speak first. Answer NEW_SESSION with response_to set to
+        // its message_id, or PCBJam retries 10 times, 1 s apart, and then gives up.
+        if (message.command === "NEW_SESSION" && message.response_to === undefined) {
+          sessionId = message.session_id;
+          messageCounter = message.message_id || 0;
+          post({ version: RPC_VERSION, session_id: sessionId, message_id: ++messageCounter, response_to: message.message_id,
+            command: "NEW_SESSION", status: "OK", parameters: { server_name: "Starter Parts", server_version: "1.0.0" } });
+          document.getElementById("session").textContent = "Connected";
+          return;
+        }
+        if (message.response_to !== undefined) {
+          const waiter = waiters.get(message.response_to);
+          if (waiter) { waiters.delete(message.response_to); waiter(message); }
+        }
+      }
+      window.kiclient = window.kiclient || {};
+      window.kiclient.postMessage = handleIncoming;
+      for (const queued of window.kicadMessages || []) handleIncoming(queued);
+      window.kicadMessages = [];
+
+      async function run(label, promise) {
+        try { const reply = await promise; log(label + " ok" + (reply.parameters ? " " + JSON.stringify(reply.parameters) : "")); }
+        catch (err) { log(label + " failed: " + err.message); }
+      }
+      document.querySelectorAll("[data-probe]").forEach((b) => b.addEventListener("click", () => run(b.dataset.probe, rpc(b.dataset.probe))));
+
+      const partsEl = document.getElementById("parts");
+      for (const part of PARTS) {
+        const card = document.createElement("article");
+        card.className = "card";
+        card.innerHTML = `<h2></h2><div class="meta"></div><div class="actions">
+          <button class="primary" data-action="place">Place</button><button data-action="inline">Download inline</button></div>`;
+        card.querySelector("h2").textContent = part.display_name;
+        card.querySelector(".meta").textContent = part.summary;
+        // PLACE_COMPONENT: the manifest goes in `parameters`; PCBJam downloads each asset from your origin.
+        card.querySelector('[data-action="place"]').addEventListener("click", () => {
+          const m = MANIFESTS[part.part_id];
+          run("PLACE_COMPONENT " + part.part_id, rpc("PLACE_COMPONENT", { ...m, mode: "PLACE" }));
+        });
+        // Inline DL_COMPONENT: the files travel in `data`, no download.
+        card.querySelector('[data-action="inline"]').addEventListener("click", () =>
+          run("DL_COMPONENT " + part.part_id, rpc("DL_COMPONENT", { compression: "NONE", library: "Passives", mode: "PLACE" }, INLINE[part.part_id])));
+        partsEl.appendChild(card);
+      }
+    })();
+  </script>
+</body>
+</html>

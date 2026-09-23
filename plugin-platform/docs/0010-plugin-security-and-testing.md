@@ -52,9 +52,9 @@ Worker almost for free, while a tree of objects is copied node by node.
 A read is pinned to one document revision and stops with `Document changed…`
 if the design moves on, so a plugin never sees a mix of old and new. One such
 read runs at a time per plugin, up to 32 MiB.
-`tools/plugin-runtime-poc/scripts/bench-export.mjs` re-measures this and fails
-if any slice holds the thread longer than 50 ms; the worst recorded slice was
-13.4 ms with the CPU slowed six times.
+PCBJam's own benchmark re-measures this on every change and fails if any slice
+holds the thread longer than 50 ms; the worst recorded slice was 13.4 ms with
+the CPU slowed six times.
 
 ## Permissions and isolation
 
@@ -108,8 +108,8 @@ says the file contains code, and PCBJam — not the plugin — writes the first
 bytes of the page: a Content-Security-Policy that allows inline script, inline
 style and embedded images, fonts and media, and nothing over the network. A
 policy the page declares itself can only tighten ours, because browsers enforce
-all policies at once. `scripts/test-saved-html.mjs` opens hostile saved pages as
-real local files in three engines and asserts that their own code runs and that
+all policies at once. PCBJam's tests open hostile saved pages as real local
+files in three browser engines and assert that their own code runs and that
 no request leaves (fetch, XHR, beacon, WebSocket, form post, image, script,
 stylesheet, frame). What it cannot stop is the page sending the user to another
 address, for instance from a link they click. Files are only ever downloaded,
@@ -133,7 +133,7 @@ running or a file is loading, and a refused call changes nothing.
 
 `board.geometry()` returns shapes the engine computed. It is a read-only walk of
 the live board that returns early while a file is loading, as every engine read
-that walks the model must (see `docs/features/async/18-embind-audit.md`).
+that walks the model must.
 Nothing a plugin writes reaches the C++ side: the request is two flags, and the
 resume cursor is produced by the engine and range-checked when it comes back. It
 carries the board's change counter, so a board edited between two slices is

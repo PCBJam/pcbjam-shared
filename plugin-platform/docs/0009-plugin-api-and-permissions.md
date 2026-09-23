@@ -99,8 +99,78 @@ pcbjam.handle('inspect', async () => {
 The result contains `{revision, items, nextCursor}`. Each item summary has
 `{id, type, parent}`. Pass `nextCursor` as `cursor` with the **same revision**
 to continue; `null` means finished. If the document changes, reread its revision
-and restart paging. Item bodies from `items.get()` contain ordered slots:
-`{atom}`, `{k, v}` or `{item}` references.
+and restart paging.
+
+### Item bodies
+
+`items.get()` and `documents.export()` return items as
+`{id, type, parent, body}`. They are the KiCad file, split at every form that
+has its own `uuid`:
+
+- `type` is the form's keyword: `symbol`, `wire`, `label`, `footprint`, `pad`,
+  `property`, … `parent` is the enclosing item's id, or `null` at the top level.
+- `body` is the form's content in file order, as slots:
+  - `{atom}`: a bare value, **verbatim**: strings keep their quotes (`"\"R1\""`),
+    numbers stay text (`"1.27"`).
+  - `{k, v}`: a child form `(k …)` without its own uuid, with `v` as slots again.
+  - `{item}`: a child form that has its own uuid, returned as a separate item
+    with this id.
+
+A placed schematic symbol keeps its properties inline:
+
+```json
+{"id": "a111…", "type": "symbol", "parent": null, "body": [
+  {"k": "lib_id", "v": [{"atom": "\"Device:R\""}]},
+  {"k": "at", "v": [{"atom": "100"}, {"atom": "50"}, {"atom": "0"}]},
+  {"k": "uuid", "v": [{"atom": "\"a111…\""}]},
+  {"k": "property", "v": [{"atom": "\"Reference\""}, {"atom": "\"R1\""}, {"k": "at", "v": […]}]},
+  {"k": "property", "v": [{"atom": "\"Value\""}, {"atom": "\"10k\""}, {"k": "at", "v": […]}]},
+  {"item": "b222…"}
+]}
+```
+
+`{"item": "b222…"}` is the symbol's `pin`, a separate item with
+`parent: "a111…"`. In a board saved by KiCad 8 or later, a footprint's
+properties have their own uuid, so they are separate items of type `property`
+whose `parent` is the footprint:
+
+```json
+{"id": "c333…", "type": "footprint", "parent": null, "body": [
+  {"atom": "\"Resistor_SMD:R_0603_1608Metric\""},
+  {"k": "layer", "v": [{"atom": "\"F.Cu\""}]},
+  {"k": "uuid", "v": [{"atom": "\"c333…\""}]},
+  {"item": "e444…"}, {"item": "f555…"}
+]}
+{"id": "e444…", "type": "property", "parent": "c333…", "body": [
+  {"atom": "\"Reference\""}, {"atom": "\"R1\""}, {"k": "layer", "v": [{"atom": "\"F.SilkS\""}]}, …
+]}
+```
+
+Reading Reference, Value and Footprint of every schematic symbol, handling both
+shapes:
+
+```js
+const unquote = atom => atom.startsWith('"') ? JSON.parse(atom) : atom;
+const ref = await pcbjam.documents.getCurrent();
+const { items } = await pcbjam.documents.export(
+  { document: ref.document, revision: ref.revision, types: ['symbol', 'property'] });
+const fields = new Map(); // item id → {Reference, Value, Footprint, …}
+const take = (owner, slots) => {
+  const [name, value] = slots.filter(slot => 'atom' in slot).map(slot => unquote(slot.atom));
+  if (!fields.has(owner)) fields.set(owner, {});
+  fields.get(owner)[name] = value;
+};
+for (const item of items) {
+  if (item.type === 'property' && item.parent) take(item.parent, item.body);        // child item (board)
+  for (const slot of item.body) if (slot.k === 'property') take(item.id, slot.v);   // inline (schematic)
+}
+const parts = items.filter(item => item.type === 'symbol').map(item => ({ id: item.id, ...fields.get(item.id) }));
+```
+
+Power symbols have references starting with `#` (`#PWR01`); skip them for a
+parts list. A multi-unit part appears once per placed unit with the same
+Reference. On a board, `board.geometry()` already gives you `ref`, `value` and
+`footprint` per footprint.
 
 A large filled zone can exceed the response limit by itself. By default that
 fails the whole `items.get()` call. Pass `partial: true` and such an entry comes
@@ -174,7 +244,23 @@ outline plus a hole; fill it the same way.
 It is delivered in short slices like `documents.export()`, with the same rules:
 pinned to `revision` (a changed board rejects with `Document changed…`, start
 again), one whole-document read at a time per plugin, 32 MiB in total, and an
-`onRecords` callback if you would rather not keep everything. It needs only
+`onRecords` callback if you would rather not keep everything.
+
+`onRecords(records)` receives the records as they arrive, each tagged with `$`:
+`{$: 'board', …}`, `{$: 'footprint', …}` and `{$: 'zone', …}` carry the fields
+above directly, but drawings and tracks come wrapped: `{$: 'drawing', item}`
+holds one drawing in `item`, and `{$: 'tracks', items}` holds a batch of track
+items. Without `onRecords` these are unwrapped for you into `result.drawings`
+and `result.tracks`.
+
+```js
+await pcbjam.board.geometry({ ...ref, include: ['tracks'] }, records => {
+  for (const record of records) {
+    if (record.$ === 'drawing') draw(record.item.layer, record.item.polygons);
+    else if (record.$ === 'tracks') for (const track of record.items) drawTrack(track);
+  }
+});
+``` It needs only
 `documents:read`: it is the same board, in a different form. It is absent from
 `context.get().methods` in the schematic editor and on editor builds that
 predate it.
@@ -222,7 +308,8 @@ File selection, downloads and placement approval use **PCBJam-owned controls**.
   network access from the saved file: inline scripts, inline styles and `data:`
   or `blob:` images, fonts and media work; CDN scripts, web fonts, remote
   images, `fetch` and form posts do not. Inline everything. Build the page in
-  logic (`main.js`): messages from `ui.html` to logic are limited to 64 KiB.
+  logic (`main.js`): a message from `ui.html` to logic is limited to 64,000
+  characters of JSON, including the command name.
 - `files.saveImage({name, base64})` saves a `.png` of up to 4 MiB under
   `files:save`. Pass plain base64 without a `data:` prefix; bytes that are not
   a PNG are refused.
@@ -241,12 +328,15 @@ File selection, downloads and placement approval use **PCBJam-owned controls**.
   with an embedded definition. It requires a writable schematic and enabled
   placement capability. It resolves to `{status: 'placed'}` after the user's
   canvas click and native commit, or `{status: 'cancelled'}`; errors reject.
+  Local development editors that run plugins without the PCBJam server resolve
+  `{status: 'queued'}` as soon as the symbol is handed to the placement tool,
+  before the click: treat it like `placed` and do not wait for a second result.
   Show instructions while waiting: approve, then click the canvas or press Esc.
   Normal Undo and collaboration apply. Use the downloadable starter for the
   clipboard format. Footprint placement, external resources, simulation fields
   and unresolved inheritance are rejected.
 
-## Limits and unavailable features
+## Limits
 
 | Resource | Current limit |
 |---|---|
@@ -262,12 +352,27 @@ File selection, downloads and placement approval use **PCBJam-owned controls**.
 | Private uploads | 32 retained releases, 64 MiB per account. |
 | Response structure | 100,000 JSON nodes, 48 nesting levels. |
 | Host calls | 40 per 10 seconds per running plugin. Calls over that are **delayed, not rejected**, so a sequential read loop simply slows down. At most 4 calls may be in flight: `await` each one. A fifth is rejected with `Too many pending API calls`. |
-| UI commands | 20 per 10 seconds, 64,000 characters each, one at a time; exceeding this stops the plugin. Pace them with timers in `ui.html`. |
+| UI commands | 20 per 10 seconds, 64,000 characters of JSON each (the whole message, command name included), one at a time; exceeding this stops the plugin. Pace them with timers in `ui.html`. |
 | Whole-document export | 32 MiB of JSON text; slices of at most 256 KiB after at most 8 ms of copying, each followed by an equal rest. Not counted in the host-call window. |
 | Command duration | 120 seconds from UI command to result, including delayed host calls. |
 | Account request budget | Shared by all your running plugins and tabs. When exhausted, host calls wait for the next minute once, then fail with `error.code === 'RATE_LIMITED'`; the plugin keeps running. |
 
-The same numbers are in `(await pcbjam.context.get()).limits`.
+The same numbers are in `(await pcbjam.context.get()).limits`:
+
+| Field | Meaning |
+|---|---|
+| `snapshotBytes`, `responseBytes`, `responseNodes` | One response: 1 MiB of JSON, 100,000 nodes. |
+| `pageItems` | Items per `items.list()` page or `items.get()` batch (100). |
+| `fileBytes` | A file read with `files.readText()` (4 MiB). |
+| `exportBytes` | A **text download** through `files.save()` (512 KiB). Not the document export. |
+| `exportSliceMs`, `exportSliceChars`, `exportTotalChars` | Whole-document reads (`documents.export()`, `board.geometry()`): 8 ms and 256 KiB per slice, 32 MiB in total. |
+| `htmlBytes`, `imageBytes` | `files.saveHtml()` page (8 MiB) and `files.saveImage()` PNG (4 MiB). |
+| `storageBytes`, `storageValueBytes`, `storageKeys` | Storage namespace (256 KiB), one value (16 KiB), keys (64). |
+| `selectItems` | Items per `editor.select()` call (500). |
+| `hostCallsPerWindow`, `hostCallWindowMs`, `pendingHostCalls` | 40 host calls per 10 s (then delayed), at most 4 in flight. |
+| `readLeaseMs` | How long an access check is reused for plain reads (2 s). |
+| `uiCommandsPerWindow`, `uiCommandWindowMs`, `uiCommandBytes` | 20 UI commands per 10 s, 64,000 characters each. |
+| `commandTimeoutMs` | 120 s from UI command to result. |
 
 Plugin logic has `setTimeout` and `clearTimeout` (no `setInterval`), for pausing
 between steps: `await new Promise(done => setTimeout(done, 200))`. They work only
@@ -275,6 +380,65 @@ while a command is being handled; up to 32 may be pending, each at most 60
 seconds, and all are cancelled when the command settles, so logic never runs in
 the background. An exception thrown from a timer callback stops the plugin.
 You do not need timers to stay under the host-call rate: the host delays for you.
+
+### Argument rules
+
+Arguments are checked before a call reaches the editor; a call that breaks one
+rejects with `Invalid API arguments` and does nothing.
+
+| Where | Rule |
+|---|---|
+| `pcbjam.handle(name, …)` | `name` matches `^[a-z][a-zA-Z0-9.:-]{0,63}$`; at most 32 commands; each name once. |
+| `files.save`, `files.saveHtml`, `files.saveImage` `name` | `^[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,90}\.<ext>$`: starts with a letter or digit, no slashes, the method's own extensions only. |
+| `files.save` `text` | 512 KiB. |
+| `files.choose` `extensions` | 1–4 of `.kicad_sym`, `.kicad_mod`, `.txt`, `.json`. |
+| `editor.select` `ids` | Up to 500 distinct ids, each at most 64 characters. |
+| `items.get` `ids` | 1–100 distinct ids, each at most 128 characters. |
+| `items.list` / `documents.export` `types`, `omit` | At most 8 each, each `^[a-zA-Z0-9_-]{1,64}$`. |
+| `storage` keys | `^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`. |
+| `editor.requestPlacement` | `label` 1–100 characters, `sexpr` up to 512 KiB. |
+| Any call | Only the listed keys: an unknown key is refused. |
+
+## Debugging and errors
+
+- **No `console` in logic.** Plugin logic runs in QuickJS with only the
+  `pcbjam` API, JSON, `setTimeout`/`clearTimeout` and the standard JavaScript
+  built-ins (ES2023); there is no `console`, `Intl`, DOM, `fetch` or Node.js
+  API, and calling `console.log` throws. `localeCompare` ignores locale
+  options, so sort natural numbers (`R2` before `R10`) yourself. Return diagnostic data from a command and show it in
+  your UI, where the browser's developer tools work as usual.
+- **Errors reach the UI as text.** A handler that throws rejects the UI's
+  `pcbjamUI.call()` with the message, cut to 400 characters. Host call failures
+  carry `error.message` and, for policy failures, `error.code`.
+- **Argument errors are short on purpose.** A malformed call rejects with
+  `Invalid API arguments` without naming the field; compare it with the table
+  above and `sdk.d.ts`.
+- **What stops the plugin** (the panel shows "Plugin stopped" and you restart
+  it from **Plugins**):
+  - a command handler returns while one of its host calls is still in flight
+    (always `await` host calls);
+  - a fifth host call in flight;
+  - more than 20 UI commands in 10 s, or a UI message over 64,000 characters;
+  - the UI iframe navigating or reloading itself;
+  - the UI not connecting within 10 seconds of opening;
+  - a turn of logic running longer than 1 second of CPU, or logic using more
+    than 64 MiB of memory;
+  - an exception thrown from a timer callback;
+  - the user's access to the plugin, project or document ending.
+
+| Message or `code` | Meaning | What to do |
+|---|---|---|
+| `Permission denied: <permission>` | The manifest does not request it. | Add the permission and publish a new version. |
+| `API unavailable in this context` | Not in `context.get().methods` here (editor, build, read-only). | Feature-detect before offering it. |
+| `Invalid API arguments` | An argument breaks a rule above. | Fix the call. |
+| `Document changed: …` | The document moved on during a pinned read. | Read `documents.getCurrent()` again and restart. |
+| `Too many pending API calls` | More than 4 host calls in flight. | `await` each call. |
+| `RATE_LIMITED` | Account request budget exhausted after one wait. | Back off; the plugin keeps running. |
+| `Export exceeds size limit` | A read or download is over its limit. | Narrow with `types`/`omit`, or save less. |
+| `Plugin CPU budget exceeded` | One turn of logic ran over 1 s. | Split work across `await`s or timers. |
+| Backend codes (`BACKEND_NOT_APPROVED`, …) | See [Backend requests](#backend-requests). | |
+
+## Not available
 
 There is no raw WASM/pointer access, direct Yjs mutation, sibling-document loading,
 change subscription, schematic geometry, user-profile API, OAuth delegation

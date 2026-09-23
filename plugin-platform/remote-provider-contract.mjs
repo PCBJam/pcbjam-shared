@@ -206,7 +206,7 @@ export function validatePlaceManifest(
   const assets = params.assets.map((asset) => {
     exact(asset, ["asset_type", "name", "target_library", "target_name", "content_type", "size_bytes", "sha256", "download_url", "required"]);
     for (const key of ["asset_type", "name", "content_type", "size_bytes", "sha256", "download_url", "required"])
-      if (asset[key] === undefined) fail("Manifest assets require asset_type, content_type, size_bytes, and download_url");
+      if (asset[key] === undefined) fail("Manifest asset is missing '" + key + "' (every asset needs asset_type, name, content_type, size_bytes, sha256, download_url and required)");
     if (!ASSET_TYPES.includes(asset.asset_type)) fail("Unknown asset_type '" + asset.asset_type + "'");
     if (!supportedAssetTypes.includes(asset.asset_type))
       fail("Provider does not declare support for " + asset.asset_type + " assets");

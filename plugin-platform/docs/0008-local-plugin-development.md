@@ -1,8 +1,24 @@
 # Build a plugin
 
 **Plugin SDK v1.** Create your plugin in a folder on your computer; using Git is
-optional. Sign into PCBJam to install it. Ask PCBJam to enable plugin access for your
-account before installing your first plugin. You do not need PCBJam's source code.
+optional. Sign into PCBJam to install it. You do not need PCBJam's source code.
+
+## Get access
+
+Plugins are enabled per PCBJam account. Before your first upload:
+
+1. Sign up at PCBJam with the account you will develop with.
+2. Ask for plugin access on the [PCBJam Discord](https://discord.gg/ybhqJxjR3E):
+   post the email address of that account and one line about what you are
+   building. PCBJam enables access on that account; until then **Plugins → Add
+   plugin…** refuses uploads.
+3. Every teammate who installs your plugin needs access on their own account
+   too (see [Share a plugin](#share-a-plugin)).
+
+A [backend](#authentication-and-permissions) or a
+[Remote Symbols provider](remote-symbols.md) also needs a one-time review by
+PCBJam; ask for it in the same place. The Discord is also where to ask
+questions and report problems with the SDK.
 
 ## What a plugin can do
 
@@ -58,8 +74,19 @@ rejected. A ZIP may wrap the files in one folder.
 
 TypeScript and React are supported through your local build. Plain JavaScript
 and HTML also work. Bundle dependencies into these files: no CDN imports,
-separate asset files or uploaded `node_modules`. Logic is limited to 1 MiB;
-UI to 512 KiB. PCBJam never runs uploaded build scripts.
+separate asset files or uploaded `node_modules`. PCBJam never runs uploaded
+build scripts.
+
+| Package limit | Value |
+|---|---|
+| ZIP size | 8 MiB |
+| All files, uncompressed | 12 MiB, at most 32 entries, 4 MiB per file |
+| `manifest.json` | 16 KiB |
+| `main.js` / `ui.html` | 1 MiB / 512 KiB |
+| Paths | letters, digits, `_`, `.`, `-` and `/`; no `..`, no absolute paths |
+
+`ui.html` may not load scripts or stylesheets by URL (`<script src>`,
+`<link href>`): the upload is refused.
 
 ## Manifest
 
@@ -156,6 +183,12 @@ Register commands at startup, call host APIs inside handlers, and pass only JSON
 arguments/results. Validate incoming arguments. Allow one UI command at a time
 and handle errors. The [SDK declarations](download/sdk.d.ts) provide autocomplete.
 
+Inline `style="…"` attributes pass the upload check but are silently ignored
+when the UI runs, because the page's security policy only allows the styles and
+scripts that were in `ui.html` when it was uploaded. Use classes, or set
+`element.style` from script. See [Debugging and errors](0009-plugin-api-and-permissions.md#debugging-and-errors)
+for what logic can and cannot do (there is no `console`).
+
 ## Example: a parts list that highlights and exports
 
 A board plugin in the style of an interactive BOM: group the parts, draw their
@@ -239,8 +272,9 @@ In `ui.html`, call `pcbjamUI.call('load')`, draw `parts[].pads` on a canvas
 `{status: 'download-requested'}` or `{status: 'cancelled'}`: the user confirms
 every download, so treat a cancel as a normal outcome. Check
 `(await pcbjam.context.get()).methods` before offering a feature:
-`board.geometryStart` and `editor.select` are absent on editor builds that
-predate them and in the schematic editor.
+`board.geometryStart` exists only in the PCB editor; both it and
+`editor.select` are absent on editor builds that predate them.
+`editor.select` works in the schematic editor as well.
 
 ## Authentication and permissions
 
@@ -255,8 +289,9 @@ Declare one HTTPS origin, exact paths and `GET`/`POST` methods in optional
 `backend:identity:<name>`. PCBJam must approve those routes in addition to the
 user's installation consent. See [the HTTP API](0009-plugin-api-and-permissions.md#backend-requests).
 
-Upload first, send PCBJam the plugin UUID shown in the review, and publish the
-DNS TXT challenge PCBJam provides. After verification and approval, re-upload
+Upload first, post the plugin UUID shown in the review on the
+[PCBJam Discord](https://discord.gg/ybhqJxjR3E), and publish the DNS TXT
+challenge PCBJam gives you there. After verification and approval, re-upload
 the same ZIP to refresh its status and install it. Configure your backend with
 the issuer, audience and plugin UUID PCBJam gives you. The starter includes a
 verifier and Postgres replay protection. Your backend verifies the signature and
@@ -278,10 +313,28 @@ Use `npm run dev` for automatic local rebuilds. To test changes, increase
 `manifest.version`, build, then upload and approve the new version.
 Restart runs the installed version; it does not reload local source.
 
+> **Uploads are limited.** Each account keeps at most **32 releases and 64 MiB**
+> of uploads, across all its plugins, and releases cannot be deleted yet. Every
+> new version you upload uses one. Re-uploading the same version with the same
+> files reuses the existing release; the same version with different files is
+> refused. Check your change locally (type check, a small mock of `pcbjam` for
+> logic), then upload the versions you actually want to try in PCBJam. Deleting
+> old releases and a developer mode that reloads local builds are planned.
+
 Installations are private to your account and follow it across browsers.
 `storage:local` settings stay in that browser and project. Disable preserves
 settings; reset or uninstall revokes them. Test read-only documents, cancelled
 prompts and errors before sharing a package.
+
+## Share a plugin
+
+There is no plugin catalog yet. To let a teammate use your plugin, send them
+the compiled ZIP. They need plugin access on their own account
+([Get access](#get-access)), upload the ZIP themselves with **Plugins → Add
+plugin…**, and approve its permissions; that upload counts against their own
+release limit. When you publish a new version, each of them uploads it again.
+Backend routes are approved per upload today, so a teammate's copy of a plugin
+with a backend needs its own approval: ask on Discord with their plugin UUID.
 
 Next: [Available APIs](0009-plugin-api-and-permissions.md) ·
 [Architecture](0010-plugin-security-and-testing.md) ·

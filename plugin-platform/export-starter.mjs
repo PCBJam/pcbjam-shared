@@ -25,7 +25,7 @@ await rm(scratch,{recursive:true,force:true});
 // Fixed source list: dependencies, builds, local settings and secrets never enter the starter archive.
 const sourceNames=[
   '.gitignore','README.md','manifest.json','package.json','package-lock.json',
-  'tsconfig.json','tsconfig.logic.json','tsconfig.ui.json','scripts/build.mjs','scripts/watch.mjs',
+  'tsconfig.json','tsconfig.logic.json','tsconfig.ui.json','scripts/build.mjs','scripts/watch.mjs','plugin-readme.md',
   'types/logic.d.ts','types/ui.d.ts','src/main.ts','src/contracts.ts',
   'src/logic/sexpr.ts','src/logic/library.ts','src/logic/placement.ts',
   'src/ui/main.tsx','src/ui/App.tsx','src/ui/pcbjam.ts','src/ui/styles.css',
@@ -40,10 +40,22 @@ for(const name of sourceNames){
 const sourceZip = path.join(out, 'external-symbol-import-source.zip');
 await writeFile(sourceZip, zipSync(sourceFiles, { level: 9 }));
 await copyFile(path.join(ROOT, 'examples/sample-symbols.kicad_sym'), path.join(out, 'sample-symbols.kicad_sym'));
+// Remote Symbols provider starter: plain files, no build. Fixed list, as above.
+const providerNames=['README.md','package.json','manifest.json','serve.mjs','panel.html','shim.js',
+  'data/r.kicad_sym','data/c.kicad_sym','data/R_0603_1608Metric.kicad_mod','data/R_0603_1608Metric.step','data/resistor.cir','data/capacitor.cir'];
+const providerFiles={};
+for(const name of providerNames){
+  const bytes=await readFile(path.join(ROOT,'examples/remote-provider-starter',name));
+  providerFiles['remote-provider-starter/'+name]=[bytes,{mtime:new Date('2020-01-01T00:00:00Z')}];
+  const target=path.join(out,'remote-provider-starter',name);
+  await mkdir(path.dirname(target),{recursive:true});await writeFile(target,bytes);
+}
+await writeFile(path.join(out,'remote-provider-starter.zip'),zipSync(providerFiles,{level:9}));
 const guides=[
   ['0008-local-plugin-development.md','DEVELOPER-GUIDE.md'],
   ['0009-plugin-api-and-permissions.md','API.md'],
   ['0010-plugin-security-and-testing.md','ARCHITECTURE.md'],
+  ['remote-symbols.md','REMOTE-SYMBOLS.md'],
 ];
 for(const [sourceName,outputName] of guides){
   let markdown=await readFile(path.join(ROOT,'docs',sourceName),'utf8');
@@ -51,6 +63,6 @@ for(const [sourceName,outputName] of guides){
   markdown=markdown.replaceAll('download/sdk.d.ts','external-symbol-import/sdk.d.ts').replaceAll('download/','');
   await writeFile(path.join(out,outputName),markdown);
 }
-await writeFile(path.join(out, 'START-HERE.txt'), `PCBJam TypeScript + React plugin example\n\nTo try it: open a schematic in PCBJam, use Plugins → Add plugin… → Install ZIP, select external-symbol-import.zip, and approve the permissions. Choose sample-symbols.kicad_sym through the plugin, then select a symbol and approve placement. Click the canvas to place; Esc cancels and Undo removes it.\n\nTo develop it: open the external-symbol-import-source folder in your editor. With Node.js 22+, run npm ci, then npm run build. Edit src/main.ts, src/ui/App.tsx and src/ui/styles.css. Increase manifest.json's version for changed releases. Install dist/external-symbol-import.zip or dist/plugin from that source folder.\n\nThe source ZIP is for editing, not installation. PCBJam installs the compiled ZIP/folder; it never runs uploaded build scripts. No PCBJam repository is required. See the source README and Plugins → Developer guide.\n\nPackage content SHA-256: ${packaged.digest}\n`);
+await writeFile(path.join(out, 'START-HERE.txt'), `PCBJam TypeScript + React plugin example\n\nTo try it: open a schematic in PCBJam, use Plugins → Add plugin… → Install ZIP, select external-symbol-import.zip, and approve the permissions. Choose sample-symbols.kicad_sym through the plugin, then select a symbol and approve placement. Click the canvas to place; Esc cancels and Undo removes it.\n\nTo develop it: open the external-symbol-import-source folder in your editor. With Node.js 22+, run npm ci, then npm run build. Edit src/main.ts, src/ui/App.tsx and src/ui/styles.css. Increase manifest.json's version for changed releases. Install dist/external-symbol-import.zip or dist/plugin from that source folder.\n\nThe source ZIP is for editing, not installation. PCBJam installs the compiled ZIP/folder; it never runs uploaded build scripts. No PCBJam repository is required. See the source README and Plugins → Developer guide.\n\nPlugin access is enabled per account on request: ask on the PCBJam Discord, https://discord.gg/ybhqJxjR3E.\n\nParts providers (KiCad 10 Remote Symbols): read REMOTE-SYMBOLS.md and start from remote-provider-starter.zip; it needs no build.\n\nPackage content SHA-256: ${packaged.digest}\n`);
 return { folder: destination, zip, sourceFolder: path.join(out, 'external-symbol-import-source'), sourceZip, sample: path.join(out, 'sample-symbols.kicad_sym'), digest: packaged.digest };
 }

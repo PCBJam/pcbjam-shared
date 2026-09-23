@@ -8,3 +8,4 @@
 /* Keep all three pages visible on mobile as well as desktop. */
 .page-nav{margin-bottom:28px}.contents .page-nav a{font-size:14px;font-weight:600;padding:10px 12px}.contents .page-nav a[aria-current=page]{background:#192e42;border-left:2px solid var(--accent);color:#ebf6ff}
 @media(max-width:700px){.page-nav{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:22px}.contents .page-nav a{font-size:12px;padding:8px 10px}.contents details ul{margin-bottom:0}.download-links a{white-space:normal}}
+.header-actions{display:flex;align-items:center;gap:16px}.header-link{font-size:13px;text-decoration:none;color:#b4c4d5}.header-link:hover{color:#ebf6ff}

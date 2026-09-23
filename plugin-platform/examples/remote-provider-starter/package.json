@@ -1,0 +1,10 @@
+{
+  "name": "remote-provider-starter",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Starter KiCad 10 Remote Symbols provider for PCBJam: metadata, panel with the PCBJam shim, part manifests and downloads.",
+  "scripts": {
+    "start": "node serve.mjs"
+  }
+}

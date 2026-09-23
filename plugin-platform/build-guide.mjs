@@ -9,6 +9,8 @@ import remarkRehype from 'remark-rehype';
 import rehypeStringify from 'rehype-stringify';
 
 const ROOT=path.dirname(fileURLToPath(import.meta.url));
+/** Where developers ask for plugin access, provider/backend review and help. */
+export const DISCORD_URL='https://discord.gg/ybhqJxjR3E';
 const PAGES = [
   ['0008-local-plugin-development.md', 'guide.html', ''],
   ['0009-plugin-api-and-permissions.md', 'guide-api.html', '/api'],
@@ -89,7 +91,12 @@ export async function buildGuide(output, {base='/plugin-guide',sourceDir=path.jo
     const html = String(await unified().use(remarkParse).use(remarkGfm).use(prepare)
       .use(remarkRehype).use(polish).use(rehypeStringify).process(markdown));
     const toc = sections.map(s => `<li><a href="#${escape(s.id)}">${escape(s.label)}</a></li>`).join('');
-    const example = route ? '' : `<section class="downloads" id="example-package" aria-label="Example plugin downloads">
+    const providerDownloads = route === '/remote-symbols' ? `<section class="downloads" id="provider-starter" aria-label="Provider starter download">
+      <div><span class="eyebrow">DOWNLOADABLE STARTER</span><h2>Start from a working provider</h2><p>Metadata, panel with the shim, part manifests and downloads, in one dependency-free Node.js server.</p></div>
+      <div class="download-links"><a class="primary" href="${BASE}/download/remote-provider-starter.zip" download>Download provider starter <span aria-hidden="true">↓</span></a>
+      <a href="${DISCORD_URL}" target="_blank" rel="noopener noreferrer">Request review on Discord <span aria-hidden="true">↗</span></a></div>
+    </section>` : '';
+    const example = route ? providerDownloads : `<section class="downloads" id="example-package" aria-label="Example plugin downloads">
       <div><span class="eyebrow">DOWNLOADABLE EXAMPLE</span><h2>Start with TypeScript + React</h2><p>Source to edit, or a compiled symbol-import plugin to install.</p></div>
       <div class="download-links"><a class="primary" href="${BASE}/download/external-symbol-import-source.zip" download>Download source <span aria-hidden="true">↓</span></a>
       <a href="${BASE}/download/external-symbol-import.zip" download>Download installable ZIP <span aria-hidden="true">↓</span></a>
@@ -100,11 +107,11 @@ export async function buildGuide(output, {base='/plugin-guide',sourceDir=path.jo
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${route ? escape(title) : 'Plugin developer guide'} · PCBJam</title><link rel="stylesheet" href="${BASE}/guide.css"></head>
 <body><a class="skip-link" href="#content">Skip to guide</a>
-<header class="site-header"><a class="brand" href="${BASE}" aria-label="PCBJam plugin developer guide"><span class="brand-mark" aria-hidden="true">P</span>PCBJam <span class="divider">/</span><span class="header-label">Developers</span></a><span class="badge">SDK v1</span></header>
+<header class="site-header"><a class="brand" href="${BASE}" aria-label="PCBJam plugin developer guide"><span class="brand-mark" aria-hidden="true">P</span>PCBJam <span class="divider">/</span><span class="header-label">Developers</span></a><span class="header-actions"><a class="header-link" href="${DISCORD_URL}" target="_blank" rel="noopener noreferrer">Discord</a><span class="badge">SDK v1</span></span></header>
 <div class="layout"><aside class="contents"><nav class="page-nav" aria-label="Developer documentation">${PAGES.map(([, , pageRoute], index) => `<a href="${BASE + pageRoute}"${route === pageRoute ? ' aria-current="page"' : ''}>${['Build a plugin','Available APIs','Architecture','Remote Symbols'][index]}</a>`).join('')}</nav>
 <details open><summary>On this page</summary><nav aria-label="Guide sections"><ul>${toc}</ul></nav></details></aside>
 <main id="content"><div class="intro"><p class="eyebrow">PLUGIN DEVELOPMENT</p><h1>${escape(title)}</h1><p class="lead">${route === '/api' ? 'What you can call, which permissions you need, and the limits.' : route === '/architecture' ? 'How the UI, QuickJS and trusted host work together.' : route === '/remote-symbols' ? 'Show your KiCad 10 Remote Symbols panel inside PCBJam: a shim, two headers and a one-file package.' : 'Three files, a small API, and your own interface.'}</p></div>
-${example}<article>${html}</article><footer>PCBJam developer documentation · Generated from the repository guide.<a href="#content">Back to top ↑</a></footer></main></div></body></html>`);
+${example}<article>${html}</article><footer><span>PCBJam developer documentation · Access, reviews and questions: <a href="${DISCORD_URL}" target="_blank" rel="noopener noreferrer">PCBJam Discord</a></span><a href="#content">Back to top ↑</a></footer></main></div></body></html>`);
   }
   await copyFile(path.join(ROOT,'guide.css'),path.join(output,'guide.css'));
   // Export the same validated example used for manual testing, not an installed

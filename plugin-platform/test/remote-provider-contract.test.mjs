@@ -86,7 +86,9 @@ test('manifest: PLACE_COMPONENT validates like the desktop client and normalises
 test('manifest: every desktop refusal is reproduced', () => {
   const cases = [
     [manifest({ assets: [] }), /non-empty assets/],
-    [manifest({ assets: [asset({ sha256: undefined })] }), /require asset_type, content_type, size_bytes, and download_url/],
+    [manifest({ assets: [asset({ sha256: undefined })] }), /missing 'sha256'/],
+    // The error names the field a provider forgot, including `required`.
+    [manifest({ assets: [asset({ required: undefined })] }), /missing 'required'/],
     [manifest({ assets: [asset({ sha256: 'zz' })] }), /sha256/],
     [manifest({ assets: [asset({ size_bytes: 0 })] }), /invalid size/],
     [manifest({ assets: [asset({ size_bytes: PROVIDER_LIMITS.assetBytes + 1 })] }), /asset size limit/],

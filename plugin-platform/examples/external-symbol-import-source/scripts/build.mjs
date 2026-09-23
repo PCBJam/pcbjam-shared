@@ -50,10 +50,14 @@ export async function buildPlugin(outputRoot = path.join(root, 'dist')) {
   const script = outputText(ui, '.js').replace(/<\/script/gi, '<\\/script');
   const css = outputText(ui, '.css');
   if (/<\/style/i.test(css)) throw new Error('CSS cannot contain a closing style tag.');
+  // The page title and the packaged README come from your manifest and plugin-readme.md.
+  const escapeHtml = text => String(text).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  const readme = await readFile(path.join(root, 'plugin-readme.md'), 'utf8')
+    .catch(() => `# ${manifest.name}\n\n${manifest.description}\n`);
   const html = `<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>External Symbol Import</title><style>${css}</style></head>
+<title>${escapeHtml(manifest.name)}</title><style>${css}</style></head>
 <body><div id="root"></div><script>${script}</script></body>
 </html>`;
   if (Buffer.byteLength(main) > 1024 * 1024 || Buffer.byteLength(html) > 512 * 1024) {
@@ -68,7 +72,7 @@ export async function buildPlugin(outputRoot = path.join(root, 'dist')) {
     'ui.html': html,
     'sdk.d.ts': await readFile(path.join(root, 'types/logic.d.ts'), 'utf8') + await readFile(path.join(root, 'types/ui.d.ts'), 'utf8'),
     'LICENSE.txt': licenses.join('\n\n'),
-    'README.md': '# External Symbol Import\n\nInstall this folder or its ZIP through PCBJam’s Plugins sidebar. Choose a local .kicad_sym library, select a symbol and approve placement. Click the canvas to place; Esc cancels and Undo removes it.\n\nThis is compiled output. For readable TypeScript and React source, download the source starter from Plugins → Developer guide. Change the manifest version, build, and reinstall to test an update.\n',
+    'README.md': readme,
   };
   const folder = path.join(outputRoot, 'plugin');
   // Only remove the generated plugin subfolder, so removed files cannot leak into a release.

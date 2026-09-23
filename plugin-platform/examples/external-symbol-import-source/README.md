@@ -26,10 +26,14 @@ The source ZIP is for editing; it cannot be installed directly.
 | `src/contracts.ts` | Shared command argument/result types. |
 | `src/logic/` | This example's symbol parsing and placement logic. |
 | `types/` | SDK autocomplete declarations. |
+| `plugin-readme.md` | The `README.md` packaged with your plugin; delete it to get a heading and your manifest description. |
 
-Change the manifest ID/name for a new plugin. Run `npm run dev` for automatic
+Change the manifest ID/name for a new plugin, and `name` in `package.json`. The
+UI page title comes from the manifest name. Run `npm run dev` for automatic
 local type checks and rebuilds, or `npm run typecheck` for a one-off check.
 Increase `manifest.version` before each changed upload, then rebuild and install.
+Each upload of a new version uses one of the 32 releases your account can keep,
+and releases cannot be deleted yet: test locally and upload in batches.
 The ZIP filename follows the manifest ID. There is no automatic upload or reload.
 
 The build bundles logic into `main.js` and React/CSS into `ui.html`.

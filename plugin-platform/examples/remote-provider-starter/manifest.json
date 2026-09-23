@@ -1,0 +1,11 @@
+{
+  "apiVersion": 1,
+  "kind": "remote-provider",
+  "id": "starter-parts",
+  "name": "Starter Parts",
+  "version": "1.0.0",
+  "description": "Search and place Starter Parts",
+  "surfaces": ["editor:eeschema"],
+  "permissions": ["provider:embed", "provider:download", "editor:place-items"],
+  "provider": { "origin": "https://parts.example.com" }
+}
