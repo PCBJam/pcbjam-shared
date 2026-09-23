@@ -238,14 +238,22 @@ export function removeMessage(
   return "removed";
 }
 
-/** Re-pin a thread (drag): replace its anchor wholesale (LWW — a concurrent
- *  drag of the same pin converges to one position). */
+/**
+ * Re-pin a thread (drag): replace its anchor wholesale (LWW — a concurrent
+ * drag of the same pin converges to one position). A move never changes the
+ * thread's DOCUMENT (design-comments §6.1): when the new anchor omits
+ * `filePath` / `sheetPath`, the current ones are carried over.
+ */
 export function setThreadAnchor(ydoc: Y.Doc, threadId: string, anchor: CommentAnchor): boolean {
   const thread = commentsYMap(ydoc).get(threadId);
 
   if (!thread) return false;
 
-  thread.set("anchor", anchor);
+  const prev = thread.get("anchor") as Partial<CommentAnchor> | undefined;
+  const next: CommentAnchor = { ...anchor };
+  if (next.filePath === undefined && typeof prev?.filePath === "string") next.filePath = prev.filePath;
+  if (next.sheetPath === undefined && typeof prev?.sheetPath === "string") next.sheetPath = prev.sheetPath;
+  thread.set("anchor", next);
   return true;
 }
 

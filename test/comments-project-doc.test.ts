@@ -18,6 +18,7 @@ import {
   liftLegacyComments,
   listThreads,
   markThreadSeen,
+  setThreadAnchor,
   setThreadResolved,
   threadMatches,
   toggleReaction,
@@ -216,5 +217,17 @@ describe("detachedState", () => {
     expect(detachedState(thread("board.kicad_pcb"), ctx)).toBe("anchored");
     expect(detachedState(thread("missing.kicad_sch", "u1"), ctx)).toBe("absent");
     expect(detachedState(thread(undefined, "gone"), ctx)).toBe("detached");
+  });
+});
+
+describe("setThreadAnchor keeps the document", () => {
+  it("carries filePath/sheetPath over when the new anchor omits them; an explicit value wins", () => {
+    const doc = new Y.Doc();
+    const id = createThread(doc, { anchor: { pos: { x: 0, y: 0 }, filePath: "a.kicad_sch", sheetPath: "/s" }, author: "a", body: "x" });
+    expect(setThreadAnchor(doc, id, { pos: { x: 5, y: 6 }, itemUuid: "u" })).toBe(true);
+    expect(listThreads(doc)[0]!.anchor).toEqual({ pos: { x: 5, y: 6 }, itemUuid: "u", filePath: "a.kicad_sch", sheetPath: "/s" });
+    setThreadAnchor(doc, id, { pos: { x: 1, y: 1 }, filePath: "b.kicad_sch" });
+    expect(listThreads(doc)[0]!.anchor).toEqual({ pos: { x: 1, y: 1 }, filePath: "b.kicad_sch", sheetPath: "/s" });
+    expect(setThreadAnchor(doc, "nope", { pos: { x: 0, y: 0 } })).toBe(false);
   });
 });
