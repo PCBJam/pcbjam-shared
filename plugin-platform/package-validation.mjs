@@ -5,7 +5,10 @@ export const LIMITS = { archive: 8 * 1024 * 1024, total: 12 * 1024 * 1024, file:
 export { default as PERMISSIONS } from './api-permissions.json' with { type: 'json' };
 import PERMISSIONS from './api-permissions.json' with { type: 'json' };
 import {validateEndpoints,backendPermissions} from './backend-contract.mjs';
+import { providerOrigin, providerPermissions } from './remote-provider-contract.mjs';
 const fail = message => { throw new Error(message); };
+export const PACKAGE_KINDS = ['plugin', 'remote-provider'];
+export const PROVIDER_PERMISSIONS = ['provider:embed', 'provider:download', 'editor:place-items'];
 const metadataPath = name => name.split('/').some(part => part === '__MACOSX') || name.split('/').at(-1) === '.DS_Store' || name.split('/').at(-1).startsWith('._');
 function validPath(name) {
   if (typeof name !== 'string' || name.length > 180 || !/^[A-Za-z0-9_./-]+$/.test(name) || name.startsWith('/') || name.split('/').some(p => !p || p === '.' || p === '..')) fail('Unsafe package path');
@@ -95,7 +98,9 @@ export function validatePackage(input, { legacyDigest = false } = {}) {
   const get = name => files.find(f => f.path === name)?.text;
   if (Buffer.byteLength(get('manifest.json') ?? '') > 16384) fail('Manifest exceeds 16 KiB');
   const manifest = JSON.parse(get('manifest.json') ?? fail('Missing manifest.json'));
-  exact(manifest, ['apiVersion', 'id', 'name', 'version', 'description', 'main', 'ui', 'uiSize', 'surfaces', 'permissions', 'endpoints']);
+  if (manifest && typeof manifest === 'object' && manifest.kind === 'remote-provider') return validateProviderPackage(files, manifest, legacyDigest);
+  exact(manifest, ['apiVersion', 'kind', 'id', 'name', 'version', 'description', 'main', 'ui', 'uiSize', 'surfaces', 'permissions', 'endpoints']);
+  if (manifest.kind !== undefined && manifest.kind !== 'plugin') fail('Unsupported package kind');
   if (Object.hasOwn(manifest, 'uiSize')) {
     exact(manifest.uiSize, ['width', 'height']);
     const { width, height } = manifest.uiSize;
@@ -104,8 +109,7 @@ export function validatePackage(input, { legacyDigest = false } = {}) {
   }
   const endpoints = validateEndpoints(manifest.endpoints);
   const requestedBackendPermissions=backendPermissions(endpoints);
-  if (manifest.apiVersion !== 1 || typeof manifest.id !== 'string' || !/^[a-z][a-z0-9-]{2,63}$/.test(manifest.id) || typeof manifest.version !== 'string' || manifest.version.length > 32 || !/^\d+\.\d+\.\d+$/.test(manifest.version)) fail('Unsupported API version, plugin ID or version');
-  if (typeof manifest.name !== 'string' || manifest.name.length < 1 || manifest.name.length > 80 || typeof manifest.description !== 'string' || manifest.description.length > 300) fail('Invalid plugin name or description');
+  identity(manifest);
   if (manifest.main !== 'main.js' || manifest.ui !== 'ui.html' || !get('main.js') || !get('ui.html')) fail('main.js and ui.html are required');
   if (Buffer.byteLength(get('main.js')) > 1024 * 1024 || Buffer.byteLength(get('ui.html')) > 512 * 1024) fail('Logic/UI entry exceeds its limit');
   for (const [key, allowed] of [['surfaces', ['editor:eeschema', 'editor:pcbnew']], ['permissions', [...Object.keys(PERMISSIONS), ...Object.keys(requestedBackendPermissions)]]]) {
@@ -115,11 +119,39 @@ export function validatePackage(input, { legacyDigest = false } = {}) {
   if(Object.keys(requestedBackendPermissions).some(p=>!manifest.permissions.includes(p))) fail('Backend declarations require their network and identity permissions');
   if (!manifest.permissions.includes('ui:custom') || !manifest.permissions.includes('ui:project-data')) fail('Custom UI and data disclosure permissions are required');
   if (/<script\b[^>]*\bsrc\s*=|<link\b[^>]*\bhref\s*=/i.test(get('ui.html'))) fail('Bundle scripts and styles inline in ui.html; remote/module imports are not supported');
+  const policyDigest = createHash('sha256').update(JSON.stringify({ apiVersion: 1, permissions: [...manifest.permissions].sort(), ...(endpoints?{backendPolicyVersion:1,endpoints}: {}) })).digest('hex');
+  return { ...release(files, legacyDigest), manifest, policyDigest, validationVersion: endpoints ? 3 : 2 };
+}
+
+function identity(manifest) {
+  if (manifest.apiVersion !== 1 || typeof manifest.id !== 'string' || !/^[a-z][a-z0-9-]{2,63}$/.test(manifest.id) || typeof manifest.version !== 'string' || manifest.version.length > 32 || !/^\d+\.\d+\.\d+$/.test(manifest.version)) fail('Unsupported API version, plugin ID or version');
+  if (typeof manifest.name !== 'string' || manifest.name.length < 1 || manifest.name.length > 80 || typeof manifest.description !== 'string' || manifest.description.length > 300) fail('Invalid plugin name or description');
+}
+function release(files, legacyDigest) {
   files.sort((a, b) => legacyDigest ? a.path.localeCompare(b.path) : (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   const digest = createHash('sha256').update(JSON.stringify(files)).digest('hex');
   const fileMetadata = Object.fromEntries(files.map(f => [f.path, {
     sha256: createHash('sha256').update(f.text).digest('hex'), bytes: Buffer.byteLength(f.text),
   }]));
-  const policyDigest = createHash('sha256').update(JSON.stringify({ apiVersion: 1, permissions: [...manifest.permissions].sort(), ...(endpoints?{backendPolicyVersion:1,endpoints}: {}) })).digest('hex');
-  return { digest, manifest, files, fileMetadata, policyDigest, validationVersion: endpoints ? 3 : 2 };
+  return { digest, files, fileMetadata };
+}
+
+// A remote-provider package is manifest-only: its interface is the provider's
+// own web page (KiCad 10 remote-symbol panel) rendered by the editor in a
+// cross-origin iframe, so there is no bundled code to hash or sandbox. Consent
+// is the provider origin, which is therefore part of the policy digest.
+function validateProviderPackage(files, manifest, legacyDigest) {
+  for (const file of files) if (!['manifest.json', 'README.md', 'LICENSE.txt'].includes(file.path)) fail(`Remote-provider packages hold no code: unexpected ${file.path}`);
+  exact(manifest, ['apiVersion', 'kind', 'id', 'name', 'version', 'description', 'surfaces', 'permissions', 'provider']);
+  identity(manifest);
+  exact(manifest.provider ?? fail('Unknown manifest field'), ['origin']);
+  let origin;
+  try { origin = providerOrigin(manifest.provider.origin); } catch { fail('provider.origin must be an https origin with a public hostname and no path or port'); }
+  if (!Array.isArray(manifest.surfaces) || manifest.surfaces.length !== 1 || manifest.surfaces[0] !== 'editor:eeschema') fail('Remote providers place symbols: surfaces must be exactly ["editor:eeschema"]');
+  const permissions = manifest.permissions;
+  if (!Array.isArray(permissions) || new Set(permissions).size !== permissions.length || permissions.length !== PROVIDER_PERMISSIONS.length || permissions.some(p => !PROVIDER_PERMISSIONS.includes(p)))
+    fail('Remote providers must declare exactly ' + PROVIDER_PERMISSIONS.join(', '));
+  providerPermissions(origin); // consent strings are derivable, so a caller can render them without re-validating
+  const policyDigest = createHash('sha256').update(JSON.stringify({ apiVersion: 1, kind: 'remote-provider', permissions: [...permissions].sort(), provider: { origin } })).digest('hex');
+  return { ...release(files, legacyDigest), manifest, policyDigest, validationVersion: 4 };
 }

@@ -36,6 +36,10 @@ test('accepts self-contained symbols, current and legacy visibility syntax',()=>
   // KiCad ≤ 8 puts a bare `hide` at the end of a property's effects.
   validate(symbol.replace('(property "Reference" "R" (at 0 0 90) (effects (font (size 1.27 1.27))))','(property "Reference" "R" (at 0 0 90) (effects (font (size 1.27 1.27)) hide))'),'eeschema');
   validate(symbol.replace('(pin_numbers hide)','(pin_numbers (hide yes))').replace('(offset 0) hide','(offset 0) (hide yes)'),'eeschema');
+  // KiCad 9/10 symbol flags, as every current library and remote provider emits them.
+  validate(symbol.replace('(pin_numbers hide)','(pin_numbers hide) (duplicate_pin_numbers_are_jumpers no) (embedded_fonts no)'),'eeschema');
+  assert.throws(()=>validate(symbol.replace('(pin_numbers hide)','(pin_numbers hide) (embedded_fonts "x")'),'eeschema'),/Unsupported import/);
+  assert.throws(()=>validate(symbol.replace('(pin_numbers hide)','(pin_numbers hide) (duplicate_pin_numbers_are_jumpers)'),'eeschema'),/Unsupported import/);
 });
 test('rejects resource-bearing forms, invalid geometry and ambiguous definitions',()=>{
   const invalid=[

@@ -107,7 +107,8 @@ function definition(node:Form) {
   const name=quoted(node[1],256).split(':').at(-1)!;
   uniqueProperties(node);
   const units=new Set<string>();
-  for(const child of fields(node,2,['symbol','property','pin_names','pin_numbers','exclude_from_sim','in_bom','on_board','power'],['symbol','property'])) {
+  // KiCad 9/10 add two more yes|no flags per symbol; both fall through to the enumeration check.
+  for(const child of fields(node,2,['symbol','property','pin_names','pin_numbers','exclude_from_sim','in_bom','on_board','power','duplicate_pin_numbers_are_jumpers','embedded_fonts'],['symbol','property'])) {
     switch(tag(child)){
       case 'symbol':
         {const unitName=quoted(child[1],256),match=unitName.match(/^(.+)_(\d+)_(\d+)$/);
