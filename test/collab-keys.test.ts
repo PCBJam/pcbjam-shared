@@ -9,17 +9,43 @@ import {
   parseCollabKey,
   parseCollabRoomId,
   presenceRoomId,
+  workingCopyKeyPrefix,
 } from "../src/schemas.js";
 
 const SID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 const PID = "11111111-2222-3333-4444-555555555555";
+const CID = "99999999-8888-7777-6666-555555555555";
 
 describe("parseCollabKey (inverse of collabDocKey/collabLiveKey)", () => {
   it("round-trips clean POSIX doc paths for both kinds", () => {
     for (const path of ["board.kicad_pcb", "sub/child.kicad_sch", "a/b/c.kicad_wks"]) {
-      expect(parseCollabKey(SID, PID, collabDocKey(SID, PID, path))).toEqual({ path, kind: "ydoc" });
-      expect(parseCollabKey(SID, PID, collabLiveKey(SID, PID, path))).toEqual({ path, kind: "live" });
+      expect(parseCollabKey(SID, PID, collabDocKey(SID, PID, path))).toEqual({ path, kind: "ydoc", copyId: null });
+      expect(parseCollabKey(SID, PID, collabLiveKey(SID, PID, path))).toEqual({ path, kind: "live", copyId: null });
     }
+  });
+
+  it("nests a non-default working copy under copies/<id>/ and recovers it (git-integration 0004)", () => {
+    const key = collabDocKey(SID, PID, "sub/child.kicad_sch", CID);
+    expect(key).toBe(`teams/${SID}/projects/${PID}/copies/${CID}/sub/child.kicad_sch.ydoc`);
+    expect(parseCollabKey(SID, PID, key)).toEqual({ path: "sub/child.kicad_sch", kind: "ydoc", copyId: CID });
+    expect(parseCollabKey(SID, PID, collabLiveKey(SID, PID, "b.kicad_pcb", CID))).toEqual({
+      path: "b.kicad_pcb",
+      kind: "live",
+      copyId: CID,
+    });
+    expect(collabDocGoodKey(SID, PID, "b.kicad_pcb", CID)).toBe(`${collabDocKey(SID, PID, "b.kicad_pcb", CID)}.good`);
+    expect(collabDocArchiveKey(SID, PID, "b.kicad_pcb", 7, CID)).toBe(`${collabDocKey(SID, PID, "b.kicad_pcb", CID)}.7`);
+    expect(workingCopyKeyPrefix(SID, PID, CID)).toBe(`teams/${SID}/projects/${PID}/copies/${CID}/`);
+    // the default copy is the flat legacy layout: null / undefined / "" all mean default
+    expect(collabDocKey(SID, PID, "b.kicad_pcb", null)).toBe(collabDocKey(SID, PID, "b.kicad_pcb"));
+    // a default-copy file that merely lives in a folder named `copies` is not a copy
+    expect(parseCollabKey(SID, PID, collabDocKey(SID, PID, "copies/notes.kicad_sch"))).toEqual({
+      path: "copies/notes.kicad_sch",
+      kind: "ydoc",
+      copyId: null,
+    });
+    // per-copy blobs never had a legacy (fold-scheme) key
+    expect(legacyCollabKeys(SID, PID, "my board.kicad_pcb", CID)).toBeNull();
   });
 
   it("returns null for keys outside this project's prefix", () => {
@@ -47,9 +73,33 @@ describe("doc paths with spaces/special chars (filename-spaces fix)", () => {
       "sch/übersicht.kicad_sch",
       "sub dir/my board.kicad_pcb",
     ]) {
-      expect(parseCollabKey(SID, PID, collabDocKey(SID, PID, path))).toEqual({ path, kind: "ydoc" });
-      expect(parseCollabKey(SID, PID, collabLiveKey(SID, PID, path))).toEqual({ path, kind: "live" });
+      expect(parseCollabKey(SID, PID, collabDocKey(SID, PID, path))).toEqual({ path, kind: "ydoc", copyId: null });
+      expect(parseCollabKey(SID, PID, collabLiveKey(SID, PID, path))).toEqual({ path, kind: "live", copyId: null });
     }
+  });
+
+  it("nests a non-default working copy under copies/<id>/ and recovers it (git-integration 0004)", () => {
+    const key = collabDocKey(SID, PID, "sub/child.kicad_sch", CID);
+    expect(key).toBe(`teams/${SID}/projects/${PID}/copies/${CID}/sub/child.kicad_sch.ydoc`);
+    expect(parseCollabKey(SID, PID, key)).toEqual({ path: "sub/child.kicad_sch", kind: "ydoc", copyId: CID });
+    expect(parseCollabKey(SID, PID, collabLiveKey(SID, PID, "b.kicad_pcb", CID))).toEqual({
+      path: "b.kicad_pcb",
+      kind: "live",
+      copyId: CID,
+    });
+    expect(collabDocGoodKey(SID, PID, "b.kicad_pcb", CID)).toBe(`${collabDocKey(SID, PID, "b.kicad_pcb", CID)}.good`);
+    expect(collabDocArchiveKey(SID, PID, "b.kicad_pcb", 7, CID)).toBe(`${collabDocKey(SID, PID, "b.kicad_pcb", CID)}.7`);
+    expect(workingCopyKeyPrefix(SID, PID, CID)).toBe(`teams/${SID}/projects/${PID}/copies/${CID}/`);
+    // the default copy is the flat legacy layout: null / undefined / "" all mean default
+    expect(collabDocKey(SID, PID, "b.kicad_pcb", null)).toBe(collabDocKey(SID, PID, "b.kicad_pcb"));
+    // a default-copy file that merely lives in a folder named `copies` is not a copy
+    expect(parseCollabKey(SID, PID, collabDocKey(SID, PID, "copies/notes.kicad_sch"))).toEqual({
+      path: "copies/notes.kicad_sch",
+      kind: "ydoc",
+      copyId: null,
+    });
+    // per-copy blobs never had a legacy (fold-scheme) key
+    expect(legacyCollabKeys(SID, PID, "my board.kicad_pcb", CID)).toBeNull();
   });
 
   it("is injective — the old-scheme collisions can no longer happen", () => {
@@ -130,13 +180,31 @@ describe("parseCollabRoomId (inverse of collabRoomId/presenceRoomId)", () => {
         scopeId: SID,
         projectId: PID,
         docPath,
+        copyId: null,
       });
     }
     expect(parseCollabRoomId(presenceRoomId(SID, PID))).toEqual({
       scopeId: SID,
       projectId: PID,
       docPath: "~presence",
+      copyId: null,
     });
+  });
+
+  it("carries a non-default working copy as the third segment (git-integration 0004)", () => {
+    for (const docPath of ["board.kicad_pcb", "sub/child.kicad_sch", "weird:name.kicad_pcb", "~presence"]) {
+      const room = collabRoomId(SID, PID, docPath, CID);
+      expect(room).toBe(`${SID}:${PID}:${CID}:${docPath}`);
+      expect(parseCollabRoomId(room)).toEqual({ scopeId: SID, projectId: PID, docPath, copyId: CID });
+    }
+    expect(presenceRoomId(SID, PID, CID)).toBe(collabRoomId(SID, PID, "~presence", CID));
+    // default copy: no segment, whatever falsy spelling the caller uses
+    expect(collabRoomId(SID, PID, "x.kicad_sch", null)).toBe(`${SID}:${PID}:x.kicad_sch`);
+    expect(collabRoomId(SID, PID, "x.kicad_sch", "")).toBe(`${SID}:${PID}:x.kicad_sch`);
+    // a copy segment with nothing after it is not a room
+    expect(parseCollabRoomId(`${SID}:${PID}:${CID}:`)).toBeNull();
+    // a doc path that merely starts with something uuid-ish but is not one stays a doc path
+    expect(parseCollabRoomId(`${SID}:${PID}:not-a-uuid:x.kicad_sch`)?.docPath).toBe("not-a-uuid:x.kicad_sch");
   });
 
   it("rejects legacy 2-part and malformed room ids", () => {

@@ -182,9 +182,37 @@ export type ProjectAccess = z.infer<typeof projectAccessSchema>;
 export const projectRoleSchema = z.enum(["reader", "commenter", "editor", "owner"]);
 export type ProjectRole = z.infer<typeof projectRoleSchema>;
 
+/**
+ * A working copy as the editor sees it (git-integration 0004, R-§2): the
+ * stable id every room, cache and URL of a session is bound to, its label,
+ * kind, and the `generation` the session must present on the gateway (a
+ * write from an older generation is refused — see `GENERATION_REFUSED` in
+ * gateway-wire.ts). `isDefault` marks the copy whose identity is the legacy
+ * project identity (no copy segment in room ids / storage keys).
+ */
+export const workingCopyKindSchema = z.enum(["default", "branch", "pinned"]);
+export type WorkingCopyKind = z.infer<typeof workingCopyKindSchema>;
+export const workingCopyRefSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  kind: workingCopyKindSchema,
+  generation: z.number().int().nonnegative(),
+  isDefault: z.boolean(),
+});
+export type WorkingCopyRef = z.infer<typeof workingCopyRefSchema>;
+
 export const projectWithFiles = z.object({
   project: projectSchema,
   files: z.array(projectFileSchema),
+  /**
+   * The working copy this listing is bound to (git-integration 0004). Absent
+   * on backends without working copies ⇒ the editor behaves as on the
+   * default copy (no copy segment anywhere).
+   */
+  copy: workingCopyRefSchema.optional(),
+  /** Every non-archived copy of the project the caller may pick (only sent
+   *  when the caller may see copies at all). */
+  copies: z.array(workingCopyRefSchema).optional(),
   /**
    * Capability overlay (optional; a backend MAY surface it): may the CURRENT
    * caller write this project's documents? "read" puts the editor into
@@ -338,28 +366,56 @@ export function collabRoomId(
   scopeId: string,
   projectId: string,
   docPath: string,
+  copyId?: string | null,
 ): string {
-  return `${scopeId}:${projectId}:${docPath}`;
+  return copyId
+    ? `${scopeId}:${projectId}:${copyId}:${docPath}`
+    : `${scopeId}:${projectId}:${docPath}`;
+}
+
+/**
+ * A working-copy id (git-integration 0004): every project has one or more
+ * working copies with stable uuid ids. The DEFAULT copy of a project is the
+ * legacy identity — its room ids and storage keys carry NO copy segment, so
+ * every name that existed before working copies still means "the default
+ * copy". A non-default copy inserts its uuid as the third room-id segment
+ * (`<scopeId>:<projectId>:<copyId>:<docPath>`) and its blobs live under
+ * `copies/<copyId>/` inside the project prefix. The uuid shape is what keeps
+ * the parsers unambiguous: a `docPath` may contain colons, but never starts
+ * with a uuid followed by one.
+ */
+export const WORKING_COPY_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function isWorkingCopyId(v: unknown): v is string {
+  return typeof v === "string" && WORKING_COPY_ID_RE.test(v);
 }
 
 /**
  * Inverse of {@link collabRoomId} / {@link presenceRoomId} — the ONE parser for
  * the room-id format, shared by every backend that needs to recover the parts
- * (ids contain no colons; `docPath` may, so only the first two split).
+ * (ids contain no colons; `docPath` may, so only the leading segments split).
+ * `copyId` is null for the default copy (the three-segment legacy shape).
  */
 export function parseCollabRoomId(
   room: string,
-): { scopeId: string; projectId: string; docPath: string } | null {
+): { scopeId: string; projectId: string; docPath: string; copyId: string | null } | null {
   const i = room.indexOf(":");
   if (i <= 0) return null;
   const j = room.indexOf(":", i + 1);
   if (j <= i + 1) return null;
-  const docPath = room.slice(j + 1);
+  let docPath = room.slice(j + 1);
   if (!docPath) return null; // every real room names a doc (or ~presence)
+  let copyId: string | null = null;
+  const k = docPath.indexOf(":");
+  if (k === 36 && isWorkingCopyId(docPath.slice(0, k))) {
+    copyId = docPath.slice(0, k);
+    docPath = docPath.slice(k + 1);
+    if (!docPath) return null; // a copy segment with nothing after it is not a room
+  }
   return {
     scopeId: room.slice(0, i),
     projectId: room.slice(i + 1, j),
     docPath,
+    copyId,
   };
 }
 
@@ -372,8 +428,12 @@ export function parseCollabRoomId(
  * Backends should not persist these rooms (nothing writes to their Y.Doc).
  */
 export const PRESENCE_DOC_PATH = "~presence";
-export function presenceRoomId(scopeId: string, projectId: string): string {
-  return collabRoomId(scopeId, projectId, PRESENCE_DOC_PATH);
+export function presenceRoomId(
+  scopeId: string,
+  projectId: string,
+  copyId?: string | null,
+): string {
+  return collabRoomId(scopeId, projectId, PRESENCE_DOC_PATH, copyId);
 }
 
 /**
@@ -381,7 +441,9 @@ export function presenceRoomId(scopeId: string, projectId: string): string {
  * one Yjs document per project holding every thread, opened by every editor
  * session beside its file room(s). Persisted like a file room. The doc path
  * constant lives in comments-wire.ts (`COMMENTS_DOC_PATH`); this is the
- * room-id shorthand next to {@link presenceRoomId}.
+ * room-id shorthand next to {@link presenceRoomId}. Deliberately takes NO
+ * working-copy id: threads are project-scoped and shared by every copy
+ * (design-comments C-D1), so the comments room never carries a copy segment.
  */
 export function commentsRoomId(scopeId: string, projectId: string): string {
   return collabRoomId(scopeId, projectId, "~comments");
@@ -476,9 +538,24 @@ function legacyWireEncode(docPath: string): string {
   return out;
 }
 
-/** Team-scoped prefix every collab blob for a project lives under. */
-function collabKeyPrefix(scopeId: string, projectId: string): string {
-  return `teams/${scopeId}/projects/${projectId}/`;
+/**
+ * Team-scoped prefix every collab blob for a project lives under. A
+ * non-default working copy (git-integration 0004) nests its blobs one level
+ * down, `…/copies/<copyId>/`, so two copies of one document never share a
+ * snapshot; the default copy keeps the legacy flat layout.
+ */
+function collabKeyPrefix(scopeId: string, projectId: string, copyId?: string | null): string {
+  const base = `teams/${scopeId}/projects/${projectId}/`;
+  return copyId ? `${base}${COPIES_KEY_SEGMENT}/${copyId}/` : base;
+}
+
+/** Folder name that separates per-copy blobs from the default copy's. */
+export const COPIES_KEY_SEGMENT = "copies";
+
+/** `teams/<scopeId>/projects/<projectId>/copies/<copyId>/` — the whole
+ *  per-copy subtree, for listing and deletion. */
+export function workingCopyKeyPrefix(scopeId: string, projectId: string, copyId: string): string {
+  return collabKeyPrefix(scopeId, projectId, copyId);
 }
 
 /** Suffixes appended to a doc's key for its persisted state / liveness marker. */
@@ -496,8 +573,9 @@ export function collabDocKey(
   scopeId: string,
   projectId: string,
   docPath: string,
+  copyId?: string | null,
 ): string {
-  return `${collabKeyPrefix(scopeId, projectId)}${sanitizeDocPath(docPath)}${COLLAB_DOC_SUFFIX}`;
+  return `${collabKeyPrefix(scopeId, projectId, copyId)}${sanitizeDocPath(docPath)}${COLLAB_DOC_SUFFIX}`;
 }
 
 /**
@@ -510,8 +588,9 @@ export function collabLiveKey(
   scopeId: string,
   projectId: string,
   docPath: string,
+  copyId?: string | null,
 ): string {
-  return `${collabKeyPrefix(scopeId, projectId)}${sanitizeDocPath(docPath)}${COLLAB_LIVE_SUFFIX}`;
+  return `${collabKeyPrefix(scopeId, projectId, copyId)}${sanitizeDocPath(docPath)}${COLLAB_LIVE_SUFFIX}`;
 }
 
 /**
@@ -529,8 +608,9 @@ export function collabDocArchiveKey(
   projectId: string,
   docPath: string,
   epochMs: number,
+  copyId?: string | null,
 ): string {
-  return `${collabDocKey(scopeId, projectId, docPath)}.${epochMs}`;
+  return `${collabDocKey(scopeId, projectId, docPath, copyId)}.${epochMs}`;
 }
 
 /**
@@ -545,8 +625,9 @@ export function collabDocGoodKey(
   scopeId: string,
   projectId: string,
   docPath: string,
+  copyId?: string | null,
 ): string {
-  return `${collabDocKey(scopeId, projectId, docPath)}.good`;
+  return `${collabDocKey(scopeId, projectId, docPath, copyId)}.good`;
 }
 
 /**
@@ -560,10 +641,12 @@ export function legacyCollabKeys(
   scopeId: string,
   projectId: string,
   docPath: string,
+  copyId?: string | null,
 ): { doc: string; good: string; live: string } | null {
   const legacy = legacySanitizeDocPath(docPath);
   if (legacy === sanitizeDocPath(docPath)) return null;
-  const prefix = collabKeyPrefix(scopeId, projectId);
+  if (copyId) return null; // per-copy blobs were only ever written by the injective scheme
+  const prefix = collabKeyPrefix(scopeId, projectId, copyId);
   const doc = `${prefix}${legacy}${COLLAB_DOC_SUFFIX}`;
   return {
     doc,
@@ -587,7 +670,7 @@ export function parseCollabKey(
   scopeId: string,
   projectId: string,
   key: string,
-): { path: string; kind: "ydoc" | "live" } | null {
+): { path: string; kind: "ydoc" | "live"; copyId: string | null } | null {
   const prefix = collabKeyPrefix(scopeId, projectId);
   if (!key.startsWith(prefix)) return null;
   const suffix = key.endsWith(COLLAB_DOC_SUFFIX)
@@ -596,7 +679,17 @@ export function parseCollabKey(
       ? COLLAB_LIVE_SUFFIX
       : null;
   if (!suffix) return null;
-  const path = decodeDocPath(key.slice(prefix.length, -suffix.length));
+  let rest = key.slice(prefix.length, -suffix.length);
+  let copyId: string | null = null;
+  const copyHead = `${COPIES_KEY_SEGMENT}/`;
+  if (rest.startsWith(copyHead)) {
+    const id = rest.slice(copyHead.length, copyHead.length + 36);
+    if (isWorkingCopyId(id) && rest.charAt(copyHead.length + 36) === "/") {
+      copyId = id;
+      rest = rest.slice(copyHead.length + 37);
+    }
+  }
+  const path = decodeDocPath(rest);
   if (!path) return null;
-  return { path, kind: suffix === COLLAB_DOC_SUFFIX ? "ydoc" : "live" };
+  return { path, kind: suffix === COLLAB_DOC_SUFFIX ? "ydoc" : "live", copyId };
 }

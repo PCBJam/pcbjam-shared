@@ -17,6 +17,8 @@
  * encoding can't make the two disagree about where the inner frame starts.
  */
 
+import { isWorkingCopyId } from "./schemas.js";
+
 /** Subscription mode (0003 §2, amended by 0004 §2.1): passive registers
  *  interest — it receives awareness and `touched` hints and may PULL the doc's
  *  at-rest state with SyncStep1 (answered by the gateway from R2 / a live
@@ -25,7 +27,17 @@
 export type GatewaySubMode = "active" | "passive";
 
 export type GatewayClientMsg =
-  | { t: "sub"; ch: number; doc: string; mode: GatewaySubMode }
+  | {
+      t: "sub";
+      ch: number;
+      doc: string;
+      mode: GatewaySubMode;
+      /** The working-copy generation this session was booted with
+       *  (git-integration 0004 §E). A gateway that knows a newer generation
+       *  answers `suberr` 409 {@link GENERATION_REFUSED}; absent ⇒ the
+       *  session predates generations and is accepted as-is. */
+      gen?: number;
+    }
   | { t: "act"; ch: number }
   | { t: "unsub"; ch: number };
 
@@ -50,6 +62,21 @@ export interface GatewayFileChange {
   origin: "editor" | "upload" | "job";
   /** Writer's user slug when a session wrote it; absent for machine writers. */
   by?: string;
+}
+
+/**
+ * Generation fencing (git-integration 0004 §E, R-§10): when a working copy's
+ * base changes, its generation is bumped and every session of the old
+ * generation is fenced. The gateway closes their sockets with
+ * {@link GENERATION_CLOSE_CODE} and answers any later `sub` carrying an older
+ * `gen` with `suberr` status 409 and this message. A fenced client must stop
+ * reconnecting and never replay its queues into the new generation; its local
+ * edits stay in the tab for an explicit recovery path.
+ */
+export const GENERATION_REFUSED = "generation";
+export const GENERATION_CLOSE_CODE = 4409;
+export function isGenerationRefusal(status: number, message: string): boolean {
+  return status === 409 && message === GENERATION_REFUSED;
 }
 
 /**
@@ -128,12 +155,17 @@ export function parseGatewayClientMsg(text: string): GatewayClientMsg | null {
     return null;
   }
   if (raw === null || typeof raw !== "object") return null;
-  const m = raw as { t?: unknown; ch?: unknown; doc?: unknown; mode?: unknown };
+  const m = raw as { t?: unknown; ch?: unknown; doc?: unknown; mode?: unknown; gen?: unknown };
   if (!isChannelId(m.ch)) return null;
   if (m.t === "sub") {
     if (typeof m.doc !== "string" || !m.doc) return null;
     if (m.mode !== "active" && m.mode !== "passive") return null;
-    return { t: "sub", ch: m.ch, doc: m.doc, mode: m.mode };
+    const sub: GatewayClientMsg = { t: "sub", ch: m.ch, doc: m.doc, mode: m.mode };
+    if (m.gen !== undefined) {
+      if (typeof m.gen !== "number" || !Number.isInteger(m.gen) || m.gen < 0) return null;
+      sub.gen = m.gen;
+    }
+    return sub;
   }
   if (m.t === "act") return { t: "act", ch: m.ch };
   if (m.t === "unsub") return { t: "unsub", ch: m.ch };
@@ -264,24 +296,33 @@ export function untagGatewayFrame(
 
 // --- gateway room naming ----------------------------------------------------
 
-/** The gateway Durable Object name for a project (0001 §5). */
-export function projectRoomName(scopeId: string, projectId: string): string {
-  return `project:${scopeId}:${projectId}`;
+/**
+ * The gateway Durable Object name for a project (0001 §5) — per working copy
+ * since git-integration 0004: the default copy keeps the legacy
+ * `project:<scopeId>:<projectId>` name, a non-default copy appends its id.
+ */
+export function projectRoomName(scopeId: string, projectId: string, copyId?: string | null): string {
+  return copyId
+    ? `project:${scopeId}:${projectId}:${copyId}`
+    : `project:${scopeId}:${projectId}`;
 }
 
 /**
  * Inverse of {@link projectRoomName}. Ids are uuids (no colons), so a valid
- * name has exactly three non-empty segments and starts with `project:`.
+ * name has three or four non-empty segments and starts with `project:`;
+ * `copyId` is null for the default copy.
  */
 export function parseProjectRoomName(
   room: string,
-): { scopeId: string; projectId: string } | null {
+): { scopeId: string; projectId: string; copyId: string | null } | null {
   if (!room.startsWith("project:")) return null;
   const rest = room.slice("project:".length);
-  const i = rest.indexOf(":");
-  if (i <= 0) return null;
-  const scopeId = rest.slice(0, i);
-  const projectId = rest.slice(i + 1);
-  if (!projectId || projectId.includes(":")) return null;
-  return { scopeId, projectId };
+  const parts = rest.split(":");
+  if (parts.length < 2 || parts.length > 3) return null;
+  if (parts.some((p) => !p)) return null;
+  const scopeId = parts[0] as string;
+  const projectId = parts[1] as string;
+  const copyId = parts[2] ?? null;
+  if (copyId !== null && !isWorkingCopyId(copyId)) return null;
+  return { scopeId, projectId, copyId };
 }

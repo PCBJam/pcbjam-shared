@@ -1,6 +1,6 @@
 import { z } from "zod";
 import * as Y from "yjs";
-import { commentAnchorSchema, type CommentThread } from "./comments-wire.js";
+import { commentAnchorSchema, commentProvenanceSchema, type CommentThread } from "./comments-wire.js";
 import {
   addMessage,
   commentsYMap,
@@ -58,6 +58,9 @@ export const commentOpSchema = z.discriminatedUnion("type", [
     mentions: mentionsSchema,
     /** Client-chosen id so the echo can be correlated; must be unused. */
     id: idSchema.optional(),
+    /** Where the thread was written (design-comments C-D3): the working copy
+     *  and document generation the commenter's session was bound to. */
+    provenance: commentProvenanceSchema.optional(),
   }),
   z.object({
     type: z.literal("addMessage"),
@@ -213,6 +216,7 @@ export function applyCommentOp(
           body: op.body,
           mentions: op.mentions,
           id: op.id,
+          provenance: op.provenance,
           now,
         });
         const thread = getThread(ydoc, threadId);
