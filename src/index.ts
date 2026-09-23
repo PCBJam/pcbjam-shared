@@ -34,6 +34,9 @@ export * from "./comments-wire.js";
 export * from "./comments-y.js";
 export * from "./comment-ops.js";
 export * from "./comment-moderation.js";
+export * from "./comments-export.js";
+export * from "./lockfile-wire.js";
+export * from "./comments-lift-update.js";
 
 const c = initContract();
 

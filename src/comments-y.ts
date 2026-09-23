@@ -5,6 +5,7 @@ import {
   commentsLiftedMarkerSchema,
   COMMENTS_LIFTED_KEY,
   Y_KDOC_COMMENTS,
+  Y_KDOC_COMMENT_TOMBSTONES,
   type CommentAnchor,
   type CommentMessage,
   type CommentProvenance,
@@ -35,6 +36,37 @@ import { kicadItemsMap, yToItemUnchecked } from "./kicad-y.js";
 
 export function commentsYMap(ydoc: Y.Doc): Y.Map<Y.Map<unknown>> {
   return ydoc.getMap<Y.Map<unknown>>(Y_KDOC_COMMENTS);
+}
+
+/** Deletion tombstones: `t:<threadId>` / `m:<threadId>|<messageId>` → ms epoch. */
+export function commentTombstonesYMap(ydoc: Y.Doc): Y.Map<number> {
+  return ydoc.getMap<number>(Y_KDOC_COMMENT_TOMBSTONES);
+}
+
+export function threadTombstoneKey(threadId: string): string {
+  return `t:${threadId}`;
+}
+export function messageTombstoneKey(threadId: string, messageId: string): string {
+  return `m:${threadId}|${messageId}`;
+}
+
+/** The project's deletion tombstones as plain ids (design-comments §7.1). */
+export function commentTombstones(ydoc: Y.Doc): { threads: string[]; messages: string[] } {
+  const threads: string[] = [];
+  const messages: string[] = [];
+  for (const key of commentTombstonesYMap(ydoc).keys()) {
+    if (key.startsWith("t:")) threads.push(key.slice(2));
+    else if (key.startsWith("m:")) messages.push(key.slice(2).split("|")[1] ?? "");
+  }
+  return { threads: threads.sort(), messages: messages.filter(Boolean).sort() };
+}
+
+/** Whether a thread / message id was deleted in this project. */
+export function isTombstonedThread(ydoc: Y.Doc, threadId: string): boolean {
+  return commentTombstonesYMap(ydoc).has(threadTombstoneKey(threadId));
+}
+export function isTombstonedMessage(ydoc: Y.Doc, threadId: string, messageId: string): boolean {
+  return commentTombstonesYMap(ydoc).has(messageTombstoneKey(threadId, messageId));
 }
 
 function uid(): string {
@@ -184,12 +216,16 @@ export function removeMessage(
   if (!messages || !messages.has(messageId)) return false;
 
   if (thread.get("rootId") === messageId || messages.size <= 1) {
-    comments.delete(threadId);
+    ydoc.transact(() => {
+      comments.delete(threadId);
+      commentTombstonesYMap(ydoc).set(threadTombstoneKey(threadId), Date.now());
+    });
     return "thread-deleted";
   }
 
   ydoc.transact(() => {
     messages.delete(messageId);
+    commentTombstonesYMap(ydoc).set(messageTombstoneKey(threadId, messageId), Date.now());
 
     // Sweep the removed message's reaction keys so they don't linger as
     // orphans (concurrent reactions to a message being deleted are lost — a
@@ -243,13 +279,16 @@ export function setThreadResolved(
   return true;
 }
 
-/** Delete a whole thread (pin + all replies). */
-export function deleteThread(ydoc: Y.Doc, threadId: string): boolean {
+/** Delete a whole thread (pin + all replies); records a tombstone (§7.2). */
+export function deleteThread(ydoc: Y.Doc, threadId: string, now: number = Date.now()): boolean {
   const comments = commentsYMap(ydoc);
 
   if (!comments.has(threadId)) return false;
 
-  comments.delete(threadId);
+  ydoc.transact(() => {
+    comments.delete(threadId);
+    commentTombstonesYMap(ydoc).set(threadTombstoneKey(threadId), now);
+  });
   return true;
 }
 

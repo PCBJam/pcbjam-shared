@@ -35,6 +35,15 @@ export const COMMENTS_DOC_PATH = "~comments";
  */
 export const COMMENTS_LIFTED_KEY = "~lifted";
 
+/**
+ * Y.Doc top-level key holding deletion tombstones (git-integration 0003,
+ * design-comments §7.2): id → ms epoch of the delete, for threads and
+ * messages removed in the project. Own-key writes, so concurrent deletes
+ * merge; an exported comments file carries them so a merge never
+ * resurrects what the project deleted.
+ */
+export const Y_KDOC_COMMENT_TOMBSTONES = "kdoc_comment_tombstones";
+
 export const commentsLiftedMarkerSchema = z.object({
   /** ms epoch of the lift. */
   at: z.number(),
