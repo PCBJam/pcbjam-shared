@@ -187,6 +187,17 @@ not write to their team library. If the save succeeded but the library write was
 refused, the message ends with "Click Place again to retry"; placing again is
 safe.
 
+PCBJam handles one part at a time. A Place or download sent while the previous
+one is still waiting for the user's confirmation or being saved gets
+`IMPORT_FAILED` ("PCBJam is still handling the previous part") straight away;
+send it again once the first request has been answered. Every message, whether
+posted as a string or as an object, must stay under `max_message_size` from
+`CAPABILITIES` (6 MiB); larger ones are dropped without an answer.
+
+If the user's access to your provider ends while the panel is open (the package
+is disabled or removed, or its approval is withdrawn), PCBJam answers any
+pending request with `ACCESS_DENIED` and closes the panel.
+
 ## Package your provider
 
 A provider is installed as a package with a single file, `manifest.json`

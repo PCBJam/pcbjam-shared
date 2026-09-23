@@ -117,6 +117,7 @@ export function validatePlaceManifest(
   }
 ): PlaceManifest;
 export function validateInlineBundle(entries: unknown): InlineEntry[];
+export function withinMessageBudget(value: unknown, limit?: number): boolean;
 export function validateEnvelope(raw: unknown): Envelope;
 export function providerPolicyText(origin: string): string;
 export function providerPermissions(origin: string): Record<string, string>;

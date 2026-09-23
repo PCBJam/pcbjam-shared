@@ -266,8 +266,31 @@ export function validateInlineBundle(entries) {
   });
 }
 
+// Approximate serialized size of a structured-cloned message, walked without
+// serializing it. Stops as soon as the budget is spent, so an oversized object
+// costs at most `limit` characters of work.
+export function withinMessageBudget(value, limit = PROVIDER_LIMITS.messageBytes) {
+  let size = 0;
+  const stack = [value];
+  while (stack.length) {
+    const node = stack.pop();
+    if (typeof node === "string") size += node.length + 2;
+    else if (node && typeof node === "object") {
+      size += 2;
+      for (const key of Object.keys(node)) {
+        if (!Array.isArray(node)) size += key.length + 3;
+        stack.push(node[key]);
+        if (++size > limit) return false;
+      }
+    } else size += 8;
+    if (size > limit) return false;
+  }
+  return true;
+}
+
 // One JSON-RPC v1 envelope from the provider page. Accepts a string or an
-// already-parsed object; refuses anything the desktop client would refuse.
+// already-parsed object, both under the same size limit; refuses anything the
+// desktop client would refuse.
 export function validateEnvelope(raw) {
   let value = raw;
   if (typeof raw === "string") {
@@ -277,7 +300,7 @@ export function validateEnvelope(raw) {
     } catch {
       fail("Message is not valid JSON");
     }
-  }
+  } else if (!withinMessageBudget(raw)) fail("Message exceeds the size limit");
   if (!value || typeof value !== "object" || Array.isArray(value)) fail("Message must be a JSON object");
   exact(value, ["version", "session_id", "message_id", "response_to", "command", "status", "error_code", "error_message", "parameters", "data"]);
   if (!isString(value.command, 1, 64)) fail("Message is missing a command");

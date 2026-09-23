@@ -124,6 +124,13 @@ test('envelope: strings and objects parse; shape violations are refused before d
     '{"message_id":1,"command":"X","parameters":[]}', '{"message_id":1,"command":"X","data":5}', '{"message_id":1,"command":"X","extra":1}'])
     assert.throws(() => validateEnvelope(raw), Error, raw);
   assert.throws(() => validateEnvelope('x'.repeat(PROVIDER_LIMITS.messageBytes + 1)), /size limit/);
+  // Already-parsed objects (structured clone) are held to the same limit, in data or nested parameters.
+  const big = 'A'.repeat(PROVIDER_LIMITS.messageBytes + 1);
+  assert.throws(() => validateEnvelope({ version: 1, session_id: 's1', message_id: 1, command: 'DL_SYMBOL', data: big }), /size limit/);
+  assert.throws(() => validateEnvelope({ version: 1, session_id: 's1', message_id: 1, command: 'X', parameters: { a: [big.slice(0, 1 << 20), big] } }), /size limit/);
+  const wide = Array.from({ length: PROVIDER_LIMITS.messageBytes }, () => 0);
+  assert.throws(() => validateEnvelope({ version: 1, session_id: 's1', message_id: 1, command: 'X', parameters: { wide } }), /size limit/);
+  assert.equal(validateEnvelope({ version: 1, session_id: 's1', message_id: 1, command: 'DL_SYMBOL', data: 'A'.repeat(1 << 20) }).data.length, 1 << 20);
 });
 
 test('policy and consent strings pin the provider origin', () => {
