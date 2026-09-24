@@ -12,7 +12,7 @@ type PCBJamGeometryDrawing = {layer:string;text?:'reference'|'value'|'field'|'te
 type PCBJamGeometryRecord = {$:string;[key:string]:any};
 type PCBJamItemError = {id:string;error:'TOO_LARGE'|'DEFERRED'};
 // BEGIN GENERATED HOST METHODS
-type PCBJamHostMethod = "http.request" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "board.geometryStart" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "editor.requestPlacement";
+type PCBJamHostMethod = "http.request" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "board.geometryStart" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "exports.run" | "exports.readJson" | "exports.bundle" | "files.saveBundle" | "editor.requestPlacement";
 // END GENERATED HOST METHODS
 /** Plugin logic only, and only while a command is being handled: at most 32 pending, 60 s each,
  *  all cancelled when the command settles. An exception thrown from a callback stops the plugin. */
@@ -80,6 +80,18 @@ declare const pcbjam: {
     saveHtml(proposal:{name:string;html:string}):Promise<{status:'download-requested'|'cancelled'}>;
     /** A .png from base64 (no data: prefix), at most 4 MiB decoded; anything that is not a PNG is refused. */
     saveImage(proposal:{name:string;base64:string}):Promise<{status:'download-requested'|'cancelled'}>;
+    /** Download a ZIP made with `pcbjam.exports.bundle` (needs `files:save`), at most 32 MiB, after the user confirms. */
+    saveBundle(proposal:{bundleId:string}):Promise<{status:'download-requested'|'cancelled'}>;
+  };
+  /** Server-side KiCad exports of the open document (needs `project:export`; hosted PCBJam, saved projects).
+   *  `gerbers`, `drill`, `ipc356` and `fab-components` run in the PCB editor. Output bytes stay on the server:
+   *  you get ids, file names and sizes, can read small JSON outputs, and can zip exports for download. */
+  exports:{
+    run(kind:'gerbers'|'drill'|'ipc356'|'fab-components'):Promise<{exportId:string;kind:string;files:{name:string;size:number}[]}>;
+    /** A JSON output of an export, at most 1 MiB (e.g. `fab-components.json`). */
+    readJson(exportId:string,name:string):Promise<PCBJamJSON>;
+    /** Zip exports with text files you made (≤ 16 files, ≤ 2 MiB); `rename` maps an export's file names. */
+    bundle(proposal:{parts:{exportId:string;rename?:Record<string,string>}[];extraFiles?:{name:string;text:string}[];zipName:string}):Promise<{bundleId:string;name:string;size:number;files:{name:string;size:number}[]}>;
   };
   board:{
     /** PCB editor only. The open board as shapes the editor computed, so you draw polygons instead of re-deriving

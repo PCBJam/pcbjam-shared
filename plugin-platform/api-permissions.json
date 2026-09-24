@@ -2,12 +2,13 @@
   "ui:custom": "Run a custom interface in a sandboxed iframe",
   "ui:project-data": "Disclose plugin results to its custom interface",
   "files:choose": "Read local files you explicitly choose for this plugin",
-  "files:save": "Request a text or image file download, confirmed by you",
+  "files:save": "Request a text, image or ZIP file download, confirmed by you",
   "files:save-html": "Request a web page download, confirmed by you; the page contains this plugin's code, which runs when you open the file",
   "editor:place-items": "Request item placement, confirmed by you in the editor",
   "project:read-info": "Read metadata and file names in the current project",
   "documents:read": "Read the current editor document, including all its items and embedded symbols",
   "editor:read-selection": "Read selected item IDs in the current editor",
   "editor:select": "Change which items are selected in the current editor",
-  "storage:local": "Store local data for this plugin, account and project"
+  "storage:local": "Store local data for this plugin, account and project",
+  "project:export": "Generate export files such as Gerbers, drill files and netlists from the current document on PCBJam's servers"
 }

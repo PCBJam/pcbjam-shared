@@ -7,6 +7,20 @@ const document = z.string().uuid();
 const page = { cursor: z.number().int().min(0).max(50000), limit: z.number().int().min(1).max(100) };
 const key = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/);
 const request = (permission: string | null, input: z.ZodTypeAny) => ({ permission, input });
+/**
+ * Exports the server runs with KiCad's own exporters on the stored project, and the
+ * editor surface each needs. Output bytes stay on the server; a plugin gets ids.
+ */
+export const EXPORT_KINDS = Object.freeze({
+    gerbers: { tool: 'gerbers', surface: 'editor:pcbnew' },
+    drill: { tool: 'drill', surface: 'editor:pcbnew' },
+    ipc356: { tool: 'ipc356', surface: 'editor:pcbnew' },
+    'fab-components': { tool: 'fab_components', surface: 'editor:pcbnew' },
+} as const);
+export type ExportKind = keyof typeof EXPORT_KINDS;
+export const EXPORT_LIMITS = Object.freeze({ jsonBytes: 1024 * 1024, bundleBytes: 32 * 1024 * 1024, extraFiles: 16, extraBytes: 2 * 1024 * 1024, bundleParts: 8, ttlMs: 60 * 60 * 1000 });
+const exportFile = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,120}$/);
+const exportId = z.string().uuid();
 /** The complete host operation allowlist. Tests must cover every entry. */
 export const METHODS = {
     // Dynamic endpoint grants are checked by both the host and server.
@@ -37,6 +51,15 @@ export const METHODS = {
     // Active content gets its own grant. The host, not the plugin, writes the first bytes of the page.
     'files.saveHtml': request('files:save-html', z.object({ name: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,90}\.html$/), html: z.string().max(8 * 1024 * 1024) }).strict()),
     'files.saveImage': request('files:save', z.object({ name: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,90}\.png$/), base64: z.string().min(16).max(Math.ceil(4 * 1024 * 1024 / 3) * 4) }).strict()),
+    // Server-side exports of the open document; bundles zip them for download.
+    'exports.run': request('project:export', z.object({ kind: z.enum(Object.keys(EXPORT_KINDS) as [ExportKind, ...ExportKind[]]) }).strict()),
+    'exports.readJson': request('project:export', z.object({ exportId, name: exportFile }).strict()),
+    'exports.bundle': request('project:export', z.object({
+        parts: z.array(z.object({ exportId, rename: z.record(exportFile, exportFile).optional() }).strict()).min(1).max(EXPORT_LIMITS.bundleParts),
+        extraFiles: z.array(z.object({ name: exportFile, text: z.string().max(EXPORT_LIMITS.extraBytes) }).strict()).max(EXPORT_LIMITS.extraFiles).optional(),
+        zipName: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,90}\.zip$/),
+    }).strict()),
+    'files.saveBundle': request('files:save', z.object({ bundleId: exportId }).strict()),
     'editor.requestPlacement': request('editor:place-items', z.object({ label: z.string().min(1).max(100), sexpr: z.string().max(512 * 1024) }).strict()),
 } as const;
 export type Method = keyof typeof METHODS;

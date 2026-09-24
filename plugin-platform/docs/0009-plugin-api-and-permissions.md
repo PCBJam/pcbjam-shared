@@ -41,6 +41,10 @@ permissions. `context.get()` needs no additional permission.
 | `files.save({name, text})` | `files:save` | Trusted text download confirmation; download-requested or cancelled. |
 | `files.saveHtml({name, html})` | `files:save-html` | Trusted download confirmation for a standalone web page; PCBJam prepends a policy that blocks all network access from the saved file. |
 | `files.saveImage({name, base64})` | `files:save` | Trusted download confirmation for a PNG; bytes that are not a PNG are refused. |
+| `exports.run({kind})` | `project:export` | Run a KiCad export (`gerbers`, `drill`, `ipc356`, `fab-components`) of the open document on PCBJam’s servers; returns an export id and its file names and sizes. The bytes stay on the server. |
+| `exports.readJson({exportId, name})` | `project:export` | Read a JSON output of an export (at most 1 MiB), e.g. the `fab-components` component list. |
+| `exports.bundle({parts, extraFiles?, zipName})` | `project:export` | Zip exports (optionally renaming files) with text files the plugin made; returns a bundle id, name, size and file list. |
+| `files.saveBundle({bundleId})` | `files:save` | Trusted download confirmation for a bundle ZIP; download-requested or cancelled. |
 | `editor.requestPlacement({label, sexpr})` | `editor:place-items` | Confirmed symbol placement: placed or cancelled. |
 <!-- END GENERATED HOST API -->
 
@@ -55,7 +59,7 @@ feature uses: every extra line is a reason to decline.
 | `ui:custom` | Run a custom interface in a sandboxed iframe | — |
 | `ui:project-data` | Disclose plugin results to its custom interface | — |
 | `files:choose` | Read local files you explicitly choose for this plugin | `files.choose`, `files.readText`, `files.close` |
-| `files:save` | Request a text or image file download, confirmed by you | `files.save`, `files.saveImage` |
+| `files:save` | Request a text, image or ZIP file download, confirmed by you | `files.save`, `files.saveImage`, `files.saveBundle` |
 | `files:save-html` | Request a web page download, confirmed by you; the page contains this plugin's code, which runs when you open the file | `files.saveHtml` |
 | `editor:place-items` | Request item placement, confirmed by you in the editor | `editor.requestPlacement` |
 | `project:read-info` | Read metadata and file names in the current project | `project.getInfo`, `documents.list` |
@@ -63,6 +67,7 @@ feature uses: every extra line is a reason to decline.
 | `editor:read-selection` | Read selected item IDs in the current editor | `selection.get` |
 | `editor:select` | Change which items are selected in the current editor | `editor.select` |
 | `storage:local` | Store local data for this plugin, account and project | `storage.get`, `storage.set`, `storage.delete`, `storage.list` |
+| `project:export` | Generate export files such as Gerbers, drill files and netlists from the current document on PCBJam's servers | `exports.run`, `exports.readJson`, `exports.bundle` |
 <!-- END GENERATED PERMISSIONS -->
 
 `network:<name>` and `backend:identity:<name>` are declared per backend; see
@@ -437,6 +442,42 @@ rejects with `Invalid API arguments` and does nothing.
 | `Export exceeds size limit` | A read or download is over its limit. | Narrow with `types`/`omit`, or save less. |
 | `Plugin CPU budget exceeded` | One turn of logic ran over 1 s. | Split work across `await`s or timers. |
 | Backend codes (`BACKEND_NOT_APPROVED`, …) | See [Backend requests](#backend-requests). | |
+
+## Exports (Gerbers, drill files, netlists)
+
+With `project:export`, a plugin in the PCB editor can have PCBJam run KiCad's
+own exporters on the saved project (including unsaved collaborative edits) on
+PCBJam's servers. The files stay on the server: you get ids, names and sizes,
+and the user downloads a ZIP after confirming.
+
+```ts
+const gerbers = await pcbjam.exports.run('gerbers');        // {exportId, kind, files: [{name, size}]}
+const drill = await pcbjam.exports.run('drill');
+const fab = await pcbjam.exports.run('fab-components');
+const parts = await pcbjam.exports.readJson(fab.exportId, 'fab-components.json');
+const bundle = await pcbjam.exports.bundle({
+  parts: [{ exportId: gerbers.exportId }, { exportId: drill.exportId }],
+  extraFiles: [{ name: 'bom.csv', text: makeBom(parts) }],
+  zipName: 'board.zip',
+});                                                           // {bundleId, name, size, files}
+await pcbjam.files.saveBundle({ bundleId: bundle.bundleId }); // needs files:save
+```
+
+- Kinds: `gerbers` (one file per enabled layer plus a `.gbrjob`, KiCad's
+  defaults), `drill` (Excellon, metric), `ipc356` (`netlist.ipc`) and
+  `fab-components` (board size, origins, copper layers and every footprint with
+  position, rotation, side, attributes and fields, as `fab-components.json`).
+- `readJson` reads JSON outputs up to 1 MiB. `bundle` takes up to 8 exports,
+  can rename their files (`rename: {'netlist.ipc': 'my.ipc'}`), and adds up to
+  16 text files of up to 2 MiB in total; the ZIP is at most 32 MiB. File names
+  in one ZIP must be unique.
+- Exports and bundles belong to the running plugin instance and expire after an
+  hour. Each export runs KiCad on the server: at most 12 per minute per plugin
+  and 24 per account. Errors: `EXPORT_FAILED` (KiCad could not export the
+  board, with its reason) and `EXPORT_UNAVAILABLE` (the export service is busy;
+  retry shortly).
+- Available only on hosted PCBJam with a saved project, in the PCB editor.
+  `context.get().methods` lists `exports.run` when it is available.
 
 ## Not available
 

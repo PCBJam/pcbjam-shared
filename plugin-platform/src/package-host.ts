@@ -1,8 +1,8 @@
 import {backendPermissions, validateBackendRequest, BACKEND_LIMITS, type BackendEndpoint} from '../backend-contract.mjs';
 const runtimeAsset = (name: string) => new URL(name, import.meta.url).href;
-import { METHODS, LIMITS, LEASED_READS, SAVED_HTML_PREFIX, pngBytes, boundedJSON, type Method, type DocumentAdapter } from './package-api';
+import { METHODS, LIMITS, LEASED_READS, SAVED_HTML_PREFIX, EXPORT_KINDS, EXPORT_LIMITS, pngBytes, boundedJSON, type Method, type DocumentAdapter } from './package-api';
 import { storageCall } from './package-storage';
-import { platformConfiguration, platformRequest, verifyText, runtimeAssets } from './package-service';
+import { platformConfiguration, platformRequest, platformBytes, verifyText, runtimeAssets } from './package-service';
 export { configurePlatform } from './package-service';
 export { cleanupPluginStorage } from './package-storage';
 export interface PluginDescriptor {
@@ -60,7 +60,7 @@ export interface PackageHostOptions {
         name: string;
         /** Present for kind 'text' only. */
         text?: string;
-        kind: 'text' | 'html' | 'image';
+        kind: 'text' | 'html' | 'image' | 'archive';
         bytes: Uint8Array;
         method: string;
     }, signal: AbortSignal): Promise<{
@@ -163,6 +163,11 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
         if(method==='http.request')return !!activation && Object.entries(options.plugin.manifest.endpoints??{}).some(([name,p])=>Object.keys(backendPermissions({[name]:p})).every(grant=>grants.includes(grant)));
         if (SAVES.has(method))
             return !!options.saveFile;
+        // Server-side exports exist only on the hosted platform, for the editors their kinds support.
+        if (method.startsWith('exports.'))
+            return !!activation && Object.values(EXPORT_KINDS).some(kind => kind.surface === 'editor:' + options.context().tool);
+        if (method === 'files.saveBundle')
+            return !!activation && !!options.saveFile;
         if (method === 'board.geometryStart')
             // The editor sets the flag for the PCB editor with a capable engine; the engine itself refuses anything else.
             return !!options.documents?.openGeometry && options.context().canReadGeometry === true;
@@ -360,6 +365,28 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
                     throw new Error('Invalid download result');
                 return { status: result.status };
             }
+            case 'exports.run':
+                if (EXPORT_KINDS[params.kind as keyof typeof EXPORT_KINDS].surface !== 'editor:' + context.tool)
+                    throw new Error('This export is unavailable in this editor');
+                // Exports run KiCad on the server and may take a while.
+                return platformRequest('activations/' + activation!.id + '/exports', 'POST', params, signal, 120000);
+            case 'exports.readJson':
+                return platformRequest('activations/' + activation!.id + '/exports/' + params.exportId + '/json?name=' + encodeURIComponent(params.name), 'GET', undefined, signal);
+            case 'exports.bundle':
+                return platformRequest('activations/' + activation!.id + '/bundles', 'POST', params, signal, 120000);
+            case 'files.saveBundle': {
+                const bytes = await platformBytes('activations/' + activation!.id + '/bundles/' + params.bundleId, EXPORT_LIMITS.bundleBytes, signal);
+                check();
+                // Only ever a ZIP: the server built it, the name says so, the bytes must agree.
+                if (bytes.length < 4 || bytes[0] !== 0x50 || bytes[1] !== 0x4b || bytes[2] !== 0x03 || bytes[3] !== 0x04)
+                    throw new Error('Bundle is not a ZIP archive');
+                const meta = await platformRequest('activations/' + activation!.id + '/bundles/' + params.bundleId + '/info', 'GET', undefined, signal);
+                const result = await options.saveFile!({ name: String(meta.name), kind: 'archive', bytes, method }, signal);
+                check();
+                if (result.status !== 'download-requested' && result.status !== 'cancelled')
+                    throw new Error('Invalid download result');
+                return { status: result.status };
+            }
             case 'files.choose': {
                 requirePermission('files:choose');
                 exact(params, ['extensions']);
@@ -412,7 +439,7 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             default: throw new Error('Unknown PCBJam API method');
         }
     }
-    const methodLimit = (method: string) => method === 'http.request' ? BACKEND_LIMITS.resultBytes : method === 'files.readText' ? 5 * 1024 * 1024 : LIMITS.snapshotBytes;
+    const methodLimit = (method: string) => method === 'http.request' ? BACKEND_LIMITS.resultBytes : method === 'files.readText' ? 5 * 1024 * 1024 : method === 'exports.readJson' ? EXPORT_LIMITS.jsonBytes + 1024 : LIMITS.snapshotBytes;
     options.signal.addEventListener('abort', dispose, { once: true });
     try {
         options.signal.throwIfAborted();

@@ -32,6 +32,18 @@ export async function platformRequest(path:string, method='GET', data?:unknown, 
   if(!response.ok)throw Object.assign(new Error(result.error??'Plugin operation failed'), typeof result.code==='string'&&/^[A-Z_]{1,40}$/.test(result.code)?{code:result.code}:{});
   return result;
 }
+/** Binary GET from the platform (bundles). Errors still arrive as JSON. */
+export async function platformBytes(path:string, maxBytes:number, signal?:AbortSignal, timeoutMs=60000) {
+  if(!configuration)throw new Error('Plugin platform is not configured');
+  const deadline=AbortSignal.timeout(timeoutMs);
+  const response=await fetch(configuration.apiBase+'/api/plugin-platform/v1/'+path,{
+    method:'GET',credentials:'include',redirect:'error',cache:'no-store',signal:signal?AbortSignal.any([signal,deadline]):deadline,
+    headers:{'X-PCBJam-Plugin-Platform':'1'},
+  });
+  const bytes=await boundedResponse(response,maxBytes);
+  if(!response.ok){let error='Plugin operation failed';try{error=JSON.parse(new TextDecoder().decode(bytes)).error??error;}catch{/* non-JSON error body */}throw new Error(error);}
+  return bytes;
+}
 export async function sha256(bytes:Uint8Array) {
   const digest=await crypto.subtle.digest('SHA-256',new Uint8Array(bytes));
   return [...new Uint8Array(digest)].map(b=>b.toString(16).padStart(2,'0')).join('');

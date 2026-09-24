@@ -51,6 +51,11 @@ declare const __clearTimer: (message: string) => void;
             handlers.set(command, handler);
         },
         http: Object.freeze({request:(endpointId:string,options:object)=>call('http.request',{...options,endpointId})}),
+        exports: Object.freeze({
+            run: (kind: unknown) => call('exports.run', { kind }),
+            readJson: (exportId: unknown, name: unknown) => call('exports.readJson', { exportId, name }),
+            bundle: (proposal: unknown) => call('exports.bundle', proposal),
+        }),
         context: Object.freeze({ get: () => call('context.get') }),
         project: Object.freeze({ getInfo: () => call('project.getInfo') }),
         documents: Object.freeze({
@@ -98,6 +103,7 @@ declare const __clearTimer: (message: string) => void;
             save: (proposal: unknown) => call('files.save', proposal),
             saveHtml: (proposal: unknown) => call('files.saveHtml', proposal),
             saveImage: (proposal: unknown) => call('files.saveImage', proposal),
+            saveBundle: (proposal: unknown) => call('files.saveBundle', proposal),
             choose: (options: unknown) => call('files.choose', options),
             readText: (handle: string) => call('files.readText', { handle }),
             close: (handle: string) => call('files.close', { handle }),
