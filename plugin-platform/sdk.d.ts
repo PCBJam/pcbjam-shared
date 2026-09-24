@@ -12,7 +12,7 @@ type PCBJamGeometryDrawing = {layer:string;text?:'reference'|'value'|'field'|'te
 type PCBJamGeometryRecord = {$:string;[key:string]:any};
 type PCBJamItemError = {id:string;error:'TOO_LARGE'|'DEFERRED'};
 // BEGIN GENERATED HOST METHODS
-type PCBJamHostMethod = "http.request" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "board.geometryStart" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "exports.run" | "exports.readJson" | "exports.bundle" | "files.saveBundle" | "editor.requestPlacement";
+type PCBJamHostMethod = "http.request" | "http.upload" | "ui.openExternal" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "board.geometryStart" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "exports.run" | "exports.readJson" | "exports.bundle" | "files.saveBundle" | "editor.requestPlacement";
 // END GENERATED HOST METHODS
 /** Plugin logic only, and only while a command is being handled: at most 32 pending, 60 s each,
  *  all cancelled when the command settles. An exception thrown from a callback stops the plugin. */
@@ -20,7 +20,13 @@ declare function setTimeout(callback:(...args:any[])=>unknown,ms?:number,...args
 declare function clearTimeout(id:number):void;
 declare const pcbjam: {
   /** Approved HTTPS backend; no arbitrary URLs, headers or API keys. */
-  http:{request(endpointId:string,request:{method:'GET';path:string}|{method:'POST';path:string;json:PCBJamJSON}):Promise<{status:number;headers:Record<string,string>;body:PCBJamJSON}>};
+  http:{request(endpointId:string,request:{method:'GET';path:string}|{method:'POST';path:string;json:PCBJamJSON}):Promise<{status:number;headers:Record<string,string>;body:PCBJamJSON}>;
+    /** POST a bundle (`exports.bundle`) as multipart/form-data to an endpoint path that declares `upload` in the
+     *  manifest; `fields` become text form fields. The answer must be JSON. Same grants as `request`. */
+    upload(endpointId:string,request:{path:string;bundleId:string;fields?:Record<string,string>}):Promise<{status:number;headers:Record<string,string>;body:PCBJamJSON}>};
+  /** Open an https page of one of the plugin's approved endpoint sites in a new browser tab after the user confirms
+   *  (needs `ui:open-external`). Never an iframe; the editor stays open. */
+  ui:{openExternal(url:string):Promise<{status:'opened'|'cancelled'}>};
   handle(command:string,handler:(params:any)=>unknown|Promise<unknown>):void;
   context:{get():Promise<{
     tool:string;fileName:string;readOnly:boolean;canPlaceItems:boolean;

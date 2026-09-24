@@ -1,4 +1,4 @@
-import {validateBackendRequest} from '../backend-contract.mjs';
+import {validateBackendRequest, validateUploadRequest} from '../backend-contract.mjs';
 import { z } from 'zod';
 const empty = z.object({}).strict();
 const id = z.string().min(1).max(128);
@@ -18,6 +18,20 @@ export const EXPORT_KINDS = Object.freeze({
     'fab-components': { tool: 'fab_components', surface: 'editor:pcbnew' },
 } as const);
 export type ExportKind = keyof typeof EXPORT_KINDS;
+/**
+ * Whether `url` may be opened for a plugin whose approved endpoints are `origins`: https, no
+ * credentials, and the endpoint's host or a subdomain of its site (www.example.com allows
+ * example.com and *.example.com).
+ */
+export function externalUrlAllowed(url: string, origins: string[]) {
+    let parsed: URL;
+    try { parsed = new URL(url); } catch { return false; }
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port) return false;
+    return origins.some(origin => {
+        const host = new URL(origin).hostname, site = host.replace(/^www\./, '');
+        return parsed.hostname === host || parsed.hostname === site || parsed.hostname.endsWith('.' + site);
+    });
+}
 export const EXPORT_LIMITS = Object.freeze({ jsonBytes: 1024 * 1024, bundleBytes: 32 * 1024 * 1024, extraFiles: 16, extraBytes: 2 * 1024 * 1024, bundleParts: 8, ttlMs: 60 * 60 * 1000 });
 const exportFile = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,120}$/);
 const exportId = z.string().uuid();
@@ -25,6 +39,10 @@ const exportId = z.string().uuid();
 export const METHODS = {
     // Dynamic endpoint grants are checked by both the host and server.
     'http.request': request(null, z.unknown().transform((value,ctx)=>{try{return validateBackendRequest(value);}catch{ctx.addIssue({code:z.ZodIssueCode.custom,message:'Invalid backend request'});return z.NEVER;}})),
+    // Upload a bundle to an approved endpoint path that declares `upload`; same dynamic grants as http.request.
+    'http.upload': request(null, z.unknown().transform((value,ctx)=>{try{return validateUploadRequest(value);}catch{ctx.addIssue({code:z.ZodIssueCode.custom,message:'Invalid upload request'});return z.NEVER;}})),
+    // A new browser tab on one of the plugin's approved endpoint sites, after the user confirms.
+    'ui.openExternal': request('ui:open-external', z.object({ url: z.string().url().max(2048) }).strict()),
     'context.get': request(null, empty),
     'project.getInfo': request('project:read-info', empty),
     'documents.list': request('project:read-info', z.object(page).strict()),

@@ -5,7 +5,12 @@ export const BACKEND_LIMITS = Object.freeze({
   resultBytes: 512 * 1024,
   deadlineMs: 30000,
   hostDeadlineMs: 35000,
+  // One ZIP per upload; its base64 form must fit one Durable Object RPC message.
+  uploadBytes: 16 * 1024 * 1024,
+  uploadFields: 16,
+  uploadFieldChars: 1024,
 });
+const UPLOAD_NAME = /^[A-Za-z0-9_.\[\]-]{1,64}$/;
 const fail = () => {
   throw new Error("Invalid plugin backend policy or request");
 };
@@ -72,7 +77,7 @@ export function validateEndpoints(input) {
   const output = Object.create(null);
   for (const [name, value] of entries) {
     if (!/^[a-z][a-z0-9-]{0,31}$/.test(name)) fail();
-    exact(value, ["origin", "paths", "methods", "auth"]);
+    exact(value, ["origin", "paths", "methods", "auth", "upload"]);
     const origin = backendOrigin(value.origin);
     if (
       !Array.isArray(value.paths) ||
@@ -91,11 +96,28 @@ export function validateEndpoints(input) {
     )
       fail();
     if (!["none", "pcbjam-user"].includes(value.auth)) fail();
+    // Optional: paths that take one ZIP made by the plugin (exports.bundle) as
+    // multipart/form-data. Part of the approved policy like everything else.
+    let upload;
+    if (value.upload !== undefined) {
+      exact(value.upload, ["paths", "field", "maxBytes"]);
+      const u = value.upload;
+      if (
+        !value.methods.includes("POST") ||
+        !Array.isArray(u.paths) || !u.paths.length || new Set(u.paths).size !== u.paths.length ||
+        u.paths.some((p) => !paths.includes(p)) ||
+        typeof u.field !== "string" || !UPLOAD_NAME.test(u.field) ||
+        !Number.isSafeInteger(u.maxBytes) || u.maxBytes < 1 || u.maxBytes > BACKEND_LIMITS.uploadBytes
+      )
+        fail();
+      upload = { paths: [...u.paths].sort(), field: u.field, maxBytes: u.maxBytes };
+    }
     output[name] = {
       origin,
       paths,
       methods: [...value.methods].sort(),
       auth: value.auth,
+      ...(upload ? { upload } : {}),
     };
   }
   return output;
@@ -109,7 +131,7 @@ export function backendPolicyText(endpoint) {
 export function backendPermissions(endpoints) {
   return Object.fromEntries(
     Object.entries(endpoints ?? {}).flatMap(([name, p]) => [
-      ["network:" + name, "Send data to " + p.origin],
+      ["network:" + name, (p.upload ? "Send data and upload files to " : "Send data to ") + p.origin],
       ...(p.auth === "pcbjam-user"
         ? [
             [
@@ -165,6 +187,24 @@ export function validateBackendRequest(value, policy) {
     (!policy.paths.includes(value.path) ||
       !policy.methods.includes(value.method))
   )
+    fail();
+  return value;
+}
+
+/** An upload of a bundle (exports.bundle) to an endpoint path that declares `upload`. */
+export function validateUploadRequest(value, policy) {
+  exact(value, ["endpointId", "path", "bundleId", "fields"]);
+  const fields = value.fields ?? {};
+  if (
+    typeof value.endpointId !== "string" || !/^[a-z][a-z0-9-]{0,31}$/.test(value.endpointId) ||
+    typeof value.bundleId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value.bundleId) ||
+    !fields || typeof fields !== "object" || Array.isArray(fields) ||
+    Object.keys(fields).length > BACKEND_LIMITS.uploadFields ||
+    Object.entries(fields).some(([k, v]) => !UPLOAD_NAME.test(k) || typeof v !== "string" || v.length > BACKEND_LIMITS.uploadFieldChars || /[\r\n]/.test(v))
+  )
+    fail();
+  backendPath(value.path);
+  if (policy && (!policy.upload || !policy.upload.paths.includes(value.path) || Object.hasOwn(fields, policy.upload.field)))
     fail();
   return value;
 }

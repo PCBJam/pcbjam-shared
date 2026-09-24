@@ -136,3 +136,35 @@ test("request JSON limits and method/path restrictions cannot be overridden", ()
   for (let i = 0; i < 34; i++) depth = { depth };
   assert.throws(() => validateBackendRequest({ ...request, json: depth }));
 });
+
+test("an endpoint may declare upload paths; uploads stay inside that declaration", async () => {
+  const { validateUploadRequest, backendPermissions, backendPolicyText } = await import("../backend-contract.mjs");
+  const pcbway = { origin: "https://www.pcbway.com", paths: ["/Common/KiCadUpFile/"], methods: ["POST"], auth: "none", upload: { paths: ["/Common/KiCadUpFile/"], field: "upload[file]", maxBytes: 16 * 1024 * 1024 } };
+  const { pcbway: policy } = validateEndpoints({ pcbway });
+  assert.deepEqual(policy.upload, { paths: ["/Common/KiCadUpFile/"], field: "upload[file]", maxBytes: 16 * 1024 * 1024 });
+  // The upload is part of what the operator approves and what the user sees.
+  assert.notEqual(backendPolicyText(policy), backendPolicyText({ ...policy, upload: undefined }));
+  assert.equal(backendPermissions({ pcbway: policy })["network:pcbway"], "Send data and upload files to https://www.pcbway.com");
+  assert.equal(backendPermissions({ other: validateEndpoints({ other: endpoint }).other })["network:other"], "Send data to https://api.author.example");
+  for (const bad of [
+    { ...pcbway, methods: ["GET"] },
+    { ...pcbway, upload: { ...pcbway.upload, paths: ["/elsewhere"] } },
+    { ...pcbway, upload: { ...pcbway.upload, field: 'f"; x="y' } },
+    { ...pcbway, upload: { ...pcbway.upload, maxBytes: 17 * 1024 * 1024 } },
+    { ...pcbway, upload: { ...pcbway.upload, extra: 1 } },
+  ])
+    assert.throws(() => validateEndpoints({ pcbway: bad }));
+  const request = { endpointId: "pcbway", path: "/Common/KiCadUpFile/", bundleId: "11111111-1111-4111-8111-111111111111", fields: { boardWidth: "50.00", boardLayer: "2" } };
+  assert.deepEqual(validateUploadRequest(request, policy), request);
+  for (const bad of [
+    { ...request, path: "/Common/Other/" },
+    { ...request, bundleId: "not-a-uuid" },
+    { ...request, fields: { "upload[file]": "shadow" } },
+    { ...request, fields: { a: "x\r\ny" } },
+    { ...request, fields: { a: 1 } },
+    { ...request, extra: true },
+  ])
+    assert.throws(() => validateUploadRequest(bad, policy), undefined, JSON.stringify(bad));
+  // An endpoint without an upload declaration takes no uploads.
+  assert.throws(() => validateUploadRequest({ ...request, path: "/v1/preferences" }, validateEndpoints({ backend: endpoint }).backend));
+});

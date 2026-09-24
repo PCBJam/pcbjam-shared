@@ -50,7 +50,8 @@ declare const __clearTimer: (message: string) => void;
                 throw new Error('Invalid or duplicate plugin command');
             handlers.set(command, handler);
         },
-        http: Object.freeze({request:(endpointId:string,options:object)=>call('http.request',{...options,endpointId})}),
+        http: Object.freeze({request:(endpointId:string,options:object)=>call('http.request',{...options,endpointId}),upload:(endpointId:string,options:object)=>call('http.upload',{...options,endpointId})}),
+        ui: Object.freeze({openExternal:(url:unknown)=>call('ui.openExternal',{url})}),
         exports: Object.freeze({
             run: (kind: unknown) => call('exports.run', { kind }),
             readJson: (exportId: unknown, name: unknown) => call('exports.readJson', { exportId, name }),

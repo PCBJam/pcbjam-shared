@@ -18,6 +18,8 @@ permissions. `context.get()` needs no additional permission.
 | Call (`await pcbjam.…`) | Permission | Result |
 |---|---|---|
 | `http.request(endpointId, {method, path, json?})` | `network:<id>`; plus `backend:identity:<id>` for identity | Send bounded JSON to an operator-approved endpoint; optionally carries a signed user identity. |
+| `http.upload(endpointId, {path, bundleId, fields?})` | `network:<id>` (endpoint with `upload`) | POST a bundle (`exports.bundle`) as multipart/form-data to an approved endpoint path that declares `upload`; the answer must be JSON. |
+| `ui.openExternal(url)` | `ui:open-external` | Open an https page of one of the plugin’s approved endpoint sites in a new tab after the user confirms; opened or cancelled. |
 | `context.get()` | None extra | Editor name, read-only state, supported host methods and limits. |
 | `project.getInfo()` | `project:read-info` | Current project ID, scope, name and editor read-only state. |
 | `documents.list(page)` | `project:read-info` | Paged project design-file names; defaults cursor 0, limit 50. |
@@ -68,6 +70,7 @@ feature uses: every extra line is a reason to decline.
 | `editor:select` | Change which items are selected in the current editor | `editor.select` |
 | `storage:local` | Store local data for this plugin, account and project | `storage.get`, `storage.set`, `storage.delete`, `storage.list` |
 | `project:export` | Generate export files such as Gerbers, drill files and netlists from the current document on PCBJam's servers | `exports.run`, `exports.readJson`, `exports.bundle` |
+| `ui:open-external` | Open pages of this plugin's approved sites in a new browser tab, after you confirm | `ui.openExternal` |
 <!-- END GENERATED PERMISSIONS -->
 
 `network:<name>` and `backend:identity:<name>` are declared per backend; see
@@ -478,6 +481,46 @@ await pcbjam.files.saveBundle({ bundleId: bundle.bundleId }); // needs files:sav
   retry shortly).
 - Available only on hosted PCBJam with a saved project, in the PCB editor.
   `context.get().methods` lists `exports.run` when it is available.
+
+## Upload a bundle and open a page
+
+A plugin with an approved [backend](#backend-requests) can send a bundle it
+made with `exports.bundle` to that backend, and offer the user a page there.
+
+```jsonc
+// manifest.json
+"permissions": ["project:export", "files:save", "network:fab", "ui:open-external", ...],
+"endpoints": {
+  "fab": {
+    "origin": "https://fab.example.com",
+    "paths": ["/upload"],
+    "methods": ["POST"],
+    "auth": "none",
+    "upload": { "paths": ["/upload"], "field": "file", "maxBytes": 16777216 }
+  }
+}
+```
+
+```ts
+const answer = await pcbjam.http.upload('fab', { path: '/upload', bundleId, fields: { layers: '2' } });
+// answer.body is the endpoint's JSON, e.g. {redirect: 'https://fab.example.com/quote/42'}
+await pcbjam.ui.openExternal(answer.body.redirect);   // user confirms, new tab
+```
+
+- `upload` lists the paths that take a file, the multipart field name, and the
+  largest file (at most 16 MiB). It is part of what PCBJam approves; the
+  consent screen reads "Send data and upload files to …".
+- `http.upload` sends the stored bundle as `multipart/form-data`: your `fields`
+  (up to 16, 1,024 characters each, no line breaks) and the ZIP under the
+  declared field name, with the bundle's file name. The bytes go from PCBJam's
+  servers to the endpoint; they never pass through the plugin. The answer must
+  be JSON; `text/plain` or `text/html` is accepted only if the body parses as
+  JSON. Same budgets and approval rules as `http.request`.
+- `ui.openExternal(url)` (permission `ui:open-external`) opens an https page
+  in a **new tab** after the user confirms, never inside PCBJam. The page must
+  be on one of your approved endpoint sites: its host or a subdomain of its
+  site (`www.example.com` allows `example.com` and `*.example.com`); no
+  credentials or ports. Returns `opened` or `cancelled`.
 
 ## Not available
 

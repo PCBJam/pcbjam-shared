@@ -1,6 +1,6 @@
-import {backendPermissions, validateBackendRequest, BACKEND_LIMITS, type BackendEndpoint} from '../backend-contract.mjs';
+import {backendPermissions, validateBackendRequest, validateUploadRequest, BACKEND_LIMITS, type BackendEndpoint} from '../backend-contract.mjs';
 const runtimeAsset = (name: string) => new URL(name, import.meta.url).href;
-import { METHODS, LIMITS, LEASED_READS, SAVED_HTML_PREFIX, EXPORT_KINDS, EXPORT_LIMITS, pngBytes, boundedJSON, type Method, type DocumentAdapter } from './package-api';
+import { METHODS, LIMITS, LEASED_READS, SAVED_HTML_PREFIX, EXPORT_KINDS, EXPORT_LIMITS, externalUrlAllowed, pngBytes, boundedJSON, type Method, type DocumentAdapter } from './package-api';
 import { storageCall } from './package-storage';
 import { platformConfiguration, platformRequest, platformBytes, verifyText, runtimeAssets } from './package-service';
 export { configurePlatform } from './package-service';
@@ -66,6 +66,8 @@ export interface PackageHostOptions {
     }, signal: AbortSignal): Promise<{
         status: 'download-requested' | 'cancelled';
     }>;
+    /** Draw the confirmation, then open `url` in a new tab (noopener). Never navigate the editor. */
+    openExternal?(proposal: { url: string; site: string }, signal: AbortSignal): Promise<{ status: 'opened' | 'cancelled' }>;
     /** Test-only trusted configuration; publisher manifests cannot set origins. */
     uiOrigin?: string;
     /** Trusted confirmation UI must call this immediately before native effects. */
@@ -161,6 +163,8 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
     const SAVES = new Set(['files.save', 'files.saveHtml', 'files.saveImage']);
     const available = (method: string) => {
         if(method==='http.request')return !!activation && Object.entries(options.plugin.manifest.endpoints??{}).some(([name,p])=>Object.keys(backendPermissions({[name]:p})).every(grant=>grants.includes(grant)));
+        if(method==='http.upload')return !!activation && Object.entries(options.plugin.manifest.endpoints??{}).some(([name,p])=>!!(p as BackendEndpoint).upload && Object.keys(backendPermissions({[name]:p})).every(grant=>grants.includes(grant)));
+        if(method==='ui.openExternal')return !!activation && !!options.openExternal && Object.keys(options.plugin.manifest.endpoints??{}).length>0;
         if (SAVES.has(method))
             return !!options.saveFile;
         // Server-side exports exist only on the hosted platform, for the editors their kinds support.
@@ -262,6 +266,22 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
                 validateBackendRequest(params,endpoint);
                 for(const permission of Object.keys(backendPermissions({[params.endpointId]:endpoint})))requirePermission(permission);
                 return platformRequest('activations/'+activation!.id+'/http','POST',params,signal,BACKEND_LIMITS.hostDeadlineMs);
+            }
+            case 'http.upload': {
+                const endpoint=options.plugin.manifest.endpoints?.[params.endpointId];
+                if(!endpoint)throw new Error('Undeclared backend');
+                validateUploadRequest(params,endpoint);
+                for(const permission of Object.keys(backendPermissions({[params.endpointId]:endpoint})))requirePermission(permission);
+                // The server sends the stored bundle; only its id crosses the sandbox.
+                return platformRequest('activations/'+activation!.id+'/upload','POST',params,signal,60000);
+            }
+            case 'ui.openExternal': {
+                const origins=Object.values(options.plugin.manifest.endpoints??{}).map(e=>(e as BackendEndpoint).origin);
+                if(!externalUrlAllowed(params.url,origins))throw new Error('This link is not on one of the plugin\'s approved sites');
+                const result=await options.openExternal!({url:params.url,site:new URL(params.url).hostname},signal);
+                check();
+                if(result.status!=='opened'&&result.status!=='cancelled')throw new Error('Invalid open result');
+                return {status:result.status};
             }
             case 'context.get': return { tool: context.tool, fileName: context.fileName, readOnly: context.readOnly, canPlaceItems: available('editor.requestPlacement') && grants.includes('editor:place-items'),
                 methods: Object.keys(METHODS).filter(name => available(name) && (!METHODS[name as Method].permission || grants.includes(METHODS[name as Method].permission!))), limits: LIMITS };
@@ -439,7 +459,7 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             default: throw new Error('Unknown PCBJam API method');
         }
     }
-    const methodLimit = (method: string) => method === 'http.request' ? BACKEND_LIMITS.resultBytes : method === 'files.readText' ? 5 * 1024 * 1024 : method === 'exports.readJson' ? EXPORT_LIMITS.jsonBytes + 1024 : LIMITS.snapshotBytes;
+    const methodLimit = (method: string) => method === 'http.request' || method === 'http.upload' ? BACKEND_LIMITS.resultBytes : method === 'files.readText' ? 5 * 1024 * 1024 : method === 'exports.readJson' ? EXPORT_LIMITS.jsonBytes + 1024 : LIMITS.snapshotBytes;
     options.signal.addEventListener('abort', dispose, { once: true });
     try {
         options.signal.throwIfAborted();
