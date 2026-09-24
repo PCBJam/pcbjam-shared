@@ -128,7 +128,7 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
     let poll: ReturnType<typeof setInterval> | undefined;
     const nonce = crypto.randomUUID(), documentHandle = crypto.randomUUID();
     const binding = options.storageBinding?.() ?? null;
-    let activation: {id:string;grants:string[];userId:string;pluginId:string;storageEpoch:number;uiOrigin:string;placementEnabled:boolean} | undefined;
+    let activation: {id:string;grants:string[];userId:string;pluginId:string;storageEpoch:number;uiOrigin:string;placementEnabled:boolean;digest:string;manifest:unknown;startup?:{main:string;uiUrl:string}} | undefined;
     let grants=options.plugin.manifest.permissions;
     // Keyed by permission: a lease only ever vouches for the grant the server actually checked.
     const leases=new Map<string,number>();
@@ -473,11 +473,57 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             grants=activation!.grants;
             options.onAuthorizationReady?.(authorize);
         }
-        const pkg = activation ? await platformRequest('activations/'+activation.id+'/logic','GET',undefined,signal) : await api('releases/' + options.plugin.digest);
+        // Current servers start the plugin in one round trip: the activation carries its logic and a UI ticket.
+        const pkg = activation?.startup ? {digest:activation.digest,manifest:activation.manifest,main:activation.startup.main}
+            : activation ? await platformRequest('activations/'+activation.id+'/logic','GET',undefined,signal) : await api('releases/' + options.plugin.digest);
         signal.throwIfAborted();
         if (pkg.digest !== options.plugin.digest || JSON.stringify(pkg.manifest) !== JSON.stringify(options.plugin.manifest))
             throw new Error('Plugin release changed');
         if(activation)await verifyText(pkg.main,options.plugin.fileMetadata?.['main.js']);
+        // The UI page loads in parallel with the runtime below.
+        frame = document.createElement('iframe');
+        frame.title = pkg.manifest.name + ' plugin';
+        frame.sandbox.add('allow-scripts');
+        frame.referrerPolicy = 'no-referrer';
+        frame.style.cssText = 'border:0;width:100%;height:100%;display:block;color-scheme:dark';
+        frame.addEventListener('load', () => { if (++loads > 1)
+            fail('Plugin navigation stopped this instance'); });
+        window.addEventListener('message', handshake);
+        uiReadyTimer = setTimeout(() => fail('Plugin UI did not connect'), 10000);
+        uiChannel.port1.onmessage = event => {
+            if (closed)
+                return;
+            const message = event.data;
+            if (!connected && message?.type === 'connected' && message.version === 1) {
+                connected = true;
+                clearTimeout(uiReadyTimer);
+                return;
+            }
+            try {
+                exact(message, ['id', 'command', 'params']);
+                if (!connected || activeId || !Number.isSafeInteger(message.id) || message.id <= lastUi || typeof message.command !== 'string' || !/^[a-z][a-zA-Z0-9.:-]{0,63}$/.test(message.command) || JSON.stringify(message).length > LIMITS.uiCommandBytes)
+                    throw new Error('Invalid plugin UI request');
+                const now = performance.now();
+                uiTimes = uiTimes.filter(t => now - t < LIMITS.uiCommandWindowMs);
+                uiTimes.push(now);
+                if (uiTimes.length > LIMITS.uiCommandsPerWindow)
+                    throw new Error('Plugin UI rate limit exceeded');
+                lastUi = activeId = message.id;
+                commandTimer = setTimeout(() => fail('Plugin action timed out'), LIMITS.commandTimeoutMs);
+                // The UI loads while the Worker boots; a command waits for the runtime.
+                void ready.then(() => { if (!closed) channel.port1.postMessage({ type: 'command', ...message }); }, () => { });
+            }
+            catch (error) {
+                fail((error as Error).message);
+            }
+        };
+        if(activation) {
+            const url=new URL(activation.startup?.uiUrl ?? (await platformRequest('activations/'+activation.id+'/ui-ticket','POST',undefined,signal)).url);
+            if(url.origin!==activation.uiOrigin||url.origin===location.origin||!/^\/render\/[A-Za-z0-9_-]{43}$/.test(url.pathname)||url.search||url.hash)throw new Error('Invalid plugin UI ticket');
+            frame.src=url.href+'#'+nonce;
+        } else frame.src = (options.uiOrigin ?? 'http://127.0.0.1:4318') + '/plugin/' + pkg.digest + '#' + nonce;
+        signal.throwIfAborted();
+        container.append(frame);
         const verified=await runtimeAssets(new URL('.',import.meta.url).href,signal);
         const [wasm, prelude] = await Promise.all([
             verified ? verified.load('quickjs.wasm').then(b=>b.buffer) : fetch(runtimeAsset('quickjs.wasm'), { signal }).then(r => { if (!r.ok)
@@ -542,49 +588,6 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             clearTimeout(bootTimer);
         }
         signal.throwIfAborted();
-        frame = document.createElement('iframe');
-        frame.title = pkg.manifest.name + ' plugin';
-        frame.sandbox.add('allow-scripts');
-        frame.referrerPolicy = 'no-referrer';
-        frame.style.cssText = 'border:0;width:100%;height:100%;display:block;color-scheme:dark';
-        frame.addEventListener('load', () => { if (++loads > 1)
-            fail('Plugin navigation stopped this instance'); });
-        window.addEventListener('message', handshake);
-        uiReadyTimer = setTimeout(() => fail('Plugin UI did not connect'), 10000);
-        uiChannel.port1.onmessage = event => {
-            if (closed)
-                return;
-            const message = event.data;
-            if (!connected && message?.type === 'connected' && message.version === 1) {
-                connected = true;
-                clearTimeout(uiReadyTimer);
-                return;
-            }
-            try {
-                exact(message, ['id', 'command', 'params']);
-                if (!connected || activeId || !Number.isSafeInteger(message.id) || message.id <= lastUi || typeof message.command !== 'string' || !/^[a-z][a-zA-Z0-9.:-]{0,63}$/.test(message.command) || JSON.stringify(message).length > LIMITS.uiCommandBytes)
-                    throw new Error('Invalid plugin UI request');
-                const now = performance.now();
-                uiTimes = uiTimes.filter(t => now - t < LIMITS.uiCommandWindowMs);
-                uiTimes.push(now);
-                if (uiTimes.length > LIMITS.uiCommandsPerWindow)
-                    throw new Error('Plugin UI rate limit exceeded');
-                lastUi = activeId = message.id;
-                commandTimer = setTimeout(() => fail('Plugin action timed out'), LIMITS.commandTimeoutMs);
-                channel.port1.postMessage({ type: 'command', ...message });
-            }
-            catch (error) {
-                fail((error as Error).message);
-            }
-        };
-        if(activation) {
-            const ticket=await platformRequest('activations/'+activation.id+'/ui-ticket','POST',undefined,signal);
-            const url=new URL(ticket.url);
-            if(url.origin!==activation.uiOrigin||url.origin===location.origin||!/^\/render\/[A-Za-z0-9_-]{43}$/.test(url.pathname)||url.search||url.hash)throw new Error('Invalid plugin UI ticket');
-            frame.src=url.href+'#'+nonce;
-        } else frame.src = (options.uiOrigin ?? 'http://127.0.0.1:4318') + '/plugin/' + pkg.digest + '#' + nonce;
-        signal.throwIfAborted();
-        container.append(frame);
         // Revoke other tabs after uninstall/update; local registry failure fails closed.
         let checking = false;
         poll = setInterval(() => {
