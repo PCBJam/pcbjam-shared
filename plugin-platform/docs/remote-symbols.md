@@ -388,9 +388,10 @@ the release); from then on every PCBJam user who uploads a package for that orig
 can install and open it straight away. If PCBJam withdraws the approval, open panels
 close and the provider stops working for everyone until it is approved again.
 
-Each user uploads your package themselves (there is no catalog yet), and needs
-plugin access on their account: send them your package, or publish it on your
-site, with a link to these steps.
+Users install your provider from the PCBJam marketplace
+(`app.pcbjam.com/plugins`) once PCBJam publishes it there; ask on Discord.
+Until then, only accounts with developer access can try it, by uploading your
+package with **Plugins → Add plugin…**.
 
 ### Change your origin
 

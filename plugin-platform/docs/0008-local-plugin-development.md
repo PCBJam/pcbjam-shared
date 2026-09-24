@@ -5,15 +5,15 @@ optional. Sign into PCBJam to install it. You do not need PCBJam's source code.
 
 ## Get access
 
-Plugins are enabled per PCBJam account. Before your first upload:
+Anyone signed in to PCBJam can install plugins published in the
+[marketplace](#share-a-plugin) at `app.pcbjam.com/plugins`. To upload and test
+your **own** plugins you need developer access on your account:
 
 1. Sign up at PCBJam with the account you will develop with.
-2. Ask for plugin access on the [PCBJam Discord](https://discord.gg/ybhqJxjR3E):
+2. Ask for developer access on the [PCBJam Discord](https://discord.gg/ybhqJxjR3E):
    post the email address of that account and one line about what you are
-   building. PCBJam enables access on that account; until then **Plugins → Add
-   plugin…** refuses uploads.
-3. Every teammate who installs your plugin needs access on their own account
-   too (see [Share a plugin](#share-a-plugin)).
+   building. PCBJam enables it on that account; until then the editor does not
+   show **Plugins → Add plugin…** and uploads are refused.
 
 A [backend](#authentication-and-permissions) or a
 [Remote Symbols provider](remote-symbols.md) also needs a one-time review by
@@ -309,6 +309,9 @@ publisher/marketplace registration yet.
 2. Choose **Install ZIP** or **Install folder**, then select the compiled package.
 3. Review permissions and install. Open the plugin by name from **Plugins**.
 
+Only accounts with [developer access](#get-access) see **Add plugin…**;
+everyone else installs from the marketplace (**Plugins → Browse plugins…**).
+
 Use `npm run dev` for automatic local rebuilds. To test changes, increase
 `manifest.version`, build, then upload and approve the new version.
 Restart runs the installed version; it does not reload local source.
@@ -328,13 +331,19 @@ prompts and errors before sharing a package.
 
 ## Share a plugin
 
-There is no plugin catalog yet. To let a teammate use your plugin, send them
-the compiled ZIP. They need plugin access on their own account
-([Get access](#get-access)), upload the ZIP themselves with **Plugins → Add
-plugin…**, and approve its permissions; that upload counts against their own
-release limit. When you publish a new version, each of them uploads it again.
-Backend routes are approved per upload today, so a teammate's copy of a plugin
-with a backend needs its own approval: ask on Discord with their plugin UUID.
+PCBJam publishes plugins in the **marketplace** at `app.pcbjam.com/plugins`
+(also **Plugins → Browse plugins…** in the editor). Any signed-in account can
+install from there, without developer access; an installed plugin appears in
+the editor's **Plugins** menu. When PCBJam publishes a new version, users get an
+**Update** button: one click if the permissions are unchanged, a new review if
+the plugin asks for more. To get your plugin listed, send it to PCBJam on the
+[Discord](https://discord.gg/ybhqJxjR3E); PCBJam reviews it and any backend
+before publishing.
+
+Before it is listed, a teammate with developer access can upload your ZIP
+privately with **Plugins → Add plugin…**; that upload counts against their own
+release limit, and a backend on their copy needs its own approval (ask on
+Discord with their plugin UUID).
 
 Next: [Available APIs](0009-plugin-api-and-permissions.md) ·
 [Architecture](0010-plugin-security-and-testing.md) ·

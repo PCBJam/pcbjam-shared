@@ -169,8 +169,11 @@ does not delete data saved on the third-party backend.
 
 Uploads become immutable, hashed releases in **private R2 storage**. The database
 stores ownership, installed versions and approved permissions. Installations
-follow the user's account across browsers. This is private installation;
-a public marketplace is not available yet.
+follow the user's account across browsers. A release is either a private
+upload (usable only by the account with developer access that uploaded it) or
+published by PCBJam in the marketplace (installable by any signed-in account,
+each with its own permission review). PCBJam can unlist a marketplace plugin
+(existing installs keep working) or revoke a release (it stops for everyone).
 
 PCBJam verifies package/runtime integrity before execution. A separate UI service
 delivers the iframe through a short-lived, single-use ticket. Matching runtime
