@@ -106,12 +106,26 @@ export const commentActorSchema = z.object({
 });
 export type CommentActor = z.infer<typeof commentActorSchema>;
 
+/**
+ * The working copy the request was made on, as the BACKEND resolved it
+ * (git-integration 0006, design-comments C-D3/C-D8). When present it wins
+ * over anything the client put in the op: a resolution records this copy and
+ * head commit, a new thread's provenance takes its `workingCopyId` and
+ * `headCommit` from here (the client's `docGeneration`/`dirtyAtWrite` stay).
+ */
+export const commentOpCopyContextSchema = z.object({
+  workingCopyId: z.string().min(1),
+  headCommit: z.string().min(1).optional(),
+});
+export type CommentOpCopyContext = z.infer<typeof commentOpCopyContextSchema>;
+
 /** What the app server hands the document's room (`/room/comment-op`). */
 export const commentOpPayloadSchema = z.object({
   op: commentOpSchema,
   actor: commentActorSchema,
   /** Server clock at the request — stamps createdAt/editedAt. */
   now: z.number().finite(),
+  copy: commentOpCopyContextSchema.optional(),
 });
 export type CommentOpPayload = z.infer<typeof commentOpPayloadSchema>;
 
@@ -192,6 +206,7 @@ export function applyCommentOp(
   op: CommentOp,
   actor: CommentActor,
   now: number = Date.now(),
+  copy?: CommentOpCopyContext,
 ): CommentOpOutcome {
   let outcome: CommentOpOutcome = { ok: false, code: "thread-missing" };
   const stamp = { author: actor.slug, authorName: actor.name, authorEmail: actor.email };
@@ -216,7 +231,13 @@ export function applyCommentOp(
           body: op.body,
           mentions: op.mentions,
           id: op.id,
-          provenance: op.provenance,
+          provenance: copy
+            ? {
+                ...op.provenance,
+                workingCopyId: copy.workingCopyId,
+                ...(copy.headCommit ? { headCommit: copy.headCommit } : {}),
+              }
+            : op.provenance,
           now,
         });
         const thread = getThread(ydoc, threadId);
@@ -302,7 +323,13 @@ export function applyCommentOp(
         }
         const ok =
           op.type === "setResolved"
-            ? setThreadResolved(ydoc, op.threadId, op.resolved, undefined, now)
+            ? setThreadResolved(
+                ydoc,
+                op.threadId,
+                op.resolved,
+                copy ? { workingCopyId: copy.workingCopyId, ...(copy.headCommit ? { headCommit: copy.headCommit } : {}) } : undefined,
+                now,
+              )
             : setThreadAnchor(ydoc, op.threadId, op.anchor);
         if (ok) outcome = { ok: true, threadId: op.threadId };
         return;

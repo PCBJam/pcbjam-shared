@@ -33,6 +33,7 @@ export * from "./presence-colors.js";
 export * from "./comments-wire.js";
 export * from "./comments-y.js";
 export * from "./comment-ops.js";
+export * from "./activity-wire.js";
 export * from "./comment-moderation.js";
 export * from "./comments-export.js";
 export * from "./lockfile-wire.js";

@@ -120,3 +120,32 @@ describe("applyCommentOp — commenter doc rules", () => {
     expect(listThreads(doc).length).toBe(COMMENTER_THREAD_CAP + 2);
   });
 });
+
+describe("server copy context (git-integration 0006)", () => {
+  it("resolve records the copy and head; createThread provenance takes them from the server", async () => {
+    const Y = await import("yjs");
+    const { applyCommentOp } = await import("../src/comment-ops.js");
+    const { getThread } = await import("../src/comments-y.js");
+    const doc = new Y.Doc();
+    const editor = { slug: "alice", name: "Alice", role: "editor" as const };
+    const copy = { workingCopyId: "wc-1", headCommit: "c03" };
+    const created = applyCommentOp(
+      doc,
+      {
+        type: "createThread",
+        anchor: { pos: { x: 1, y: 2 }, filePath: "board.kicad_pcb" },
+        body: "check this",
+        mentions: [],
+        provenance: { workingCopyId: "client-claim", headCommit: "forged", docGeneration: 3, dirtyAtWrite: true },
+      },
+      editor,
+      1000,
+      copy,
+    );
+    expect(created.ok).toBe(true);
+    const id = (created as { threadId: string }).threadId;
+    expect(getThread(doc, id)?.provenance).toEqual({ workingCopyId: "wc-1", headCommit: "c03", docGeneration: 3, dirtyAtWrite: true });
+    expect(applyCommentOp(doc, { type: "setResolved", threadId: id, resolved: true }, editor, 2000, copy).ok).toBe(true);
+    expect(getThread(doc, id)?.resolution).toEqual({ workingCopyId: "wc-1", headCommit: "c03", at: 2000 });
+  });
+});
