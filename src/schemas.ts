@@ -192,14 +192,54 @@ export type ProjectRole = z.infer<typeof projectRoleSchema>;
  */
 export const workingCopyKindSchema = z.enum(["default", "branch", "pinned"]);
 export type WorkingCopyKind = z.infer<typeof workingCopyKindSchema>;
+export const workingCopyStatusSchema = z.enum(["ready", "materializing", "failed"]);
+export type WorkingCopyStatus = z.infer<typeof workingCopyStatusSchema>;
 export const workingCopyRefSchema = z.object({
   id: z.string(),
   label: z.string(),
   kind: workingCopyKindSchema,
   generation: z.number().int().nonnegative(),
   isDefault: z.boolean(),
+  /**
+   * Repository descriptors (git-integration 0005), all optional so a backend
+   * without Git never sends them. `status` other than `ready` means the copy
+   * is still being checked out (or failed) and must not be edited.
+   * `kind: "pinned"` is an immutable view (read-only); with `follows` it is a
+   * branch-following view that advances to the latest fetched commit of
+   * `targetBranch`. `baseCommit` is the commit the copy was checked out at,
+   * `headCommit` the commit its content is based on now (same until 0006
+   * commits exist).
+   */
+  status: workingCopyStatusSchema.optional(),
+  baseCommit: z.string().optional(),
+  headCommit: z.string().optional(),
+  targetBranch: z.string().optional(),
+  follows: z.boolean().optional(),
 });
 export type WorkingCopyRef = z.infer<typeof workingCopyRefSchema>;
+
+/** Is this copy an immutable view the editor must open read-only? */
+export function isReadOnlyCopy(ref: Pick<WorkingCopyRef, "kind"> | null | undefined): boolean {
+  return ref?.kind === "pinned";
+}
+
+/** A fetched repository ref as shown next to working copies (0005). */
+export const gitRefStateSchema = z.enum(["live", "forced", "deleted"]);
+export const gitRefDescriptorSchema = z.object({
+  name: z.string(),
+  kind: z.enum(["branch", "tag"]),
+  sha: z.string(),
+  /** `forced`: the last fetch moved it to a non-descendant; `deleted`: gone
+   *  from the remote (kept so copies based on it can say so). */
+  state: gitRefStateSchema,
+  fetchedAt: z.string(),
+});
+export type GitRefDescriptor = z.infer<typeof gitRefDescriptorSchema>;
+
+/** Short display form of a commit id. */
+export function shortSha(sha: string | null | undefined): string {
+  return sha ? sha.slice(0, 7) : "";
+}
 
 export const projectWithFiles = z.object({
   project: projectSchema,
