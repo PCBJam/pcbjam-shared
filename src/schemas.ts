@@ -324,6 +324,23 @@ export const libSchema = z.object({
   visibility: z.string().optional(),
   description: z.string().nullish(),
   itemCount: z.number().int().nonnegative().optional(),
+  // Lib-git (git-integration 0008): present when the library has its own
+  // repository connection. `remote` is a display label (never a URL with
+  // credentials); `trackedRef` is the branch the whole scope sees; `ahead`
+  // = platform changes not yet pushed; `conflicts` = items the last
+  // pull/push stopped on. Backends without lib-git omit it.
+  git: z
+    .object({
+      remote: z.string(),
+      trackedRef: z.string().nullable(),
+      rootPath: z.string(),
+      syncCommit: z.string().nullable(),
+      lastPullAt: z.string().nullable(),
+      lastPushAt: z.string().nullable(),
+      ahead: z.boolean(),
+      conflicts: z.array(z.object({ item: z.string(), reason: z.string() })),
+    })
+    .optional(),
   // The lib's r2-idb-sync cache identity (standalone-load-ux 0002): `namespace`
   // is the primary sync layer's namespace — the key of the client-side
   // IndexedDB cache a cold open hydrates — so the editor's download-consent
