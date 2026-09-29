@@ -1,0 +1,19 @@
+{
+  "apiVersion": 1,
+  "id": "tour-starter",
+  "name": "Tour Starter",
+  "version": "0.1.1",
+  "description": "A guided tour: place a resistor, then add a part this plugin ships.",
+  "main": "main.js",
+  "ui": "ui.html",
+  "surfaces": [
+    "editor:eeschema"
+  ],
+  "permissions": [
+    "ui:custom",
+    "ui:project-data",
+    "editor:overlay",
+    "documents:read",
+    "library:write-parts"
+  ]
+}

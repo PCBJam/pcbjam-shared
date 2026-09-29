@@ -1,0 +1,26 @@
+<html lang="en"><head><meta charset="utf-8"><title>Tour Starter</title>
+<style>
+*{box-sizing:border-box}body{margin:0;padding:18px;background:#121a25;color:#e2e8f0;font:14px/1.5 system-ui,sans-serif}h1{font-size:19px;margin:0 0 10px}p{color:#a2b1c4;margin:0 0 14px}button{font:inherit;width:100%;border-radius:7px;padding:9px 12px;cursor:pointer;background:#62b9f2;color:#102132;border:0;font-weight:650;margin:0 0 10px}button.secondary{background:#1d2938;color:#e2e8f0;border:1px solid #43536a}#status{white-space:pre-wrap;font-size:13px}
+</style></head><body>
+<h1>Tour Starter</h1>
+<p>A guided tour: place a resistor, then add a part this plugin ships.</p>
+<button id="start">Start tour</button>
+<button id="part" class="secondary">Add demo part</button>
+<p id="status" role="status">Connecting…</p>
+<script>
+const status = document.getElementById('status');
+const show = text => { status.textContent = text; };
+const describe = r => r.state === 'none' ? 'No tour yet.' : `Tour ${r.state}${r.step ? ` — step ${r.step} of ${r.of}` : ''}.`;
+async function refresh() { try { show(describe(await pcbjamUI.call('status'))); } catch (e) { show(e.message); } }
+document.getElementById('start').onclick = async () => {
+  try { const r = await pcbjamUI.call('start'); show(r.status === 'busy' ? 'Another guide is showing.' : 'Tour started.'); } catch (e) { show(e.message); }
+};
+document.getElementById('part').onclick = async () => {
+  try {
+    const r = await pcbjamUI.call('addPart');
+    show(r.status === 'saved' ? `Saved to ${r.library}. Click on the sheet to place it.` : 'Cancelled.');
+  } catch (e) { show(e.message); }
+};
+pcbjamUI.ready.then(async () => { try { await pcbjamUI.call('resume'); } catch {} await refresh(); });
+</script>
+</body></html>
