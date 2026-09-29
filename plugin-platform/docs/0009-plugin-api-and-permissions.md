@@ -48,6 +48,13 @@ permissions. `context.get()` needs no additional permission.
 | `exports.bundle({parts, extraFiles?, zipName})` | `project:export` | Zip exports (optionally renaming files) with text files the plugin made; returns a bundle id, name, size and file list. |
 | `files.saveBundle({bundleId})` | `files:save` | Trusted download confirmation for a bundle ZIP; download-requested or cancelled. |
 | `editor.requestPlacement({label, sexpr})` | `editor:place-items` | Confirmed symbol placement: placed or cancelled. |
+| `tour.start(tour, {resume?})` | `editor:overlay` | Run a declarative guided tour over the editor, drawn by PCBJam with the plugin’s name; it keeps running between commands. started, not-active (resume with no active tour) or busy. |
+| `tour.stop()` | `editor:overlay` | Stop the plugin’s tour; its status is kept. |
+| `tour.status()` | `editor:overlay` | The plugin’s tour: id, shown step, length and state (active, done, dismissed or none). |
+| `ui.overlay.show({target, text, title?, lostText?, placement?, spotlight?, pulse?})` | `editor:overlay` | Show one pointer card at a target until cleared or the plugin stops; shown or not-found (the target is not on screen now). Refused while a tour runs. |
+| `ui.overlay.clear()` | `editor:overlay` | Remove the plugin’s pointer; resolves to null. |
+| `schematic.symbols()` | `documents:read` | Schematic editor: placed symbols on the shown sheet with uuid, libId, ref, value and footprint. |
+| `schematic.connectivity()` | `documents:read` | Schematic editor: nets with a pin on the shown sheet, each pin with uuid, ref, libId, pin, name and noConnect. |
 <!-- END GENERATED HOST API -->
 
 ## Permissions
@@ -65,12 +72,13 @@ feature uses: every extra line is a reason to decline.
 | `files:save-html` | Request a web page download, confirmed by you; the page contains this plugin's code, which runs when you open the file | `files.saveHtml` |
 | `editor:place-items` | Request item placement, confirmed by you in the editor | `editor.requestPlacement` |
 | `project:read-info` | Read metadata and file names in the current project | `project.getInfo`, `documents.list` |
-| `documents:read` | Read the current editor document, including all its items and embedded symbols | `documents.getCurrent`, `documents.snapshot`, `documents.poll`, `documents.exportStart`, `documents.exportRead`, `board.geometryStart`, `items.list`, `items.get` |
+| `documents:read` | Read the current editor document, including all its items and embedded symbols | `documents.getCurrent`, `documents.snapshot`, `documents.poll`, `documents.exportStart`, `documents.exportRead`, `board.geometryStart`, `items.list`, `items.get`, `schematic.symbols`, `schematic.connectivity` |
 | `editor:read-selection` | Read selected item IDs in the current editor | `selection.get` |
 | `editor:select` | Change which items are selected in the current editor | `editor.select` |
 | `storage:local` | Store local data for this plugin, account and project | `storage.get`, `storage.set`, `storage.delete`, `storage.list` |
 | `project:export` | Generate export files such as Gerbers, drill files and netlists from the current document on PCBJam's servers | `exports.run`, `exports.readJson`, `exports.bundle` |
 | `ui:open-external` | Open pages of this plugin's approved sites in a new browser tab, after you confirm | `ui.openExternal` |
+| `editor:overlay` | Show guided tours and pointers over the editor, labelled with this plugin's name | `tour.start`, `tour.stop`, `tour.status`, `ui.overlay.show`, `ui.overlay.clear` |
 <!-- END GENERATED PERMISSIONS -->
 
 `network:<name>` and `backend:identity:<name>` are declared per backend; see
@@ -522,13 +530,97 @@ await pcbjam.ui.openExternal(answer.body.redirect);   // user confirms, new tab
   site (`www.example.com` allows `example.com` and `*.example.com`); no
   credentials or ports. Returns `opened` or `cancelled`.
 
+## Guided tours and pointers
+
+Needs `editor:overlay`. PCBJam draws everything — the card, the highlight and a
+"from *your plugin's name*" label; you supply plain text and targets. Your
+plugin's code does not run between commands, so a tour is **data** that
+PCBJam runs for you: it watches the editor, moves to the right step, survives
+the page switch between editors (with `resume`), and stops when your plugin
+stops.
+
+```js
+pcbjam.handle('start-tour', () => pcbjam.tour.start({
+  id: 'first-resistor',
+  editor: 'eeschema',
+  steps: [
+    { id: 'tool', target: 'tool:eeschema.InteractiveDrawing.placeSymbol', spotlight: true,
+      text: 'Click Place Symbols, then click on the sheet.',
+      until: { any: [{ dialogOpened: 'DIALOG_SYMBOL_CHOOSER' }, { symbols: { libId: 'Device:R', min: 1, new: true } }] } },
+    { id: 'search', when: { dialogOpen: 'DIALOG_SYMBOL_CHOOSER' },
+      target: 'dialog:DIALOG_SYMBOL_CHOOSER/control:searchctrl', placement: 'right',
+      text: 'Type R and pick R from the Device library.',
+      until: { symbols: { libId: 'Device:R', min: 1, new: true } } },
+    { id: 'place', text: 'Click on the sheet to place it.',
+      until: { symbols: { libId: 'Device:R', min: 1, new: true } } },
+    { id: 'done', target: 'new:Device:R', text: 'Your first resistor!', until: { next: true } },
+  ],
+}));
+```
+
+The shown step is the first whose `when` holds (default: always) and whose
+`until` is not met. **State** conditions are re-checked live, so undoing the
+work brings its step back: `dialogOpen`, `symbols` (`new: true` counts only
+symbols placed since the tour started), `footprint` (every placed symbol of
+a `libId`, or one `ref`, has a footprint — or exactly the given one), `net`
+(one net contains a pin matching every selector) and `noConnect`. **Event**
+conditions fire once: `next` (the card's Next button), `action` (an editor
+action ran, e.g. `eeschema.InteractiveDrawing.placeSymbol`), `dialogOpened`,
+`dialogClosed`; a step whose `until` uses one stays done once it is met while
+that step is on screen. Combine with `all`, `any`, `not`. The last step must
+end on `{ next: true }`; its Next finishes the tour.
+
+Pin selectors: `{ libId, pin }` or `{ ref, pin }` — add `all: true` to require
+**every** placed symbol of that `libId` (three LEDs in parallel) — and
+`{ power: '+5V' }` for the net a power symbol names:
+
+```js
+until: { all: [
+  { net: [{ power: '+5V' }, { ref: 'J1', pin: '1' }, { libId: 'Device:R', pin: '1' }] },
+  { net: [{ libId: 'Device:R', pin: '2' }, { libId: 'Device:LED', pin: '2', all: true }] },
+  { noConnect: { ref: 'J1', pin: '2' } },
+] }
+```
+
+Targets: `tool:<action name>`, `menu:<Title>` / `menu:<Title>/<Item>`,
+`dialog:<CLASS>` and `dialog:<CLASS>/control:<type>[:<label>]` (type: the wx
+class without `wx` — `button`, `textctrl`, `searchctrl` — or an owner-drawn
+item such as `dataviewitem`), `item:<uuid>`, `area:x,y,w,h` and `point:x,y` in
+internal units, and in tours `new:<libId>` (the newest symbol of that library
+placed during the tour). A target that is not on screen shows the step's
+`lostText`.
+
+`tour.start(tour, {resume: true})` continues a tour of that `id` that is still
+active in this tab and answers `not-active` otherwise — call it when your
+panel opens. `busy` means another guide is on screen. `tour.status()` reports
+the shown step. A one-off pointer without a tour:
+`pcbjam.ui.overlay.show({target, text})` → `shown` or `not-found`;
+`pcbjam.ui.overlay.clear()` removes it. Limits: 30 steps, 64 KiB per tour,
+title 80 and text 600 characters; one tour or pointer per plugin.
+
+## Read the schematic sheet
+
+Needs `documents:read`, schematic editor only, while no dialog is open:
+
+```js
+const symbols = await pcbjam.schematic.symbols();
+// [{uuid, libId: 'Device:R', ref: 'R1', value: '10k', footprint: 'Resistor_SMD:R_0603_1608Metric'}, …]
+const nets = await pcbjam.schematic.connectivity();
+// [{net: '+5V', pins: [{uuid, ref: 'R1', libId: 'Device:R', pin: '1', name: '', noConnect: false}]}, …]
+```
+
+Both describe the shown sheet as the engine sees it. Power symbols name their
+net but their own `#PWR` pins are not listed; an unconnected pin sits alone in
+a net named like `unconnected-(R2-Pad2)`; `noConnect` means an X marks it.
+
 ## Not available
 
 There is no raw WASM/pointer access, direct Yjs mutation, sibling-document loading,
 change subscription, schematic geometry, user-profile API, OAuth delegation
 signing. The only current document write is confirmed symbol placement;
 `editor.select()` changes the selection, not the design.
-The only UI surface is a floating panel in the schematic or PCB editor.
+The only UI surface is a floating panel in the schematic or PCB editor, plus the
+guided tours and pointers PCBJam draws for you.
 
 [Build a plugin](0008-local-plugin-development.md) ·
 [Architecture](0010-plugin-security-and-testing.md).

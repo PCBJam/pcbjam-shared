@@ -51,7 +51,21 @@ declare const __clearTimer: (message: string) => void;
             handlers.set(command, handler);
         },
         http: Object.freeze({request:(endpointId:string,options:object)=>call('http.request',{...options,endpointId}),upload:(endpointId:string,options:object)=>call('http.upload',{...options,endpointId})}),
-        ui: Object.freeze({openExternal:(url:unknown)=>call('ui.openExternal',{url})}),
+        ui: Object.freeze({
+            openExternal: (url: unknown) => call('ui.openExternal', { url }),
+            // One pointer at a time, drawn by PCBJam; it stays until cleared or the plugin stops.
+            overlay: Object.freeze({ show: (step: unknown) => call('ui.overlay.show', step), clear: () => call('ui.overlay.clear') }),
+        }),
+        // A declarative guided tour PCBJam runs for the plugin (it keeps running between commands).
+        tour: Object.freeze({
+            start: (tour: unknown, options: any = {}) => call('tour.start', { tour, resume: options?.resume === true }),
+            stop: () => call('tour.stop'),
+            status: () => call('tour.status'),
+        }),
+        schematic: Object.freeze({
+            symbols: async () => ((await call('schematic.symbols')) as any).symbols,
+            connectivity: async () => ((await call('schematic.connectivity')) as any).nets,
+        }),
         exports: Object.freeze({
             run: (kind: unknown) => call('exports.run', { kind }),
             readJson: (exportId: unknown, name: unknown) => call('exports.readJson', { exportId, name }),

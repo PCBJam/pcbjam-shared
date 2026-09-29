@@ -11,5 +11,6 @@
   "editor:select": "Change which items are selected in the current editor",
   "storage:local": "Store local data for this plugin, account and project",
   "project:export": "Generate export files such as Gerbers, drill files and netlists from the current document on PCBJam's servers",
-  "ui:open-external": "Open pages of this plugin's approved sites in a new browser tab, after you confirm"
+  "ui:open-external": "Open pages of this plugin's approved sites in a new browser tab, after you confirm",
+  "editor:overlay": "Show guided tours and pointers over the editor, labelled with this plugin's name"
 }

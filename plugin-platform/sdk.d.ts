@@ -11,8 +11,31 @@ type PCBJamGeometryDrawing = {layer:string;text?:'reference'|'value'|'field'|'te
 /** `$` names the record: 'board' | 'footprint' | 'drawing' | 'tracks' | 'zone'. See the API guide for each shape. */
 type PCBJamGeometryRecord = {$:string;[key:string]:any};
 type PCBJamItemError = {id:string;error:'TOO_LARGE'|'DEFERRED'};
+/** A placed symbol on the shown schematic sheet; `ref`, `value` and `footprint` as shown on this sheet. */
+type PCBJamSheetSymbol = {uuid:string;libId:string;ref:string;value:string;footprint:string};
+/** A net with a pin on the shown sheet. Power symbols name their net (`+5V`) but their own `#PWR` pins are
+ *  not listed; unconnected pins sit alone in `unconnected-(REF-PadN)`. `noConnect`: an X marks the pin. */
+type PCBJamSheetNet = {net:string;pins:{uuid:string;ref:string;libId:string;pin:string;name:string;noConnect:boolean}[]};
+/** Where a pointer or tour step points: `tool:<action>`, `menu:<Title>[/<Item>]`, `dialog:<CLASS>[/control:<type>[:<label>]]`,
+ *  `item:<uuid>`, `area:x,y,w,h` / `point:x,y` (world IU), `tooltip:<text>`; in tours also `new:<libId>`. */
+type PCBJamTarget = string;
+type PCBJamPointer = {target:PCBJamTarget;title?:string;text:string;lostText?:string;placement?:'auto'|'top'|'bottom'|'left'|'right';spotlight?:boolean;pulse?:boolean};
+/** Selects pins: exactly one of libId/ref/power; `pin` for libId/ref; `all` = every placed matching symbol. */
+type PCBJamPinSel = {libId:string;pin:string;all?:boolean} | {ref:string;pin:string;all?:boolean} | {power:string};
+/** Tour conditions, evaluated by PCBJam. next/action/dialogOpened/dialogClosed are events (a step using one
+ *  stays done once met while it is on screen); the rest are re-checked live. */
+type PCBJamTourCond =
+  | {next:true} | {action:string} | {dialogOpened:string} | {dialogClosed:string} | {dialogOpen:string}
+  | {symbols:{libId:string;min:number;new?:boolean}}
+  | {footprint:{libId:string;set:true|string} | {ref:string;set:true|string}}
+  | {net:PCBJamPinSel[]} | {noConnect:PCBJamPinSel}
+  | {all:PCBJamTourCond[]} | {any:PCBJamTourCond[]} | {not:PCBJamTourCond};
+/** A declarative tour: the current step is the first whose `when` holds and whose `until` is not met.
+ *  The last step must finish on `{next:true}`. At most 30 steps, 64 KiB. */
+type PCBJamTour = {id:string;title?:string;editor:'eeschema'|'pcbnew';
+  steps:(Omit<PCBJamPointer,'target'> & {id:string;target?:PCBJamTarget;when?:PCBJamTourCond;until:PCBJamTourCond})[]};
 // BEGIN GENERATED HOST METHODS
-type PCBJamHostMethod = "http.request" | "http.upload" | "ui.openExternal" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "board.geometryStart" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "exports.run" | "exports.readJson" | "exports.bundle" | "files.saveBundle" | "editor.requestPlacement";
+type PCBJamHostMethod = "http.request" | "http.upload" | "ui.openExternal" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "board.geometryStart" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "exports.run" | "exports.readJson" | "exports.bundle" | "files.saveBundle" | "editor.requestPlacement" | "tour.start" | "tour.stop" | "tour.status" | "ui.overlay.show" | "ui.overlay.clear" | "schematic.symbols" | "schematic.connectivity";
 // END GENERATED HOST METHODS
 /** Plugin logic only, and only while a command is being handled: at most 32 pending, 60 s each,
  *  all cancelled when the command settles. An exception thrown from a callback stops the plugin. */
@@ -26,7 +49,20 @@ declare const pcbjam: {
     upload(endpointId:string,request:{path:string;bundleId:string;fields?:Record<string,string>}):Promise<{status:number;headers:Record<string,string>;body:PCBJamJSON}>};
   /** Open an https page of one of the plugin's approved endpoint sites in a new browser tab after the user confirms
    *  (needs `ui:open-external`). Never an iframe; the editor stays open. */
-  ui:{openExternal(url:string):Promise<{status:'opened'|'cancelled'}>};
+  ui:{openExternal(url:string):Promise<{status:'opened'|'cancelled'}>;
+    /** One pointer over the editor (needs `editor:overlay`), drawn by PCBJam with your plugin's name. It stays
+     *  until cleared or the plugin stops. `not-found`: the target is not on screen now (the card shows
+     *  `lostText`). Refused while your tour runs. */
+    overlay:{show(step:PCBJamPointer):Promise<{status:'shown'|'not-found'}>;clear():Promise<null>}};
+  /** A guided tour PCBJam runs for you (needs `editor:overlay`): it keeps going between commands, follows the
+   *  user's state, and stops when your plugin stops. `resume:true` continues a tour of that id still active in
+   *  this tab (after the page switch between editors) and answers `not-active` otherwise. `busy`: another tour
+   *  is running. */
+  tour:{start(tour:PCBJamTour,options?:{resume?:boolean}):Promise<{status:'started'|'not-active'|'busy'}>;
+    stop():Promise<null>;
+    status():Promise<{id:string|null;step:number;of:number;state:'active'|'done'|'dismissed'|'none'}>};
+  /** Schematic editor only (needs `documents:read`): the shown sheet as the engine sees it. */
+  schematic:{symbols():Promise<PCBJamSheetSymbol[]>;connectivity():Promise<PCBJamSheetNet[]>};
   handle(command:string,handler:(params:any)=>unknown|Promise<unknown>):void;
   context:{get():Promise<{
     tool:string;fileName:string;readOnly:boolean;canPlaceItems:boolean;

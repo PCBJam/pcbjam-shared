@@ -1,6 +1,6 @@
 import {backendPermissions, validateBackendRequest, validateUploadRequest, BACKEND_LIMITS, type BackendEndpoint} from '../backend-contract.mjs';
 const runtimeAsset = (name: string) => new URL(name, import.meta.url).href;
-import { METHODS, LIMITS, LEASED_READS, SAVED_HTML_PREFIX, EXPORT_KINDS, EXPORT_LIMITS, externalUrlAllowed, pngBytes, boundedJSON, type Method, type DocumentAdapter } from './package-api';
+import { METHODS, LIMITS, LEASED_READS, SAVED_HTML_PREFIX, EXPORT_KINDS, EXPORT_LIMITS, externalUrlAllowed, pngBytes, boundedJSON, type Method, type DocumentAdapter, type PointerStep } from './package-api';
 import { storageCall } from './package-storage';
 import { platformConfiguration, platformRequest, platformBytes, verifyText, runtimeAssets } from './package-service';
 export { configurePlatform } from './package-service';
@@ -66,6 +66,19 @@ export interface PackageHostOptions {
     }, signal: AbortSignal): Promise<{
         status: 'download-requested' | 'cancelled';
     }>;
+    /** Guided tours and pointers over the editor (overlay-system 0003). The adapter validates tour
+     *  definitions, draws everything itself (plain text, the plugin named) and clears it all when
+     *  the plugin stops. Absent where the editor has no overlay. */
+    tours?: {
+        start(tour: unknown, resume: boolean): { status: 'started' | 'not-active' | 'busy' };
+        stop(): void;
+        status(): { id: string | null; step: number; of: number; state: 'active' | 'done' | 'dismissed' | 'none' };
+        showPointer(step: PointerStep): 'shown' | 'not-found';
+        clearPointer(): void;
+    };
+    /** The shown schematic sheet (overlay-system 0003): placed symbols and nets with their pins, as
+     *  JSON-safe arrays. Absent outside the schematic editor or on engines without these reads. */
+    sheet?: { symbols(): unknown[]; connectivity(): unknown[] };
     /** Draw the confirmation, then open `url` in a new tab (noopener). Never navigate the editor. */
     openExternal?(proposal: { url: string; site: string }, signal: AbortSignal): Promise<{ status: 'opened' | 'cancelled' }>;
     /** Test-only trusted configuration; publisher manifests cannot set origins. */
@@ -177,6 +190,10 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             return !!options.documents?.openGeometry && options.context().canReadGeometry === true;
         if (method === 'editor.select')
             return !!options.selectItems && !!options.documents && options.context().canSelectItems === true;
+        if (method.startsWith('tour.') || method.startsWith('ui.overlay.'))
+            return !!options.tours;
+        if (method.startsWith('schematic.'))
+            return !!options.sheet && options.context().tool === 'eeschema';
         if (method === 'context.get' || method.startsWith('files.'))
             return true;
         if (method === 'editor.requestPlacement')
@@ -446,6 +463,22 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
                     throw new Error('File handle is invalid or closed');
                 return text;
             }
+            case 'tour.start':
+                return options.tours!.start(params.tour, params.resume === true);
+            case 'tour.stop':
+                options.tours!.stop();
+                return null;
+            case 'tour.status':
+                return options.tours!.status();
+            case 'ui.overlay.show':
+                return { status: options.tours!.showPointer(params) };
+            case 'ui.overlay.clear':
+                options.tours!.clearPointer();
+                return null;
+            case 'schematic.symbols':
+                return { symbols: options.sheet!.symbols() };
+            case 'schematic.connectivity':
+                return { nets: options.sheet!.connectivity() };
             case 'editor.requestPlacement': {
                 requirePermission('editor:place-items');
                 exact(params, ['label', 'sexpr']);

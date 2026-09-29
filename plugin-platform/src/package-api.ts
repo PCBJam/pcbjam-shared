@@ -7,6 +7,19 @@ const document = z.string().uuid();
 const page = { cursor: z.number().int().min(0).max(50000), limit: z.number().int().min(1).max(100) };
 const key = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/);
 const request = (permission: string | null, input: z.ZodTypeAny) => ({ permission, input });
+/** Serialized size of a JSON value; Infinity when it cannot be serialized. */
+const jsonSize = (value: unknown) => { try { return JSON.stringify(value ?? null).length; } catch { return Infinity; } };
+/** A one-off overlay pointer (overlay-system 0003). Plain text only; the host draws it and names the plugin. */
+const pointer = z.object({
+    target: z.string().min(1).max(512),
+    title: z.string().max(80).optional(),
+    text: z.string().min(1).max(600),
+    lostText: z.string().max(600).optional(),
+    placement: z.enum(['auto', 'top', 'bottom', 'left', 'right']).optional(),
+    spotlight: z.boolean().optional(),
+    pulse: z.boolean().optional(),
+}).strict();
+export type PointerStep = z.infer<typeof pointer>;
 /**
  * Exports the server runs with KiCad's own exporters on the stored project, and the
  * editor surface each needs. Output bytes stay on the server; a plugin gets ids.
@@ -79,6 +92,17 @@ export const METHODS = {
     }).strict()),
     'files.saveBundle': request('files:save', z.object({ bundleId: exportId }).strict()),
     'editor.requestPlacement': request('editor:place-items', z.object({ label: z.string().min(1).max(100), sexpr: z.string().max(512 * 1024) }).strict()),
+    // Guided tours over the editor (overlay-system 0003): a plugin hands the host a declarative
+    // tour and the host runs it — plugin logic has no background life to watch the editor. The
+    // editor adapter validates the definition itself; here only its size is bounded.
+    'tour.start': request('editor:overlay', z.object({ tour: z.unknown().refine(value => jsonSize(value) <= 64 * 1024, 'Tour exceeds size limit'), resume: z.boolean().optional() }).strict()),
+    'tour.stop': request('editor:overlay', empty),
+    'tour.status': request('editor:overlay', empty),
+    'ui.overlay.show': request('editor:overlay', pointer),
+    'ui.overlay.clear': request('editor:overlay', empty),
+    // The shown schematic sheet as the engine sees it: placed symbols, and nets with their pins.
+    'schematic.symbols': request('documents:read', empty),
+    'schematic.connectivity': request('documents:read', empty),
 } as const;
 export type Method = keyof typeof METHODS;
 export const LIMITS = Object.freeze({ snapshotBytes: 1024 * 1024, pageItems: 100, fileBytes: 4 * 1024 * 1024, exportBytes: 512 * 1024, storageBytes: 256 * 1024, storageValueBytes: 16 * 1024, storageKeys: 64, htmlBytes: 8 * 1024 * 1024, imageBytes: 4 * 1024 * 1024, selectItems: 500,
@@ -119,7 +143,7 @@ export function pngBytes(base64: string): Uint8Array {
  * hosted authorization up to LIMITS.readLeaseMs old. Everything with an effect outside the
  * plugin (files, placement, backends, storage writes) is authorized per call.
  */
-export const LEASED_READS: ReadonlySet<string> = new Set(['context.get', 'project.getInfo', 'documents.list', 'documents.getCurrent', 'documents.snapshot', 'documents.poll',
+export const LEASED_READS: ReadonlySet<string> = new Set(['context.get', 'project.getInfo', 'documents.list', 'documents.getCurrent', 'documents.snapshot', 'documents.poll', 'schematic.symbols', 'schematic.connectivity', 'tour.status',
     'documents.exportStart', 'documents.exportRead', 'board.geometryStart', 'items.list', 'items.get', 'selection.get']);
 /** Bound before stringify/recursive schema work. Return a detached JSON value. */
 export function boundedJSON(value: unknown, maxBytes: number): any {
