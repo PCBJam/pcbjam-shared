@@ -41,6 +41,7 @@
  */
 
 import { z } from "zod";
+import { renderKicadPretty, type KicadFormatMode } from "./kicad-format.js";
 import { directUuid, parseSexpr, type SNode } from "./sexpr.js";
 
 /** One element of a node's content. Discriminated by its key (`atom`/`k`/`item`). */
@@ -263,6 +264,15 @@ export function sexprToItems(
  */
 export interface RenderDocOptions {
   onMissingItem?: (uuid: string) => void;
+  /**
+   * `"compact"` (default): the whole document on one line — what the editor and
+   * the sync paths consume. `"kicad"`: the layout KiCad itself saves (tabs, one
+   * inner list per line; see `kicad-format.ts`) — for text that leaves PCBJam
+   * as a file (Git commits, downloads, exports).
+   */
+  format?: "compact" | "kicad";
+  /** KiCad layout mode for `format: "kicad"`; defaults by root (lib tables) else normal. */
+  mode?: KicadFormatMode;
 }
 
 function renderSlots(
@@ -486,6 +496,9 @@ export function normalizedLayout(doc: Pick<KicadDoc, "items" | "layout">): Slot[
 /** Reassemble KiCad s-expr text from a `KicadDoc`, in `layout` order. */
 export function docToFile(doc: KicadDoc, opts?: RenderDocOptions): string {
   assertKicadDoc(doc);
+  if (opts?.format === "kicad") {
+    return renderKicadPretty(doc.root, normalizedLayout(doc), doc.items, opts);
+  }
   const inner = renderSlots(normalizedLayout(doc), doc.items, new Set(), opts);
   return inner.length ? `(${doc.root} ${inner})` : `(${doc.root})`;
 }
