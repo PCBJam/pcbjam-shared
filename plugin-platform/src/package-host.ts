@@ -1,6 +1,6 @@
 import {backendPermissions, validateBackendRequest, validateUploadRequest, BACKEND_LIMITS, type BackendEndpoint} from '../backend-contract.mjs';
 const runtimeAsset = (name: string) => new URL(name, import.meta.url).href;
-import { METHODS, LIMITS, LEASED_READS, SAVED_HTML_PREFIX, EXPORT_KINDS, EXPORT_LIMITS, externalUrlAllowed, pngBytes, boundedJSON, type Method, type DocumentAdapter, type PointerStep } from './package-api';
+import { METHODS, LIMITS, LEASED_READS, SAVED_HTML_PREFIX, EXPORT_KINDS, EXPORT_LIMITS, externalUrlAllowed, pngBytes, boundedJSON, type Method, type DocumentAdapter, type PointerStep, type PartSaveRequest } from './package-api';
 import { storageCall } from './package-storage';
 import { platformConfiguration, platformRequest, platformBytes, verifyText, runtimeAssets } from './package-service';
 export { configurePlatform } from './package-service';
@@ -76,6 +76,15 @@ export interface PackageHostOptions {
         showPointer(step: PointerStep): 'shown' | 'not-found';
         clearPointer(): void;
     };
+    /** Draw the confirmation, authorize `parts.save`, then save the part into the plugin's own team
+     *  library (never a library the plugin names) and optionally start its placement. Resolves once
+     *  the part is stored; placement continues with the user. */
+    savePart?(request: PartSaveRequest, signal: AbortSignal): Promise<{
+        status: 'saved' | 'cancelled';
+        library?: string;
+        symbolLibId?: string;
+        footprintLibId?: string;
+    }>;
     /** The shown schematic sheet (overlay-system 0003): placed symbols and nets with their pins, as
      *  JSON-safe arrays. Absent outside the schematic editor or on engines without these reads. */
     sheet?: { symbols(): unknown[]; connectivity(): unknown[] };
@@ -192,6 +201,8 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             return !!options.selectItems && !!options.documents && options.context().canSelectItems === true;
         if (method.startsWith('tour.') || method.startsWith('ui.overlay.'))
             return !!options.tours;
+        if (method === 'parts.save')
+            return !!options.savePart && !options.context().readOnly;
         if (method.startsWith('schematic.'))
             return !!options.sheet && options.context().tool === 'eeschema';
         if (method === 'context.get' || method.startsWith('files.'))
@@ -475,6 +486,17 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             case 'ui.overlay.clear':
                 options.tours!.clearPointer();
                 return null;
+            case 'parts.save': {
+                if (params.place && options.context().tool !== 'eeschema')
+                    throw new Error('Placing a part needs the schematic editor');
+                const result = await options.savePart!(params, signal);
+                check();
+                // Trusted adapter, but the plugin receives only these fields.
+                const pick = (v: unknown) => typeof v === 'string' ? v : undefined;
+                return result?.status === 'saved'
+                    ? { status: 'saved', library: pick(result.library), symbolLibId: pick(result.symbolLibId), footprintLibId: pick(result.footprintLibId) }
+                    : { status: 'cancelled' };
+            }
             case 'schematic.symbols':
                 return { symbols: options.sheet!.symbols() };
             case 'schematic.connectivity':

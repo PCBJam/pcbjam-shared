@@ -20,6 +20,15 @@ const pointer = z.object({
     pulse: z.boolean().optional(),
 }).strict();
 export type PointerStep = z.infer<typeof pointer>;
+/** A part a plugin ships (overlay-system 0003 phase 4): KiCad symbol and/or footprint text. */
+const partName = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9 _.+-]{0,63}$/);
+const partSave = z.object({
+    displayName: z.string().min(1).max(100),
+    symbol: z.object({ name: partName, text: z.string().min(1).max(512 * 1024) }).strict().optional(),
+    footprint: z.object({ name: partName, text: z.string().min(1).max(2 * 1024 * 1024) }).strict().optional(),
+    place: z.boolean(),
+}).strict().refine(part => !!part.symbol || !!part.footprint, 'A part needs a symbol or a footprint');
+export type PartSaveRequest = z.infer<typeof partSave>;
 /**
  * Exports the server runs with KiCad's own exporters on the stored project, and the
  * editor surface each needs. Output bytes stay on the server; a plugin gets ids.
@@ -100,6 +109,9 @@ export const METHODS = {
     'tour.status': request('editor:overlay', empty),
     'ui.overlay.show': request('editor:overlay', pointer),
     'ui.overlay.clear': request('editor:overlay', empty),
+    // A part the plugin ships, saved into the plugin's own team library after the user confirms;
+    // with `place`, the symbol then follows the cursor in the schematic.
+    'parts.save': request('library:write-parts', partSave),
     // The shown schematic sheet as the engine sees it: placed symbols, and nets with their pins.
     'schematic.symbols': request('documents:read', empty),
     'schematic.connectivity': request('documents:read', empty),

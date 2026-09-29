@@ -62,6 +62,9 @@ declare const __clearTimer: (message: string) => void;
             stop: () => call('tour.stop'),
             status: () => call('tour.status'),
         }),
+        // Save a part you ship into your plugin's team library (the user confirms); `place` then
+        // puts the symbol on the cursor in the schematic.
+        parts: Object.freeze({ save: (part: unknown) => call('parts.save', part) }),
         schematic: Object.freeze({
             symbols: async () => ((await call('schematic.symbols')) as any).symbols,
             connectivity: async () => ((await call('schematic.connectivity')) as any).nets,

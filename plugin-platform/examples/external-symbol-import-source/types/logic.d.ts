@@ -35,7 +35,7 @@ type PCBJamTourCond =
 type PCBJamTour = {id:string;title?:string;editor:'eeschema'|'pcbnew';
   steps:(Omit<PCBJamPointer,'target'> & {id:string;target?:PCBJamTarget;when?:PCBJamTourCond;until:PCBJamTourCond})[]};
 // BEGIN GENERATED HOST METHODS
-type PCBJamHostMethod = "http.request" | "http.upload" | "ui.openExternal" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "board.geometryStart" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "exports.run" | "exports.readJson" | "exports.bundle" | "files.saveBundle" | "editor.requestPlacement" | "tour.start" | "tour.stop" | "tour.status" | "ui.overlay.show" | "ui.overlay.clear" | "schematic.symbols" | "schematic.connectivity";
+type PCBJamHostMethod = "http.request" | "http.upload" | "ui.openExternal" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "board.geometryStart" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "exports.run" | "exports.readJson" | "exports.bundle" | "files.saveBundle" | "editor.requestPlacement" | "tour.start" | "tour.stop" | "tour.status" | "ui.overlay.show" | "ui.overlay.clear" | "parts.save" | "schematic.symbols" | "schematic.connectivity";
 // END GENERATED HOST METHODS
 /** Plugin logic only, and only while a command is being handled: at most 32 pending, 60 s each,
  *  all cancelled when the command settles. An exception thrown from a callback stops the plugin. */
@@ -61,6 +61,12 @@ declare const pcbjam: {
   tour:{start(tour:PCBJamTour,options?:{resume?:boolean}):Promise<{status:'started'|'not-active'|'busy'}>;
     stop():Promise<null>;
     status():Promise<{id:string|null;step:number;of:number;state:'active'|'done'|'dismissed'|'none'}>};
+  /** Save a part you ship — KiCad symbol and/or footprint text — into your plugin's own team library
+   *  (`plugin_<id>`), after the user confirms (needs `library:write-parts`). The symbol's Footprint field is set to
+   *  the saved footprint. With `place: true` (schematic only) the symbol then follows the cursor; the call resolves
+   *  once the part is stored, not when it is placed. `cancelled`: the user declined. */
+  parts:{save(part:{displayName:string;symbol?:{name:string;text:string};footprint?:{name:string;text:string};place:boolean}):
+    Promise<{status:'saved';library:string;symbolLibId?:string;footprintLibId?:string}|{status:'cancelled'}>};
   /** Schematic editor only (needs `documents:read`): the shown sheet as the engine sees it. */
   schematic:{symbols():Promise<PCBJamSheetSymbol[]>;connectivity():Promise<PCBJamSheetNet[]>};
   handle(command:string,handler:(params:any)=>unknown|Promise<unknown>):void;

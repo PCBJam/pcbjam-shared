@@ -53,6 +53,7 @@ permissions. `context.get()` needs no additional permission.
 | `tour.status()` | `editor:overlay` | The plugin’s tour: id, shown step, length and state (active, done, dismissed or none). |
 | `ui.overlay.show({target, text, title?, lostText?, placement?, spotlight?, pulse?})` | `editor:overlay` | Show one pointer card at a target until cleared or the plugin stops; shown or not-found (the target is not on screen now). Refused while a tour runs. |
 | `ui.overlay.clear()` | `editor:overlay` | Remove the plugin’s pointer; resolves to null. |
+| `parts.save({displayName, symbol?, footprint?, place})` | `library:write-parts` | Save a symbol and/or footprint the plugin ships into its own team library after the user confirms; optionally place the symbol. saved (library, lib ids) or cancelled. |
 | `schematic.symbols()` | `documents:read` | Schematic editor: placed symbols on the shown sheet with uuid, libId, ref, value and footprint. |
 | `schematic.connectivity()` | `documents:read` | Schematic editor: nets with a pin on the shown sheet, each pin with uuid, ref, libId, pin, name and noConnect. |
 <!-- END GENERATED HOST API -->
@@ -79,6 +80,7 @@ feature uses: every extra line is a reason to decline.
 | `project:export` | Generate export files such as Gerbers, drill files and netlists from the current document on PCBJam's servers | `exports.run`, `exports.readJson`, `exports.bundle` |
 | `ui:open-external` | Open pages of this plugin's approved sites in a new browser tab, after you confirm | `ui.openExternal` |
 | `editor:overlay` | Show guided tours and pointers over the editor, labelled with this plugin's name | `tour.start`, `tour.stop`, `tour.status`, `ui.overlay.show`, `ui.overlay.clear` |
+| `library:write-parts` | Save parts this plugin ships into its own team library and place them, confirmed by you | `parts.save` |
 <!-- END GENERATED PERMISSIONS -->
 
 `network:<name>` and `backend:identity:<name>` are declared per backend; see
@@ -597,6 +599,32 @@ the shown step. A one-off pointer without a tour:
 `pcbjam.ui.overlay.show({target, text})` → `shown` or `not-found`;
 `pcbjam.ui.overlay.clear()` removes it. Limits: 30 steps, 64 KiB per tour,
 title 80 and text 600 characters; one tour or pointer per plugin.
+
+## Ship a part
+
+Needs `library:write-parts`. A part your plugin brings — a KiCad symbol and/or
+footprint as text — is saved into your plugin's own team library
+(`plugin_<your id>`; you cannot choose another) after the user confirms, with
+the same validation remote providers get. The symbol's Footprint field is set
+to the saved footprint. With `place: true` (schematic editor) the symbol then
+follows the cursor; the call resolves once the part is stored, not when it is
+placed — a tour can wait for it with `{ symbols: { libId, min: 1 } }`.
+
+```js
+pcbjam.handle('add-connector', () => pcbjam.parts.save({
+  displayName: 'USB-A PCB edge plug',
+  symbol: { name: 'USB_A_PCB_Edge', text: SYMBOL_LIB_TEXT },      // a (kicad_symbol_lib …) with that symbol
+  footprint: { name: 'USB_A_PCB_Edge', text: FOOTPRINT_TEXT },  // a (footprint …)
+  place: true,
+}));
+// → { status: 'saved', library: 'plugin_usb_tutorial', symbolLibId: 'plugin_usb_tutorial:USB_A_PCB_Edge', … }
+//   or { status: 'cancelled' }
+```
+
+Names: letters, digits, space, `_ . + -`, at most 64 characters. Symbol text
+up to 512 KiB, footprint up to 2 MiB. Errors carry a code: `NOT_SIGNED_IN`,
+`NO_TEAM_WRITE`, `INVALID_SYMBOL`, `INVALID_FOOTPRINT`, `TOO_LARGE`,
+`LIB_WRITE_FAILED`.
 
 ## Read the schematic sheet
 
