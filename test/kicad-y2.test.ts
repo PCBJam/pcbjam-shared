@@ -484,3 +484,70 @@ describe("patchNodeFromSlots — baseline-relative writes (ysync 0012 #2)", () =
     expect(text).toContain('"peer"');
   });
 });
+
+describe("value-anchored positional patch (sync audit SYNC-01)", () => {
+  const poly = (pts: Array<[number, number]>) =>
+    `(gr_poly (pts ${pts.map(([x, y]) => `(xy ${x} ${y})`).join(" ")}) (layer "F.SilkS") (uuid "poly-1"))`;
+  const body = (pts: Array<[number, number]>) => sexprToItems(poly(pts)).items["poly-1"]!.body;
+  const pointsOf = (doc: Y.Doc) =>
+    [...renderItem(yToDoc(doc), "poly-1").matchAll(/\(xy ([-\d.]+) ([-\d.]+)\)/g)].map((m) => [Number(m[1]), Number(m[2])]);
+  const ORIG: Array<[number, number]> = [[50, 50], [60, 50], [60, 60], [50, 60]];
+  const INSERTED: Array<[number, number]> = [[50, 50], [55, 50], [60, 50], [60, 60], [50, 60]];
+  const MOVED: Array<[number, number]> = [[50, 50], [60, 50], [62, 62], [50, 60]];
+
+  function seeded() {
+    const doc = new Y.Doc();
+    docToY(fileToDoc(`(kicad_pcb ${poly(ORIG)})`), doc);
+    const node = kicadItemsMap(doc).get("poly-1")!.get("body") as Y.Map<unknown>;
+    return { doc, node };
+  }
+
+  it("a stale vertex move after a peer's baseline-relative insert moves the ORIGINAL vertex", () => {
+    const { doc, node } = seeded();
+    doc.transact(() => patchNodeFromSlots(node, body(ORIG), body(INSERTED)));
+    doc.transact(() => patchNodeFromSlots(node, body(ORIG), body(MOVED)));
+    expect(pointsOf(doc)).toEqual([[50, 50], [55, 50], [60, 50], [62, 62], [50, 60]]);
+  });
+
+  it("also against a pre-fix peer that wrote the insert as shifted values (whole-body write)", () => {
+    const { doc, node } = seeded();
+    doc.transact(() => updateNodeFromSlots(node, body(INSERTED)));
+    doc.transact(() => patchNodeFromSlots(node, body(ORIG), body(MOVED)));
+    expect(pointsOf(doc)).toEqual([[50, 50], [55, 50], [60, 50], [62, 62], [50, 60]]);
+  });
+
+  it("concurrent insert + move on two replicas merge to both edits", () => {
+    const a = new Y.Doc();
+    docToY(fileToDoc(`(kicad_pcb ${poly(ORIG)})`), a);
+    const b = new Y.Doc();
+    Y.applyUpdate(b, Y.encodeStateAsUpdate(a));
+    const nodeOf = (d: Y.Doc) => kicadItemsMap(d).get("poly-1")!.get("body") as Y.Map<unknown>;
+    a.transact(() => patchNodeFromSlots(nodeOf(a), body(ORIG), body(INSERTED)));
+    b.transact(() => patchNodeFromSlots(nodeOf(b), body(ORIG), body(MOVED)));
+    Y.applyUpdate(a, Y.encodeStateAsUpdate(b));
+    Y.applyUpdate(b, Y.encodeStateAsUpdate(a));
+    expect(pointsOf(a)).toEqual([[50, 50], [55, 50], [60, 50], [62, 62], [50, 60]]);
+    expect(pointsOf(b)).toEqual(pointsOf(a));
+  });
+
+  it("two replicas moving the SAME vertex stay one vertex (LWW, never duplicated)", () => {
+    const a = new Y.Doc();
+    docToY(fileToDoc(`(kicad_pcb ${poly(ORIG)})`), a);
+    const b = new Y.Doc();
+    Y.applyUpdate(b, Y.encodeStateAsUpdate(a));
+    const nodeOf = (d: Y.Doc) => kicadItemsMap(d).get("poly-1")!.get("body") as Y.Map<unknown>;
+    a.transact(() => patchNodeFromSlots(nodeOf(a), body(ORIG), body([[50, 50], [60, 50], [61, 61], [50, 60]])));
+    b.transact(() => patchNodeFromSlots(nodeOf(b), body(ORIG), body(MOVED)));
+    Y.applyUpdate(a, Y.encodeStateAsUpdate(b));
+    Y.applyUpdate(b, Y.encodeStateAsUpdate(a));
+    expect(pointsOf(a)).toHaveLength(4);
+    expect(pointsOf(b)).toEqual(pointsOf(a));
+  });
+
+  it("a local delete of a vertex removes that vertex, not its shifted neighbour", () => {
+    const { doc, node } = seeded();
+    doc.transact(() => patchNodeFromSlots(node, body(ORIG), body(INSERTED)));
+    doc.transact(() => patchNodeFromSlots(node, body(ORIG), body([[50, 50], [60, 50], [50, 60]])));
+    expect(pointsOf(doc)).toEqual([[50, 50], [55, 50], [60, 50], [50, 60]]);
+  });
+});

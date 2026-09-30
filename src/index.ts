@@ -22,6 +22,8 @@ export * from "./collab-wire.js";
 export * from "./kicad-delta.js";
 export * from "./kicad-y.js";
 export * from "./kicad-y2.js";
+export * from "./layout-merge.js";
+export * from "./sidecar-doc.js";
 export * from "./items-wire.js";
 export * from "./drift.js";
 export * from "./sync-wire.js";

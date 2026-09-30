@@ -46,6 +46,7 @@ import {
   type Slot,
 } from "./kicad-doc.js";
 import { emptyKicadDelta, type KicadDelta } from "./kicad-delta.js";
+import { merge3Slots } from "./layout-merge.js";
 import { Y_KDOC_COMMENTS } from "./comments-wire.js";
 import {
   nodeFromSlots,
@@ -732,6 +733,15 @@ export function applyDeltaToY(ydoc: Y.Doc, delta: KicadDelta, origin?: unknown):
   }, origin);
 }
 
+export interface SyncLayoutOptions {
+  /**
+   * Reconcile only these heads (proposal 21 WP4: a live header emit carries the
+   * board header alone — every head it lacks must be left untouched, not read
+   * as deleted). `lib_symbols` is skipped too unless listed.
+   */
+  heads?: ReadonlySet<string>;
+}
+
 /**
  * Coarse non-item layout sync from a freshly SAVED file (miss 08). Item slots
  * belong to the item sync and are never touched; everything else — title block,
@@ -765,6 +775,7 @@ export function syncLayoutToY(
   ydoc: Y.Doc,
   origin?: unknown,
   baseline?: KicadDoc,
+  opts?: SyncLayoutOptions,
 ): boolean {
   assertKicadDoc(fileDoc);
   const FROZEN = new Set(["net", "lib_symbols"]);
@@ -772,7 +783,9 @@ export function syncLayoutToY(
 
   ydoc.transact(() => {
     // lib_symbols → the defs map, additive.
-    const defs = libSymbolsFromLayout(fileDoc.layout, fileDoc.items);
+    const defs = opts?.heads && !opts.heads.has("lib_symbols")
+      ? {}
+      : libSymbolsFromLayout(fileDoc.layout, fileDoc.items);
     const baseDefs = baseline ? libSymbolsFromLayout(baseline.layout, baseline.items) : undefined;
     const libs = kicadLibSymbolsMap(ydoc);
     for (const [id, def] of Object.entries(defs)) {
@@ -801,6 +814,7 @@ export function syncLayoutToY(
     const heads = new Set([...fileGroups.keys(), ...groupsOf(layout.toArray()).keys()]);
 
     for (const head of heads) {
+      if (opts?.heads && !opts.heads.has(head)) continue;
       const cur = layout.toArray(); // refresh after prior group mutations
       const curGroup = cur.filter((s) => "k" in s && s.k === head);
       const fileGroup = fileGroups.get(head) ?? [];
@@ -813,9 +827,18 @@ export function syncLayoutToY(
         continue;
       }
 
+      // With a baseline, write a three-way merge instead of the file's group
+      // (proposal 21 WP1, sync audit SYNC-06b): only the fields the writer
+      // changed relative to its baseline — a peer's newer title, stackup or
+      // layer name in the same head survives a stale writer's other edit.
+      const next = baseGroups
+        ? merge3Slots(baseGroups.get(head) ?? [], fileGroup, curGroup)
+        : fileGroup;
+      if (JSON.stringify(next) === JSON.stringify(curGroup)) continue;
+
       // Replace the whole group: delete existing occurrences (reverse keeps
-      // indices valid), then insert the file's at the first old position (or
-      // before the first {item} slot for a brand-new head).
+      // indices valid), then insert the merged group at the first old position
+      // (or before the first {item} slot for a brand-new head).
       let insertAt = cur.findIndex((s) => "k" in s && s.k === head);
       if (insertAt < 0) {
         const firstItem = cur.findIndex((s) => "item" in s);
@@ -825,7 +848,7 @@ export function syncLayoutToY(
         const s = cur[i]!;
         if ("k" in s && s.k === head) layout.delete(i, 1);
       }
-      if (fileGroup.length) layout.insert(Math.min(insertAt, layout.length), fileGroup);
+      if (next.length) layout.insert(Math.min(insertAt, layout.length), next);
       changed = true;
     }
   }, origin);

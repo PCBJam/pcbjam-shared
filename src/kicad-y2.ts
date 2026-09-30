@@ -422,6 +422,139 @@ export function updateNodeFromSlots(
   updateAttrOrder(node, targetKeys, toDelete, keyed);
 }
 
+// ── Value-anchored positional keys (sync audit SYNC-01) ───────────────────────
+
+/** Index pairs of a longest common subsequence of `a` and `b` (equal strings). */
+function lcsPairs(a: readonly string[], b: readonly string[]): Array<[number, number]> {
+  const n = a.length;
+  const m = b.length;
+  const len: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      len[i]![j] = a[i] === b[j] ? len[i + 1]![j + 1]! + 1 : Math.max(len[i + 1]![j]!, len[i]![j + 1]!);
+    }
+  }
+  const pairs: Array<[number, number]> = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      pairs.push([i, j]);
+      i++;
+      j++;
+    } else if (len[i + 1]![j]! >= len[i]![j + 1]!) {
+      i++;
+    } else {
+      j++;
+    }
+  }
+  return pairs;
+}
+
+/** Positional (rule-3 / atom) keyed slots — the ones matched by occurrence. */
+function isPositional(k: KeyedSlot): boolean {
+  return !("item" in k.slot) && INTEGER_ID.test(keyId(k.key));
+}
+
+/**
+ * Re-key the POSITIONAL slots of a baseline-relative patch by VALUE instead of by
+ * occurrence (sync audit SYNC-01). `keySlots` matches the k-th `xy` of the baseline
+ * to the k-th `xy` key of the node as it is NOW — after a peer's vertex insert that
+ * key holds a different point, and a stale local move lands on the wrong vertex.
+ *
+ * Per positional kind:
+ *  1. the baseline's entries are aligned to the node's current entries by value
+ *     (LCS), which finds where each entry the writer saw sits now;
+ *  2. the baseline is aligned to the new body (LCS) — the writer's edit script;
+ *  3. an unchanged entry keeps its anchored key; within each gap between aligned
+ *     entries, removed/added pairs become in-place REPLACEMENTS of the anchored
+ *     key (so two writers moving the same vertex stay one slot, LWW — never
+ *     duplicated), leftover removals delete, leftover additions get fresh keys
+ *     that `patchNodeFromSlots`' order pass inserts after their left neighbour.
+ * A baseline entry the node no longer holds (a peer changed it too) is inferred
+ * only when exactly one unclaimed current key sits between its anchored
+ * neighbours; otherwise that kind keeps the occurrence keys from `keySlots` —
+ * the pre-fix behaviour, never worse.
+ */
+function anchorPositionalKeys(keyedBefore: KeyedSlot[], keyedAfter: KeyedSlot[], node: YNode): void {
+  const kindOf = (k: KeyedSlot): string => keyKind(k.key);
+  const kinds = new Set<string>();
+  for (const k of [...keyedBefore, ...keyedAfter]) if (isPositional(k)) kinds.add(kindOf(k));
+  if (kinds.size === 0) return;
+  const current = normalizedKeys(node);
+  const alloc = numericAllocator(node);
+  const json = (s: Slot): string => JSON.stringify(s);
+
+  for (const kind of kinds) {
+    const b = keyedBefore.filter((k) => isPositional(k) && kindOf(k) === kind);
+    const a = keyedAfter.filter((k) => isPositional(k) && kindOf(k) === kind);
+    const curKeys = current.filter((key) => keyKind(key) === kind && INTEGER_ID.test(keyId(key)));
+    const curVals = curKeys.map((key) => json(decodeChild(key, node.get(key))));
+    const bVals = b.map((k) => json(k.slot));
+    const aVals = a.map((k) => json(k.slot));
+
+    // 1. baseline → current, by value.
+    const bKey: Array<string | undefined> = new Array(b.length).fill(undefined);
+    const claimed = new Set<string>();
+    for (const [bi, ci] of lcsPairs(bVals, curVals)) {
+      bKey[bi] = curKeys[ci];
+      claimed.add(curKeys[ci]!);
+    }
+    // Infer a baseline entry the node changed meanwhile: the single unclaimed
+    // current key between its anchored neighbours.
+    for (let i = 0; i < b.length; i++) {
+      if (bKey[i] !== undefined) continue;
+      let lo = -1;
+      let loIdx = -1;
+      for (let p = i - 1; p >= 0; p--) if (bKey[p] !== undefined) { lo = curKeys.indexOf(bKey[p]!); loIdx = p; break; }
+      let hi = curKeys.length;
+      let hiIdx = b.length;
+      for (let p = i + 1; p < b.length; p++) if (bKey[p] !== undefined) { hi = curKeys.indexOf(bKey[p]!); hiIdx = p; break; }
+      const free = curKeys.slice(lo + 1, hi).filter((key) => !claimed.has(key));
+      // Only a gap holding exactly this one unresolved baseline entry is unambiguous.
+      if (free.length === 1 && hiIdx - loIdx === 2) {
+        bKey[i] = free[0];
+        claimed.add(free[0]!);
+      }
+    }
+
+    // 2+3. baseline → new body: keep / replace / delete / add.
+    const aKey: Array<string | undefined> = new Array(a.length).fill(undefined);
+    const pairs = lcsPairs(bVals, aVals);
+    let ok = true;
+    let pb = 0;
+    let pa = 0;
+    const gap = (bEnd: number, aEnd: number): void => {
+      const n = Math.min(bEnd - pb, aEnd - pa);
+      for (let t = 0; t < n; t++) {
+        if (bKey[pb + t] === undefined) ok = false;
+        aKey[pa + t] = bKey[pb + t];
+      }
+    };
+    for (const [bi, ai] of pairs) {
+      gap(bi, ai);
+      if (bKey[bi] === undefined) ok = false;
+      aKey[ai] = bKey[bi];
+      pb = bi + 1;
+      pa = ai + 1;
+    }
+    gap(b.length, a.length);
+    if (!ok) continue; // un-anchorable: keep keySlots' occurrence keys for this kind
+
+    // Unanchored baseline entries that are deleted: give them a key the node
+    // lacks so the patch neither deletes nor compares against a live slot.
+    b.forEach((k, i) => {
+      k.key = bKey[i] ?? `${kind === ATOM_KIND ? ATOM_PREFIX.slice(0, -1) : kind}#~gone${i}`;
+      k.matched = bKey[i] !== undefined;
+    });
+    a.forEach((k, i) => {
+      const key = aKey[i] ?? (kind === ATOM_KIND ? ATOM_PREFIX + alloc(ATOM_KIND) : `${kind}#${alloc(kind)}`);
+      k.key = key;
+      k.matched = node.has(key);
+    });
+  }
+}
+
 /**
  * PATCH a body into `node` relative to a BASELINE (ysync 0012 #2): only the
  * slots that differ between `before` (what the writer last agreed the body
@@ -444,6 +577,7 @@ export function patchNodeFromSlots(
 ): void {
   const keyedBefore = keySlots(before, node);
   const keyedAfter = keySlots(after, node);
+  anchorPositionalKeys(keyedBefore, keyedAfter, node);
   const beforeByKey = new Map(keyedBefore.map((k) => [k.key, k.slot]));
   const afterKeys = new Set(keyedAfter.map((k) => k.key));
 
