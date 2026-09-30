@@ -17,7 +17,7 @@ type PCBJamSheetSymbol = {uuid:string;libId:string;ref:string;value:string;footp
  *  not listed; unconnected pins sit alone in `unconnected-(REF-PadN)`. `noConnect`: an X marks the pin. */
 type PCBJamSheetNet = {net:string;pins:{uuid:string;ref:string;libId:string;pin:string;name:string;noConnect:boolean}[]};
 /** Where a pointer or tour step points: `tool:<action>`, `menu:<Title>[/<Item>]`, `dialog:<CLASS>[/control:<type>[:<label>]]`,
- *  `item:<uuid>`, `area:x,y,w,h` / `point:x,y` (world IU), `tooltip:<text>`; in tours also `new:<libId>`. */
+ *  `item:<uuid>`, `footprint:<REF>` (PCB editor), `area:x,y,w,h` / `point:x,y` (world IU), `tooltip:<text>`; in tours also `new:<libId>`. */
 type PCBJamTarget = string;
 type PCBJamPointer = {target:PCBJamTarget;title?:string;text:string;lostText?:string;placement?:'auto'|'top'|'bottom'|'left'|'right';spotlight?:boolean;pulse?:boolean};
 /** Selects pins: exactly one of libId/ref/power; `pin` for libId/ref; `all` = every placed matching symbol. */
@@ -30,6 +30,10 @@ type PCBJamTourCond =
   | {footprint:{libId:string;set:true|string} | {ref:string;set:true|string}}
   | {value:{libId:string;is:string} | {ref:string;is:string}}
   | {net:PCBJamPinSel[]} | {noConnect:PCBJamPinSel}
+  // PCB editor: footprints on the board (by ref, fpid, or all; `inside` = every pad inside the closed outline),
+  // a closed Edge.Cuts outline, connections still unrouted, track count, the active layer ("Edge.Cuts").
+  | {boardFootprints:{ref?:string;fpid?:string;min?:number;inside?:true}}
+  | {boardOutline:{closed:true}} | {unrouted:{max:number}} | {tracks:{min:number}} | {activeLayer:string}
   | {all:PCBJamTourCond[]} | {any:PCBJamTourCond[]} | {not:PCBJamTourCond};
 /** A declarative tour: the current step is the first whose `when` holds and whose `until` is not met.
  *  The last step must finish on `{next:true}`. At most 30 steps, 64 KiB. */

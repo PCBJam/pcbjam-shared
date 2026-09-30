@@ -568,7 +568,12 @@ a `libId`, or one `ref`, has a footprint — or exactly the given one),
 `value` (every placed symbol of a `libId`, or one `ref`, has that value —
 compared as a component value: `39`, `39R`, `39Ω` and `0.039k` are equal, as
 are `4k7` and `4.7k`; `m` is milli, `M` mega; other text case-insensitively),
-`net` (one net contains a pin matching every selector) and `noConnect`. **Event**
+`net` (one net contains a pin matching every selector) and `noConnect`. In the
+PCB editor: `boardFootprints` (`{ref}`, `{fpid}` or all footprints, `min`
+count, `inside: true` = every pad lies inside the closed board outline),
+`boardOutline: {closed: true}` (Edge.Cuts forms a closed outline),
+`unrouted: {max}` (connections still missing), `tracks: {min}` and
+`activeLayer` (e.g. `"Edge.Cuts"`). **Event**
 conditions fire once: `next` (the card's Next button), `action` (an editor
 action ran, e.g. `eeschema.InteractiveDrawing.placeSymbol`), `dialogOpened`,
 `dialogClosed`; a step whose `until` uses one stays done once it is met while
@@ -590,7 +595,8 @@ until: { all: [
 Targets: `tool:<action name>`, `menu:<Title>` / `menu:<Title>/<Item>`,
 `dialog:<CLASS>` and `dialog:<CLASS>/control:<type>[:<label>]` (type: the wx
 class without `wx` — `button`, `textctrl`, `searchctrl` — or an owner-drawn
-item such as `dataviewitem`), `item:<uuid>`, `area:x,y,w,h` and `point:x,y` in
+item such as `dataviewitem`), `item:<uuid>`, `footprint:<REF>` (a footprint on
+the board, PCB editor), `area:x,y,w,h` and `point:x,y` in
 internal units, and in tours `new:<libId>` (the newest symbol of that library
 placed during the tour). A target that is not on screen shows the step's
 `lostText`.
