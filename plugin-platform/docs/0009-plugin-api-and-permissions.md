@@ -564,8 +564,11 @@ The shown step is the first whose `when` holds (default: always) and whose
 `until` is not met. **State** conditions are re-checked live, so undoing the
 work brings its step back: `dialogOpen`, `symbols` (`new: true` counts only
 symbols placed since the tour started), `footprint` (every placed symbol of
-a `libId`, or one `ref`, has a footprint — or exactly the given one), `net`
-(one net contains a pin matching every selector) and `noConnect`. **Event**
+a `libId`, or one `ref`, has a footprint — or exactly the given one),
+`value` (every placed symbol of a `libId`, or one `ref`, has that value —
+compared as a component value: `39`, `39R`, `39Ω` and `0.039k` are equal, as
+are `4k7` and `4.7k`; `m` is milli, `M` mega; other text case-insensitively),
+`net` (one net contains a pin matching every selector) and `noConnect`. **Event**
 conditions fire once: `next` (the card's Next button), `action` (an editor
 action ran, e.g. `eeschema.InteractiveDrawing.placeSymbol`), `dialogOpened`,
 `dialogClosed`; a step whose `until` uses one stays done once it is met while

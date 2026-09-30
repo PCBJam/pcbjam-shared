@@ -28,6 +28,7 @@ type PCBJamTourCond =
   | {next:true} | {action:string} | {dialogOpened:string} | {dialogClosed:string} | {dialogOpen:string}
   | {symbols:{libId:string;min:number;new?:boolean}}
   | {footprint:{libId:string;set:true|string} | {ref:string;set:true|string}}
+  | {value:{libId:string;is:string} | {ref:string;is:string}}
   | {net:PCBJamPinSel[]} | {noConnect:PCBJamPinSel}
   | {all:PCBJamTourCond[]} | {any:PCBJamTourCond[]} | {not:PCBJamTourCond};
 /** A declarative tour: the current step is the first whose `when` holds and whose `until` is not met.
