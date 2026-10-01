@@ -782,6 +782,23 @@ describe("sparse layer (lazy bodies)", () => {
     expect(cloud.server(MODELS).blobFetches).toBe(0);
   });
 
+  it("a reopen whose digest matches the stored manifest makes no request (project-sync 0003)", async () => {
+    const b = browser();
+    await b.stack(cloud, [sparseModels()]).open();
+    expect(cloud.server(MODELS).manifestFetches).toBe(1);
+    const digest = await manifestDigest(cloud.server(MODELS).manifest);
+
+    const warm = b.stack(cloud, [{ ...sparseModels(), digest }]);
+    await warm.open();
+    expect(cloud.server(MODELS).manifestFetches).toBe(1);
+    // Bodies are still fetched on demand from the stored manifest.
+    expect(text(await warm.read("model3d/a.step"))).toBe("STEP-A");
+
+    // A digest that does not match (the server moved on) syncs as before.
+    await b.stack(cloud, [{ ...sparseModels(), digest: "stale" }]).open();
+    expect(cloud.server(MODELS).manifestFetches).toBe(2);
+  });
+
   it("read() lazily fetches ONE body via the content-addressed template, then caches", async () => {
     const b = browser();
     const s = b.stack(cloud, [sparseModels()]);

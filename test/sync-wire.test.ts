@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   decodeBundle,
+  decodeFolder,
   decodeFrames,
   diffManifest,
   encodeBundle,
+  encodeFolder,
   encodeFrames,
   sha256Hex,
   type SyncManifest,
@@ -115,5 +117,42 @@ describe("bundle codec", () => {
     expect(out.bodies.map(([p]) => p)).toEqual(["a/b", "c/d"]);
     expect([...out.bodies[0]![1]]).toEqual([...body("xyz")]);
     expect(out.bodies[1]![1].length).toBe(0);
+  });
+});
+
+describe("folder codec (project-sync 0003)", () => {
+  const folder = {
+    revisions: { "docs/a.md": 2, "docs/b.bin": 1, "docs/room-only.kicad_sch": 0 },
+    omitted: ["docs/huge.step"],
+    files: [
+      ["docs/a.md", enc.encode("AAA")],
+      ["docs/b.bin", new Uint8Array([0, 255, 128, 10])],
+      ["docs/room-only.kicad_sch", enc.encode("")],
+    ] as Array<[string, Uint8Array]>,
+  };
+
+  it("round-trips bodies, revisions and the omitted list", () => {
+    const out = decodeFolder(encodeFolder(folder));
+    expect(out.revisions).toEqual(folder.revisions);
+    expect(out.omitted).toEqual(["docs/huge.step"]);
+    expect(out.files.map(([p, b]) => [p, Array.from(b)])).toEqual(folder.files.map(([p, b]) => [p, Array.from(b)]));
+  });
+
+  it("decodes from a view into a larger buffer", () => {
+    const buf = encodeFolder(folder);
+    const padded = new Uint8Array(buf.length + 7);
+    padded.set(buf, 3);
+    expect(decodeFolder(padded.subarray(3, 3 + buf.length)).files).toHaveLength(3);
+  });
+
+  it("refuses a response that was cut short, wherever the cut is", () => {
+    const buf = encodeFolder(folder);
+    for (const cut of [2, 20, buf.length - 30, buf.length - 1]) {
+      expect(() => decodeFolder(buf.subarray(0, cut))).toThrow();
+    }
+  });
+
+  it("an empty folder is a header and nothing else", () => {
+    expect(decodeFolder(encodeFolder({ revisions: {}, omitted: [], files: [] }))).toEqual({ revisions: {}, omitted: [], files: [] });
   });
 });

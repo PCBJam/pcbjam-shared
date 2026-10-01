@@ -412,7 +412,13 @@ export class SyncLayer {
     if (this.channel) this.wireChannel(this.channel, generation);
 
     if (this.kind === "sparse") {
-      await this.sync();
+      // Sparse layers hold no bodies to refresh, so a stored manifest the
+      // caller's digest vouches for needs no request at all (the project
+      // namespace's boot digest — project-sync 0003).
+      const current =
+        !!stored && !!this.digest && (await manifestDigest(this.manifest)) === this.digest;
+      if (!this.isCurrentGeneration(generation)) return;
+      if (!current) await this.sync();
     } else {
       if (!stored) await this.init(stored);
       if (this.channel) {
