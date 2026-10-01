@@ -618,7 +618,8 @@ Targets: `tool:<action name>`, `menu:<Title>` / `menu:<Title>/<Item>`,
 `dialog:<CLASS>` and `dialog:<CLASS>/control:<type>[:<label>]` (type: the wx
 class without `wx`, such as `button`, `textctrl` or `searchctrl`, or an
 owner-drawn item such as `dataviewitem`), `item:<uuid>`, `footprint:<REF>` (a footprint on
-the board, PCB editor), `area:x,y,w,h` and `point:x,y` in
+the board, PCB editor), `symbol:<REF>` (a symbol on the shown sheet, schematic
+editor), `area:x,y,w,h` and `point:x,y` in
 internal units, and in tours `new:<libId>` (the newest symbol of that library
 placed during the tour). A target that is not on screen shows the step's
 `lostText`.
@@ -628,8 +629,17 @@ active in this tab and answers `not-active` otherwise. Call it when your
 panel opens. `busy` means another guide is on screen. `tour.status()` reports
 the shown step. A one-off pointer without a tour:
 `pcbjam.ui.overlay.show({target, text})` → `shown` or `not-found`;
-`pcbjam.ui.overlay.clear()` removes it. Limits: 30 steps, 64 KiB per tour,
+`pcbjam.ui.overlay.clear()` removes it. Limits: 60 steps, 64 KiB per tour,
 title 80 and text 600 characters; one tour or pointer per plugin.
+
+Steps that latched on an event stay done when the page reloads or the user
+switches editors in this tab (a fresh `tour.start` without `resume` forgets
+them). From the second step on, PCBJam adds a Back button: it shows the step
+before again AND puts the document back the way it was when that step first
+showed — a step that only shows inside a dialog is skipped, since going back
+cannot reopen the dialog. `celebrate: 'rainbow'` on a step throws a short
+celebration at the mouse when the step shows (a chip only, for users who
+prefer reduced motion) — for the moment a check comes back clean.
 
 ## Ship a part
 

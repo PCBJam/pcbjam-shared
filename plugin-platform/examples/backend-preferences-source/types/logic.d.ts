@@ -17,7 +17,8 @@ type PCBJamSheetSymbol = {uuid:string;libId:string;ref:string;value:string;footp
  *  not listed; unconnected pins sit alone in `unconnected-(REF-PadN)`. `noConnect`: an X marks the pin. */
 type PCBJamSheetNet = {net:string;pins:{uuid:string;ref:string;libId:string;pin:string;name:string;noConnect:boolean}[]};
 /** Where a pointer or tour step points: `tool:<action>`, `menu:<Title>[/<Item>]`, `dialog:<CLASS>[/control:<type>[:<label>]]`,
- *  `item:<uuid>`, `footprint:<REF>` (PCB editor), `area:x,y,w,h` / `point:x,y` (world IU), `tooltip:<text>`; in tours also `new:<libId>`. */
+ *  `item:<uuid>`, `footprint:<REF>` (PCB editor), `symbol:<REF>` (schematic editor), `area:x,y,w,h` / `point:x,y` (world IU),
+ *  `tooltip:<text>`; in tours also `new:<libId>`. */
 type PCBJamTarget = string;
 type PCBJamPointer = {target:PCBJamTarget;title?:string;text:string;lostText?:string;placement?:'auto'|'top'|'bottom'|'left'|'right';spotlight?:boolean;pulse?:boolean};
 /** Selects pins: exactly one of libId/ref/power; `pin` for libId/ref; `all` = every placed matching symbol. */
@@ -36,9 +37,12 @@ type PCBJamTourCond =
   | {boardOutline:{closed:true}} | {unrouted:{max:number}} | {tracks:{min:number}} | {activeLayer:string}
   | {all:PCBJamTourCond[]} | {any:PCBJamTourCond[]} | {not:PCBJamTourCond};
 /** A declarative tour: the current step is the first whose `when` holds and whose `until` is not met.
- *  The last step must finish on `{next:true}`. At most 30 steps, 64 KiB. */
+ *  The last step must finish on `{next:true}`. At most 60 steps, 64 KiB. Event steps stay done across a
+ *  reload in this tab. Later steps get a Back button that also puts the document back the way it was when
+ *  the earlier step first showed (steps that only show inside a dialog are skipped). `celebrate` throws a
+ *  short host-drawn celebration when its step shows. */
 type PCBJamTour = {id:string;title?:string;editor:'eeschema'|'pcbnew';
-  steps:(Omit<PCBJamPointer,'target'> & {id:string;target?:PCBJamTarget;when?:PCBJamTourCond;until:PCBJamTourCond})[]};
+  steps:(Omit<PCBJamPointer,'target'> & {id:string;target?:PCBJamTarget;celebrate?:'rainbow';when?:PCBJamTourCond;until:PCBJamTourCond})[]};
 // BEGIN GENERATED HOST METHODS
 type PCBJamHostMethod = "http.request" | "http.upload" | "ui.openExternal" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "board.geometryStart" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "exports.run" | "exports.readJson" | "exports.bundle" | "files.saveBundle" | "editor.requestPlacement" | "tour.start" | "tour.stop" | "tour.status" | "ui.overlay.show" | "ui.overlay.clear" | "parts.save" | "schematic.symbols" | "schematic.connectivity";
 // END GENERATED HOST METHODS
