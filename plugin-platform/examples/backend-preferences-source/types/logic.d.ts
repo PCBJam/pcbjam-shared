@@ -11,8 +11,9 @@ type PCBJamGeometryDrawing = {layer:string;text?:'reference'|'value'|'field'|'te
 /** `$` names the record: 'board' | 'footprint' | 'drawing' | 'tracks' | 'zone'. See the API guide for each shape. */
 type PCBJamGeometryRecord = {$:string;[key:string]:any};
 type PCBJamItemError = {id:string;error:'TOO_LARGE'|'DEFERRED'};
-/** A placed symbol on the shown schematic sheet; `ref`, `value` and `footprint` as shown on this sheet. */
-type PCBJamSheetSymbol = {uuid:string;libId:string;ref:string;value:string;footprint:string};
+/** A placed symbol on the shown schematic sheet; `ref`, `value` and `footprint` as shown on this sheet;
+ *  `angle` 0/90/180/270 and `mirror` ''/'x'/'y' its orientation; `x`/`y` its anchor in schematic units (10 000 per mm). */
+type PCBJamSheetSymbol = {uuid:string;libId:string;ref:string;value:string;footprint:string;angle:0|90|180|270;mirror:''|'x'|'y';x:number;y:number};
 /** A net with a pin on the shown sheet. Power symbols name their net (`+5V`) but their own `#PWR` pins are
  *  not listed; unconnected pins sit alone in `unconnected-(REF-PadN)`. `noConnect`: an X marks the pin. */
 type PCBJamSheetNet = {net:string;pins:{uuid:string;ref:string;libId:string;pin:string;name:string;noConnect:boolean}[]};
@@ -23,17 +24,22 @@ type PCBJamTarget = string;
 type PCBJamPointer = {target:PCBJamTarget;title?:string;text:string;lostText?:string;placement?:'auto'|'top'|'bottom'|'left'|'right';spotlight?:boolean;pulse?:boolean};
 /** Selects pins: exactly one of libId/ref/power; `pin` for libId/ref; `all` = every placed matching symbol. */
 type PCBJamPinSel = {libId:string;pin:string;all?:boolean} | {ref:string;pin:string;all?:boolean} | {power:string};
-/** Tour conditions, evaluated by PCBJam. next/action/dialogOpened/dialogClosed are events (a step using one
- *  stays done once met while it is on screen); the rest are re-checked live. */
+/** Tour conditions, evaluated by PCBJam. next/action/dialogOpened/dialogClosed/checkFinished are events (a step
+ *  using one stays done once met while it is on screen); the rest are re-checked live. `checkFinished`: ERC or DRC
+ *  ran in its dialog, optionally with at most `maxErrors` / `maxWarnings` (`{kind:'erc', maxErrors:0}` = a clean ERC). */
 type PCBJamTourCond =
   | {next:true} | {action:string} | {dialogOpened:string} | {dialogClosed:string} | {dialogOpen:string}
+  | {checkFinished:{kind:'erc'|'drc';maxErrors?:number;maxWarnings?:number}}
   | {symbols:{libId:string;min:number;new?:boolean}}
   | {footprint:{libId:string;set:true|string} | {ref:string;set:true|string}}
   | {value:{libId:string;is:string} | {ref:string;is:string}}
+  // Every placed matching symbol is turned to one of these angles.
+  | {orientation:{libId:string;angle:(0|90|180|270)[]} | {ref:string;angle:(0|90|180|270)[]}}
   | {net:PCBJamPinSel[]} | {noConnect:PCBJamPinSel}
   // PCB editor: footprints on the board (by ref, fpid, or all; `inside` = every pad inside the closed outline),
   // a closed Edge.Cuts outline, connections still unrouted, track count, the active layer ("Edge.Cuts").
-  | {boardFootprints:{ref?:string;fpid?:string;min?:number;inside?:true}}
+  // `angle`: every matching footprint is turned to one of these angles (degrees, ±0.5).
+  | {boardFootprints:{ref?:string;fpid?:string;min?:number;inside?:true;angle?:number[]}}
   | {boardOutline:{closed:true}} | {unrouted:{max:number}} | {tracks:{min:number}} | {activeLayer:string}
   | {all:PCBJamTourCond[]} | {any:PCBJamTourCond[]} | {not:PCBJamTourCond};
 /** A declarative tour: the current step is the first whose `when` holds and whose `until` is not met.

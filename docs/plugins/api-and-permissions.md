@@ -63,7 +63,7 @@ permissions. `context.get()` needs no additional permission.
 | `ui.overlay.show({target, text, title?, lostText?, placement?, spotlight?, pulse?})` | `editor:overlay` | Show one pointer card at a target until cleared or the plugin stops; shown or not-found (the target is not on screen now). Refused while a tour runs. |
 | `ui.overlay.clear()` | `editor:overlay` | Remove the plugin’s pointer; resolves to null. |
 | `parts.save({displayName, symbol?, footprint?, place})` | `library:write-parts` | Save a symbol and/or footprint the plugin ships into its own team library after the user confirms; optionally place the symbol. saved (library, lib ids) or cancelled. |
-| `schematic.symbols()` | `documents:read` | Schematic editor: placed symbols on the shown sheet with uuid, libId, ref, value and footprint. |
+| `schematic.symbols()` | `documents:read` | Schematic editor: placed symbols on the shown sheet with uuid, libId, ref, value, footprint, angle, mirror and position (x, y). |
 | `schematic.connectivity()` | `documents:read` | Schematic editor: nets with a pin on the shown sheet, each pin with uuid, ref, libId, pin, name and noConnect. |
 <!-- END GENERATED HOST API -->
 
@@ -637,7 +637,11 @@ switches editors in this tab (a fresh `tour.start` without `resume` forgets
 them). From the second step on, PCBJam adds a Back button: it shows the step
 before again AND puts the document back the way it was when that step first
 showed — a step that only shows inside a dialog is skipped, since going back
-cannot reopen the dialog. `celebrate: 'rainbow'` on a step throws a short
+cannot reopen the dialog. `checkFinished: { kind: 'erc', maxErrors: 0 }`
+holds when the user runs ERC (or `'drc'`) in its dialog and it reports no
+errors — an event, so the step latches; `orientation: { ref: 'R1', angle:
+[90, 270] }` checks how a symbol is turned, and `boardFootprints` takes an
+`angle` list too. `celebrate: 'rainbow'` on a step throws a short
 celebration at the mouse when the step shows (a chip only, for users who
 prefer reduced motion) — for the moment a check comes back clean.
 
