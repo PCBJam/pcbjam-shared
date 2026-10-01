@@ -88,8 +88,13 @@ Every installable package has these three files at its root:
 | `main.js` | Bundled plugin logic. PCBJam supplies the global `pcbjam` API. |
 | `ui.html` | UI with inline JavaScript and CSS. PCBJam supplies `pcbjamUI`. |
 
-You may add `README.md`, `LICENSE.txt` and `sdk.d.ts`. Any other file name is
-refused. A ZIP may wrap the files in one folder.
+You may add `README.md`, `LICENSE.txt` and `sdk.d.ts`. A tutorial may also
+bring its starting project under `template/` (KiCad text files only:
+`.kicad_pro`, `.kicad_sch`, `.kicad_pcb`, `.kicad_sym`, `.kicad_mod`,
+`.kicad_dru`, `.kicad_wks`, `sym-lib-table`, `fp-lib-table`; at most 24 files
+and 4 MiB, with a schematic or board at the top). PCBJam copies it into a new
+project when someone starts the tutorial; the plugin itself never reads it.
+Any other file name is refused. A ZIP may wrap the files in one folder.
 
 Use TypeScript and React through your own build, or plain JavaScript and HTML.
 Bundle your dependencies into these files: no CDN imports, no separate asset

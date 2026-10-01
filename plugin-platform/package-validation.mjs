@@ -10,6 +10,17 @@ const fail = message => { throw new Error(message); };
 export const PACKAGE_KINDS = ['plugin', 'remote-provider'];
 export const PROVIDER_PERMISSIONS = ['provider:embed', 'provider:download', 'editor:place-items'];
 const metadataPath = name => name.split('/').some(part => part === '__MACOSX') || name.split('/').at(-1) === '.DS_Store' || name.split('/').at(-1).startsWith('._');
+// A tutorial's project (overlay-system 0005): KiCad text files under template/ that PCBJam copies
+// into the new project when a user starts the package as a tutorial. Never served to the plugin.
+export const TEMPLATE_LIMITS = { files: 24, bytes: 4 * 1024 * 1024 };
+const TEMPLATE_FILE = /^template\/(?:[A-Za-z0-9_.-]+\/)*(?:[A-Za-z0-9_.-]+\.(?:kicad_pro|kicad_sch|kicad_pcb|kicad_sym|kicad_mod|kicad_dru|kicad_wks)|sym-lib-table|fp-lib-table)$/;
+export const isTemplatePath = name => TEMPLATE_FILE.test(name);
+/** The file a started tutorial opens: the schematic named like the project, else the first schematic or board at the top. */
+export function templateEntry(paths) {
+  const top = paths.filter(p => /^[^/]+\.kicad_(?:pro|sch|pcb)$/.test(p)).sort();
+  const project = top.find(p => p.endsWith('.kicad_pro'))?.slice(0, -'.kicad_pro'.length);
+  return top.find(p => project !== undefined && p === `${project}.kicad_sch`) ?? top.find(p => p.endsWith('.kicad_sch')) ?? top.find(p => p.endsWith('.kicad_pcb')) ?? null;
+}
 function validPath(name) {
   if (typeof name !== 'string' || name.length > 180 || !/^[A-Za-z0-9_./-]+$/.test(name) || name.startsWith('/') || name.split('/').some(p => !p || p === '.' || p === '..')) fail('Unsafe package path');
   return name;
@@ -93,8 +104,11 @@ export function validatePackage(input, { legacyDigest = false } = {}) {
     validPath(file.path);
     if (names.has(file.path.toLowerCase())) fail('Duplicate package path');
     names.add(file.path.toLowerCase());
-    if (!['manifest.json', 'main.js', 'ui.html', 'README.md', 'LICENSE.txt', 'sdk.d.ts'].includes(file.path)) fail(`Unsupported package file: ${file.path}. Install bundled main.js and a self-contained ui.html. For the TypeScript/React starter, run npm run build locally and install dist/plugin or its generated ZIP.`);
+    if (!['manifest.json', 'main.js', 'ui.html', 'README.md', 'LICENSE.txt', 'sdk.d.ts'].includes(file.path) && !isTemplatePath(file.path)) fail(`Unsupported package file: ${file.path}. Install bundled main.js and a self-contained ui.html (a tutorial's project goes under template/, KiCad files only). For the TypeScript/React starter, run npm run build locally and install dist/plugin or its generated ZIP.`);
   }
+  const template = files.filter(f => isTemplatePath(f.path));
+  if (template.length > TEMPLATE_LIMITS.files || template.reduce((n, f) => n + Buffer.byteLength(f.text), 0) > TEMPLATE_LIMITS.bytes) fail('template/ holds at most 24 KiCad files, 4 MiB in all');
+  if (template.length && !templateEntry(template.map(f => f.path.slice('template/'.length)))) fail('template/ needs a schematic or board at its top level');
   const get = name => files.find(f => f.path === name)?.text;
   if (Buffer.byteLength(get('manifest.json') ?? '') > 16384) fail('Manifest exceeds 16 KiB');
   const manifest = JSON.parse(get('manifest.json') ?? fail('Missing manifest.json'));

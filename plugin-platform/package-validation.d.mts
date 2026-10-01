@@ -16,6 +16,11 @@ export interface ValidatedPackage {
   policyDigest: string; validationVersion: number;
 }
 export const LIMITS: {archive: number; total: number; file: number; files: number};
+/** A tutorial's project in the package: KiCad text files under template/ (overlay-system 0005). */
+export const TEMPLATE_LIMITS: {files: number; bytes: number};
+export function isTemplatePath(path: string): boolean;
+/** The template file a started tutorial opens (paths relative to template/); null when there is none. */
+export function templateEntry(paths: string[]): string | null;
 export const PERMISSIONS: Record<string, string>;
 export const PACKAGE_KINDS: readonly ['plugin', 'remote-provider'];
 export const PROVIDER_PERMISSIONS: readonly ['provider:embed', 'provider:download', 'editor:place-items'];
