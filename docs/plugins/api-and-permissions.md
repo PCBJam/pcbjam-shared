@@ -584,23 +584,37 @@ In the schematic editor:
   footprint, or exactly the given one.
 - `value`: every placed symbol of a `libId`, or one `ref`, has that value.
   Values compare as component values: `39`, `39R`, `39Ω` and `0.039k` are
-  equal, as are `4k7` and `4.7k`; `m` is milli, `M` mega; other text compares
+  equal, as are `4k7` and `4.7k`; `m` is milli, `M` mega; a farad unit is
+  dropped, so `10u`, `10uF` and `10µF` are equal; other text compares
   case-insensitively.
+- `orientation`: every placed symbol of a `libId`, or one `ref`, is turned to
+  one of the `angle`s and/or mirrored: `mirror: 'y'` is KiCad's Mirror
+  Horizontally (the X key), `'x'` Mirror Vertically (the Y key), `'none'`
+  unmirrored.
 - `net`: one net contains a pin matching every selector (below).
 - `noConnect`
 
 In the PCB editor:
 - `boardFootprints`: `{ref}`, `{fpid}` or all footprints, with a `min` count;
-  `inside: true` means every pad lies inside the closed board outline.
+  `side: 'back'` keeps only those on the bottom; `inside: true` means every
+  pad lies inside the closed board outline.
 - `boardOutline: {closed: true}`: Edge.Cuts forms a closed outline.
 - `unrouted: {max}`: connections still missing.
 - `tracks: {min}`
+- `vias: {min}`
+- `zones`: copper zones of a `net`, on a `layer`, `filled` or not;
+  `{net: 'GND', layer: 'B.Cu', filled: true}` is a filled ground fill on the
+  bottom.
 - `activeLayer`, e.g. `"Edge.Cuts"`.
 
 **Event conditions** fire once: `next` (the card's Next button), `action` (an
 editor action ran, e.g. `eeschema.InteractiveDrawing.placeSymbol`),
-`dialogOpened`, `dialogClosed`. A step whose `until` uses one stays done once
-it is met while that step is on screen.
+`dialogOpened`, `dialogClosed`, `checkFinished`, `simFinished` (KiCad's
+simulator finished a run with data: `kind: 'tran'`, `minPoints`) and
+`simTraces` (its plot shows all of `has`, e.g. `['I(D1)', 'I(D2)']`, after a
+run or a probe click). A step whose `until` uses one stays done once it is met
+while that step is on screen. The simulator and the footprint-assignment tool
+count as open dialogs (`dialogOpen: 'SIMULATOR_FRAME'`, `'CVPCB_MAINFRAME'`).
 
 Pin selectors: `{ libId, pin }` or `{ ref, pin }` (add `all: true` to require
 **every** placed symbol of that `libId`, e.g. three LEDs in parallel), and

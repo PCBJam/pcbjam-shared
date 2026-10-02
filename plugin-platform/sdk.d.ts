@@ -24,23 +24,31 @@ type PCBJamTarget = string;
 type PCBJamPointer = {target:PCBJamTarget;title?:string;text:string;lostText?:string;placement?:'auto'|'top'|'bottom'|'left'|'right';spotlight?:boolean;pulse?:boolean};
 /** Selects pins: exactly one of libId/ref/power; `pin` for libId/ref; `all` = every placed matching symbol. */
 type PCBJamPinSel = {libId:string;pin:string;all?:boolean} | {ref:string;pin:string;all?:boolean} | {power:string};
-/** Tour conditions, evaluated by PCBJam. next/action/dialogOpened/dialogClosed/checkFinished are events (a step
- *  using one stays done once met while it is on screen); the rest are re-checked live. `checkFinished`: ERC or DRC
- *  ran in its dialog, optionally with at most `maxErrors` / `maxWarnings` (`{kind:'erc', maxErrors:0}` = a clean ERC). */
+/** Tour conditions, evaluated by PCBJam. next/action/dialogOpened/dialogClosed/checkFinished/simFinished/simTraces are
+ *  events (a step using one stays done once met while it is on screen); the rest are re-checked live. `checkFinished`:
+ *  ERC or DRC ran in its dialog, optionally with at most `maxErrors` / `maxWarnings` (`{kind:'erc', maxErrors:0}` = a
+ *  clean ERC). `simFinished`: KiCad's simulator finished a run with data (`kind`: 'tran', 'ac', 'op'…); `simTraces`:
+ *  its plot shows all these traces ("I(D1)", "V(/OUT)"), after a run or a probe click. The simulator and the
+ *  footprint-assignment tool count as open dialogs: `dialogOpen:'SIMULATOR_FRAME'` / `'CVPCB_MAINFRAME'`. */
 type PCBJamTourCond =
   | {next:true} | {action:string} | {dialogOpened:string} | {dialogClosed:string} | {dialogOpen:string}
   | {checkFinished:{kind:'erc'|'drc';maxErrors?:number;maxWarnings?:number}}
   | {symbols:{libId:string;min:number;new?:boolean}}
   | {footprint:{libId:string;set:true|string} | {ref:string;set:true|string}}
   | {value:{libId:string;is:string} | {ref:string;is:string}}
-  // Every placed matching symbol is turned to one of these angles.
-  | {orientation:{libId:string;angle:(0|90|180|270)[]} | {ref:string;angle:(0|90|180|270)[]}}
+  // Every placed matching symbol is turned to one of these angles and/or mirrored: 'y' is KiCad's Mirror
+  // Horizontally (X key), 'x' Mirror Vertically (Y key), 'none' unmirrored. At least one of angle / mirror.
+  | {orientation:({libId:string} | {ref:string}) & {angle?:(0|90|180|270)[];mirror?:'x'|'y'|'none'}}
   | {net:PCBJamPinSel[]} | {noConnect:PCBJamPinSel}
   // PCB editor: footprints on the board (by ref, fpid, or all; `inside` = every pad inside the closed outline),
   // a closed Edge.Cuts outline, connections still unrouted, track count, the active layer ("Edge.Cuts").
-  // `angle`: every matching footprint is turned to one of these angles (degrees, ±0.5).
-  | {boardFootprints:{ref?:string;fpid?:string;min?:number;inside?:true;angle?:number[]}}
+  // `angle`: every matching footprint is turned to one of these angles (degrees, ±0.5); `side` keeps only the
+  // footprints on that side of the board. `vias`: at least this many; `zones`: copper zones of a net, on a layer,
+  // filled or not (`{net:'GND', layer:'B.Cu', filled:true}` = a filled ground fill on the bottom).
+  | {boardFootprints:{ref?:string;fpid?:string;side?:'front'|'back';min?:number;inside?:true;angle?:number[]}}
   | {boardOutline:{closed:true}} | {unrouted:{max:number}} | {tracks:{min:number}} | {activeLayer:string}
+  | {vias:{min:number}} | {zones:{net?:string;layer?:string;filled?:boolean;min?:number}}
+  | {simFinished:{kind?:string;minPoints?:number}} | {simTraces:{has:string[]}}
   | {all:PCBJamTourCond[]} | {any:PCBJamTourCond[]} | {not:PCBJamTourCond};
 /** A declarative tour: the current step is the first whose `when` holds and whose `until` is not met.
  *  The last step must finish on `{next:true}`. At most 60 steps, 64 KiB. Event steps stay done across a
