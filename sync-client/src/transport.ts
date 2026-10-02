@@ -1,12 +1,16 @@
 import {
   decodeBundle,
   decodeFrames,
+  mapLimit,
   SYNC_ACTION_HEADER,
   SYNC_ACTION_RELOAD,
   type ClientMsg,
   type ServerMsg,
   type SyncManifest,
 } from "@pcbjam/shared";
+
+/** Per-file body requests in flight for a static or sparse layer. */
+const BODY_FETCH_CONCURRENCY = 8;
 
 /**
  * A mutation was refused because the addressed room is no longer this
@@ -126,13 +130,13 @@ export function httpLayer(
     },
     async getBodies(entries, signal) {
       if (mode !== "live") {
-        return Promise.all(
-          entries.map(async ({ path }): Promise<[string, Uint8Array]> => {
-            const r = await fetchImpl(bodyUrl(path), { headers: authH, signal });
-            if (!r.ok) throw new Error(`getBody ${path} ${r.status}`);
-            return [path, new Uint8Array(await r.arrayBuffer())];
-          }),
-        );
+        // One request per changed path, a few at a time: a warm sync of a
+        // large layer used to open one connection per file at once.
+        return mapLimit(entries, BODY_FETCH_CONCURRENCY, async ({ path }): Promise<[string, Uint8Array]> => {
+          const r = await fetchImpl(bodyUrl(path), { headers: authH, signal });
+          if (!r.ok) throw new Error(`getBody ${path} ${r.status}`);
+          return [path, new Uint8Array(await r.arrayBuffer())];
+        });
       }
       const r = await fetchImpl(url("/bodies"), {
         method: "POST",

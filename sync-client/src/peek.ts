@@ -1,5 +1,8 @@
-import type { SyncManifest } from "@pcbjam/shared";
+import { mapLimit, type SyncManifest } from "@pcbjam/shared";
 import { openStoreDb, readStoredManifest, type LayerStore } from "./store.js";
+
+/** Stores probed at once (each opens one database). */
+const PROBE_CONCURRENCY = 8;
 
 /** What {@link peekNamespaces} reports for one warm namespace. */
 export interface NamespacePeek {
@@ -49,15 +52,13 @@ export async function peekNamespaces(
 
   if (opts?.storeFactory) {
     const makeStore = opts.storeFactory;
-    await Promise.all(
-      namespaces.map(async (ns) => {
-        try {
-          out.set(ns, fromManifest(await makeStore(ns).getManifest()));
-        } catch {
-          out.set(ns, null);
-        }
-      }),
-    );
+    await mapLimit(namespaces, PROBE_CONCURRENCY, async (ns) => {
+      try {
+        out.set(ns, fromManifest(await makeStore(ns).getManifest()));
+      } catch {
+        out.set(ns, null);
+      }
+    });
     return out;
   }
 
@@ -81,24 +82,22 @@ export async function peekNamespaces(
     }
   }
 
-  await Promise.all(
-    namespaces.map(async (ns) => {
-      const dbName = `${idbPrefix}${ns}`;
-      if (existing && !existing.has(dbName)) {
-        out.set(ns, null);
-        return;
-      }
+  await mapLimit(namespaces, PROBE_CONCURRENCY, async (ns) => {
+    const dbName = `${idbPrefix}${ns}`;
+    if (existing && !existing.has(dbName)) {
+      out.set(ns, null);
+      return;
+    }
+    try {
+      const db = await openStoreDb(dbName);
       try {
-        const db = await openStoreDb(dbName);
-        try {
-          out.set(ns, fromManifest(await readStoredManifest(db)));
-        } finally {
-          db.close(); // a probe must not hold N connections open
-        }
-      } catch {
-        out.set(ns, null);
+        out.set(ns, fromManifest(await readStoredManifest(db)));
+      } finally {
+        db.close(); // a probe must not hold N connections open
       }
-    }),
-  );
+    } catch {
+      out.set(ns, null);
+    }
+  });
   return out;
 }
