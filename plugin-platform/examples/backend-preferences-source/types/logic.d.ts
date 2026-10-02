@@ -46,8 +46,9 @@ type PCBJamTourCond =
  *  The last step must finish on `{next:true}`. At most 60 steps, 64 KiB. Event steps stay done across a
  *  reload in this tab. Later steps get a Back button that also puts the document back the way it was when
  *  the earlier step first showed (steps that only show inside a dialog are skipped). `celebrate` throws a
- *  short host-drawn celebration when its step shows. */
-type PCBJamTour = {id:string;title?:string;editor:'eeschema'|'pcbnew';
+ *  short host-drawn celebration when its step shows. `closable:false`: the cards have no × and Escape
+ *  leaves them alone; closing your panel then pauses the tour (`resume` continues it). */
+type PCBJamTour = {id:string;title?:string;editor:'eeschema'|'pcbnew';closable?:boolean;
   steps:(Omit<PCBJamPointer,'target'> & {id:string;target?:PCBJamTarget;celebrate?:'rainbow';when?:PCBJamTourCond;until:PCBJamTourCond})[]};
 // BEGIN GENERATED HOST METHODS
 type PCBJamHostMethod = "http.request" | "http.upload" | "ui.openExternal" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "board.geometryStart" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "exports.run" | "exports.readJson" | "exports.bundle" | "files.saveBundle" | "editor.requestPlacement" | "tour.start" | "tour.stop" | "tour.status" | "ui.overlay.show" | "ui.overlay.clear" | "parts.save" | "schematic.symbols" | "schematic.connectivity";

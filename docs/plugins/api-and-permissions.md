@@ -645,6 +645,12 @@ errors — an event, so the step latches; `orientation: { ref: 'R1', angle:
 celebration at the mouse when the step shows (a chip only, for users who
 prefer reduced motion) — for the moment a check comes back clean.
 
+A tutorial the user should not lose half-way can set `closable: false` on the
+tour: its cards have no × and Escape leaves them to the editor (cards often
+say "press Esc"). The way out is your panel: closing it stops the tour without
+ending it, and `tour.start(tour, {resume: true})` from the reopened panel
+continues on the same step.
+
 ## Ship a part
 
 Needs `library:write-parts`. A part your plugin brings (a KiCad symbol and/or
