@@ -548,8 +548,8 @@ Needs `editor:overlay`. PCBJam draws everything (the card, the highlight and a
 "from *your plugin's name*" label); you supply plain text and targets. Your
 plugin's code does not run between commands, so a tour is **data** that
 PCBJam runs for you: it watches the editor, moves to the right step, survives
-the page switch between editors (with `resume`), and stops when your plugin
-stops.
+a reload, the page switch between editors and a closed tab (with `resume`),
+and stops when your plugin stops.
 
 ```js
 pcbjam.handle('start-tour', () => pcbjam.tour.start({
@@ -625,16 +625,18 @@ placed during the tour). A target that is not on screen shows the step's
 `lostText`.
 
 `tour.start(tour, {resume: true})` continues a tour of that `id` that is still
-active in this tab and answers `not-active` otherwise. Call it when your
-panel opens. `busy` means another guide is on screen. `tour.status()` reports
+active in this project and answers `not-active` otherwise. Call it when your
+panel opens. Progress is kept per project in the user's browser, so a reload,
+an editor switch or the next visit continues on the same step (PCBJam also
+reopens the panel that was left open in the project). `busy` means another
+guide is on screen. `tour.status()` reports
 the shown step. A one-off pointer without a tour:
 `pcbjam.ui.overlay.show({target, text})` → `shown` or `not-found`;
 `pcbjam.ui.overlay.clear()` removes it. Limits: 60 steps, 64 KiB per tour,
 title 80 and text 600 characters; one tour or pointer per plugin.
 
-Steps that latched on an event stay done when the page reloads or the user
-switches editors in this tab (a fresh `tour.start` without `resume` forgets
-them). From the second step on, PCBJam adds a Back button: it shows the step
+Steps that latched on an event stay done the same way (a fresh `tour.start`
+without `resume` forgets them). From the second step on, PCBJam adds a Back button: it shows the step
 before again AND puts the document back the way it was when that step first
 showed — a step that only shows inside a dialog is skipped, since going back
 cannot reopen the dialog. `checkFinished: { kind: 'erc', maxErrors: 0 }`

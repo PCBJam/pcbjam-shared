@@ -44,7 +44,7 @@ type PCBJamTourCond =
   | {all:PCBJamTourCond[]} | {any:PCBJamTourCond[]} | {not:PCBJamTourCond};
 /** A declarative tour: the current step is the first whose `when` holds and whose `until` is not met.
  *  The last step must finish on `{next:true}`. At most 60 steps, 64 KiB. Event steps stay done across a
- *  reload in this tab. Later steps get a Back button that also puts the document back the way it was when
+ *  reload, an editor switch and a closed tab (progress is kept per project, in this browser). Later steps get a Back button that also puts the document back the way it was when
  *  the earlier step first showed (steps that only show inside a dialog are skipped). `celebrate` throws a
  *  short host-drawn celebration when its step shows. `closable:false`: the cards have no × and Escape
  *  leaves them alone; closing your panel then pauses the tour (`resume` continues it). */
@@ -72,8 +72,8 @@ declare const pcbjam: {
     overlay:{show(step:PCBJamPointer):Promise<{status:'shown'|'not-found'}>;clear():Promise<null>}};
   /** A guided tour PCBJam runs for you (needs `editor:overlay`): it keeps going between commands, follows the
    *  user's state, and stops when your plugin stops. `resume:true` continues a tour of that id still active in
-   *  this tab (after the page switch between editors) and answers `not-active` otherwise. `busy`: another tour
-   *  is running. */
+   *  this project in this browser (after a reload, the page switch between editors, or the next visit) and
+   *  answers `not-active` otherwise. `busy`: another tour is running. */
   tour:{start(tour:PCBJamTour,options?:{resume?:boolean}):Promise<{status:'started'|'not-active'|'busy'}>;
     stop():Promise<null>;
     status():Promise<{id:string|null;step:number;of:number;state:'active'|'done'|'dismissed'|'none'}>};
