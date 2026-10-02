@@ -120,6 +120,15 @@ export type Project = z.infer<typeof projectSchema>;
 /** Request/response header for a project file's opaque CAS generation. */
 export const PROJECT_FILE_REVISION_HEADER = "x-pcbjam-file-revision";
 
+/**
+ * Request header on a file write saying what produced the bytes. The editor
+ * sends {@link PROJECT_FILE_SOURCE_EDITOR_SAVE} with a save: the bytes were
+ * just written by KiCad itself, so a backend that normalizes or validates
+ * uploads MAY skip that step for them. Absent = an upload of unknown origin.
+ */
+export const PROJECT_FILE_SOURCE_HEADER = "x-pcbjam-file-source";
+export const PROJECT_FILE_SOURCE_EDITOR_SAVE = "editor-save";
+
 export const projectFileSchema = z.object({
   id: z.string().uuid(),
   projectId: z.string().uuid(),
