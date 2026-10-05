@@ -1,14 +1,15 @@
 ---
 title: Remote Symbols
-description: "Show your KiCad 10 Remote Symbols provider in PCBJam's schematic editor."
+description: "Show your KiCad 10 Remote Symbols provider in PCBJam's schematic editor: shim, headers, metadata, package and review."
 created: 2026-09-23
-updated: 2026-09-24
+updated: 2026-10-05
 ---
 
-**For parts providers.** If you already serve a **KiCad 10 remote-symbol
-provider** (the panel behind KiCad's *View → Panels → Remote Symbols*), PCBJam
-shows the same panel in its schematic editor, under the same name. Users search your catalog,
-click Place, and the part lands in their team library and on their schematic.
+This page is for parts providers. If you already serve a **KiCad 10
+remote-symbol provider** (the panel behind KiCad's *View → Panels → Remote
+Symbols*), PCBJam can show the same panel in its schematic editor, under the
+same name. At the end, PCBJam users search your catalog, click Place, and the
+part lands in their team library and on their schematic.
 
 The protocol is KiCad's, unchanged: the same `/.well-known/kicad-remote-provider`
 document, the same JSON-RPC messages, the same `PLACE_COMPONENT` manifests. You
@@ -16,17 +17,35 @@ write no PCBJam plugin code. Two things differ, because your page runs in a
 cross-origin `<iframe>` in a browser instead of KiCad's native web view:
 
 1. **A bridge shim** of about 20 lines: KiCad injects `window.kicad` into your
-   page; a browser cannot, so your page provides it on top of `postMessage`.
+   page; a browser can't, so your page provides it on top of `postMessage`.
 2. **Two response headers** on the panel page: PCBJam's editor is cross-origin
    isolated, and a browser only embeds pages that opt in.
 
-Then you publish a one-file package that names your origin, and PCBJam reviews
-that origin once, for every user.
+## Before you start
 
-Start from the [provider starter](download/remote-provider-starter.zip): a
-dependency-free Node.js server with the metadata, a panel with the shim, part
-manifests and downloads, ready to adapt. Questions and review requests go to the
-[PCBJam Discord](https://discord.gg/ybhqJxjR3E).
+- A provider that works in desktop KiCad 10, or the
+  [provider starter](download/remote-provider-starter.zip): a dependency-free
+  Node.js server with the metadata, a panel with the shim, part manifests and
+  downloads, ready to adapt.
+- An https origin you control for the panel (and your API, if it is separate).
+- A PCBJam account with developer access, to upload your package before it is
+  published (see [Build a plugin](build-a-plugin.md#before-you-start)).
+
+## Set up your provider
+
+1. Add [the shim](#the-shim) to your panel page, before your own script.
+2. Send [the headers](#the-headers) on the panel page and everything it loads.
+3. Check your [metadata](#metadata) and download URLs against the
+   [URL rules](#url-rules).
+4. [Test](#test-before-you-ask-for-review) with desktop KiCad and over an
+   https tunnel.
+5. [Package your provider](#package-your-provider): one `manifest.json` that
+   names your origin.
+6. Ask for the [review](#review) on the
+   [PCBJam Discord](https://discord.gg/ybhqJxjR3E). PCBJam reviews your origin
+   once, for every user.
+
+The [checklist](#checklist) at the end repeats every requirement in one place.
 
 ## How it works
 
@@ -335,9 +354,10 @@ brackets: `(DIGEST_MISMATCH)`, `(SIZE_MISMATCH)`, `(CONTENT_TYPE_MISMATCH)`,
 resolves to a private address), `(INVALID_RESPONSE)` (for example a compressed
 response), `(RESPONSE_TOO_LARGE)`, `(UPSTREAM_TIMEOUT)`, `(UPSTREAM_FAILED)`
 (connection or TLS failure), `(UPSTREAM_STATUS_<n>)` (your server answered
-status `<n>`) or `(RATE_LIMITED)` (too many downloads, see [Limits](#limits)). If the save succeeded but the library write was
-refused, the message ends with "Click Place again to retry"; placing again is
-safe. A message PCBJam cannot read at all (not JSON, unknown keys, too large)
+status `<n>`) or `(RATE_LIMITED)` (too many downloads, see [Limits](#limits)).
+
+If the save succeeded but the library write was refused, the message ends with
+"Click Place again to retry"; placing again is safe. A message PCBJam cannot read at all (not JSON, unknown keys, too large)
 is dropped without a reply, so give your requests a timeout.
 
 PCBJam handles one part at a time. A Place or download sent while the previous
@@ -414,30 +434,30 @@ either origin later changes, open panels fail with `PROVIDER_CHANGED`.
 
 ## Test before you ask for review
 
-Until your origin is approved, PCBJam will not open your panel, so test the
+Until your origin is approved, PCBJam won't open your panel, so test the
 protocol and your server first:
 
-- Start from the [provider starter](download/remote-provider-starter.zip) and
-  run it locally (`node serve.mjs`). Open it in desktop KiCad 10: if it works
-  there, the protocol side is right. The starter's metadata sets
-  `allow_insecure_localhost` so KiCad accepts `http://127.0.0.1:4400` while you
-  develop; PCBJam itself only accepts https.
-- Expose it over https with a tunnel on a public name, for example
-  `cloudflared tunnel --url http://127.0.0.1:4400` (a `*.trycloudflare.com`
-  name) or ngrok (`*.ngrok-free.app`); both pass the URL rules. Run the starter
-  with `PUBLIC_ORIGIN=https://<tunnel name>`, and set `provider.origin` in your
-  package to that name.
-- Check what PCBJam will check:
-  - `curl -s https://<origin>/.well-known/kicad-remote-provider` returns your
-    metadata as `application/json`, uncompressed;
-  - `curl -sI https://<origin>/panel` shows both isolation headers;
-  - every `download_url`: `curl -s <url> | shasum -a 256` and the byte count
-    equal the manifest, and `curl -sI` shows the exact `Content-Type` and no
-    redirect.
-- Upload the package: the upload itself checks your metadata and headers and
-  shows your origins; installing waits for the review. Ask on Discord. A
-  quick-tunnel name changes when the tunnel restarts, so ask for review of the
-  origin you will actually serve from.
+1. Run the [provider starter](download/remote-provider-starter.zip) (or your
+   own server) locally with `node serve.mjs`, and open it in desktop KiCad 10.
+   If it works there, the protocol side is right. The starter's metadata sets
+   `allow_insecure_localhost` so KiCad accepts `http://127.0.0.1:4400` while
+   you develop; PCBJam itself only accepts https.
+2. Expose it over https with a tunnel on a public name, for example
+   `cloudflared tunnel --url http://127.0.0.1:4400` (a `*.trycloudflare.com`
+   name) or ngrok (`*.ngrok-free.app`); both pass the URL rules. Run the
+   starter with `PUBLIC_ORIGIN=https://<tunnel name>`, and set
+   `provider.origin` in your package to that name.
+3. Check what PCBJam will check:
+   - `curl -s https://<origin>/.well-known/kicad-remote-provider` returns your
+     metadata as `application/json`, uncompressed;
+   - `curl -sI https://<origin>/panel` shows both isolation headers;
+   - for every `download_url`, `curl -s <url> | shasum -a 256` and the byte
+     count equal the manifest, and `curl -sI` shows the exact `Content-Type`
+     and no redirect.
+4. Upload the package. The upload itself checks your metadata and headers and
+   shows your origins; installing waits for the review.
+5. Ask for the review on Discord. A quick-tunnel name changes when the tunnel
+   restarts, so ask for review of the origin you will actually serve from.
 
 ## Checklist
 
@@ -469,5 +489,5 @@ protocol and your server first:
 | Panel opens | 6 per minute per provider and user, 12 per minute per user |
 | Open panels | 8 plugin panels per user |
 
-Plugins that run code inside PCBJam are a different package kind:
+Plugins that run code inside PCBJam are a different package kind: see
 [Build a plugin](build-a-plugin.md).
