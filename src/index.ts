@@ -41,6 +41,7 @@ export * from "./activity-wire.js";
 export * from "./comment-moderation.js";
 export * from "./comments-export.js";
 export * from "./lockfile-wire.js";
+export * from "./kicad-gitignore.js";
 export * from "./comments-lift-update.js";
 
 const c = initContract();
