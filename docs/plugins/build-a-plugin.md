@@ -1,29 +1,36 @@
 ---
 title: Build a plugin
-description: "Create, install and share a PCBJam editor plugin: files, manifest, logic and UI, with a working example."
+description: "Build, install and share a plugin for PCBJam's schematic and PCB editors, starting from a working example."
 created: 2026-09-16
-updated: 2026-09-24
+updated: 2026-10-05
+slug: plugins
 ---
 
-**Plugin SDK v1.** Create your plugin in a folder on your computer; using Git is
-optional. Sign into PCBJam to install it. You do not need PCBJam's source code.
+This page is for developers who want to add their own tool to PCBJam's
+schematic or PCB editor: a parts list, a checker, an exporter, an importer.
+At the end you have a plugin you built from the starter, installed on your
+account, and you know how to update and share it.
 
-## Get access
+A plugin is a small package you build on your own computer (Plugin SDK v1).
+You don't need PCBJam's source code, and Git is optional.
 
-Anyone signed in to PCBJam can install plugins published in the
-[marketplace](#share-a-plugin) at `app.pcbjam.com/plugins`. To upload and test
-your **own** plugins you need developer access on your account:
+## Before you start
 
-1. Sign up at PCBJam with the account you will develop with.
-2. Ask for developer access on the [PCBJam Discord](https://discord.gg/ybhqJxjR3E):
-   post the email address of that account and one line about what you are
-   building. PCBJam enables it on that account; until then the editor does not
-   show **Plugins → Add plugin…** and uploads are refused.
+- **A PCBJam account with developer access.** Anyone signed in can install
+  published plugins, but uploading your own needs developer access:
+  1. Sign up at PCBJam with the account you will develop with.
+  2. Post that account's email address and one line about what you are
+     building on the [PCBJam Discord](https://discord.gg/ybhqJxjR3E).
+     PCBJam turns on developer access for it. Until then the editor has no
+     **Plugins → Add plugin…** and uploads are refused.
+- **Node.js 22 or newer**, if you use the TypeScript + React starter. Plain
+  JavaScript and HTML need no build at all.
+- **A schematic or board open in PCBJam** to try the plugin on.
 
-A [backend](#authentication-and-permissions) or a
+The Discord is also where you ask questions and report SDK problems. A plugin
+that calls [your own backend](#call-your-own-backend) or a
 [Remote Symbols provider](remote-symbols.md) also needs a one-time review by
-PCBJam; ask for it in the same place. The Discord is also where to ask
-questions and report problems with the SDK.
+PCBJam; ask for it there.
 
 ## What a plugin can do
 
@@ -40,29 +47,36 @@ questions and report problems with the SDK.
 | Call your own server | `http.request()` | `network:<name>`, after PCBJam approves the routes |
 | Offer your parts catalog in the schematic editor, KiCad 10 Remote Symbols style | a `remote-provider` package, no code: [Remote Symbols](remote-symbols.md) | `provider:embed`, `provider:download`, `editor:place-items` |
 
-Every call, its arguments and its limits are in [Available APIs](api-and-permissions.md).
-What is deliberately not possible: network access from logic or UI other than
-your approved backend, reading projects that are not open, editing the design
-other than by confirmed symbol placement, and anything running while no command
-is being handled.
+Every call, its arguments and its limits are in
+[API and permissions](api-and-permissions.md).
 
-## Download and build
+A plugin can't reach the network except through your approved backend, can't
+read projects that aren't open, can't change the design except by a symbol
+placement the user confirms, and doesn't run while it isn't handling a command.
 
-Download the [TypeScript + React starter](download/external-symbol-import-source.zip)
-to edit, or the [installable example ZIP](download/external-symbol-import.zip)
-to try immediately. The example adds a symbol from a local file; its README
-contains usage instructions.
+## Build and install your first plugin
 
-With Node.js 22+, run inside the extracted source folder:
+1. Download the [TypeScript + React starter](download/external-symbol-import-source.zip)
+   and extract it. (To try a finished plugin first, take the
+   [installable example ZIP](download/external-symbol-import.zip) and go to
+   step 5. It adds a symbol from a local file; its README explains how.)
+2. In the extracted folder, install and build:
 
-```sh
-npm ci
-npm run build
-```
+   ```sh
+   npm ci
+   npm run build
+   ```
 
-Edit `src/main.ts` for logic and `src/ui/App.tsx` for UI. Change the manifest
-ID and name for your own plugin. The build produces `dist/plugin/` and
-`dist/<manifest-id>.zip`. Upload either build output, **not the source ZIP**.
+3. Open `manifest.json` and change `id` and `name` to your own.
+4. Edit `src/main.ts` (logic) and `src/ui/App.tsx` (UI), then run
+   `npm run build` again. The build writes `dist/plugin/` and
+   `dist/<manifest-id>.zip`.
+5. In PCBJam, open a schematic or board and choose **Plugins → Add plugin…**
+   in the floating session menu.
+6. Choose **Install ZIP** or **Install folder** and pick the build output
+   (`dist/<manifest-id>.zip` or `dist/plugin/`), **not the source ZIP**.
+7. Review the permissions it asks for and install.
+8. Open the plugin by name from **Plugins**.
 
 ## Required files
 
@@ -74,13 +88,12 @@ Every installable package has these three files at its root:
 | `main.js` | Bundled plugin logic. PCBJam supplies the global `pcbjam` API. |
 | `ui.html` | UI with inline JavaScript and CSS. PCBJam supplies `pcbjamUI`. |
 
-Optional files: `README.md`, `LICENSE.txt` and `sdk.d.ts`. Other filenames are
-rejected. A ZIP may wrap the files in one folder.
+You may add `README.md`, `LICENSE.txt` and `sdk.d.ts`. Any other file name is
+refused. A ZIP may wrap the files in one folder.
 
-TypeScript and React are supported through your local build. Plain JavaScript
-and HTML also work. Bundle dependencies into these files: no CDN imports,
-separate asset files or uploaded `node_modules`. PCBJam never runs uploaded
-build scripts.
+Use TypeScript and React through your own build, or plain JavaScript and HTML.
+Bundle your dependencies into these files: no CDN imports, no separate asset
+files, no uploaded `node_modules`. PCBJam never runs your build scripts.
 
 | Package limit | Value |
 |---|---|
@@ -90,12 +103,13 @@ build scripts.
 | `main.js` / `ui.html` | 1 MiB / 512 KiB |
 | Paths | letters, digits, `_`, `.`, `-` and `/`; no `..`, no absolute paths |
 
-`ui.html` may not load scripts or stylesheets by URL (`<script src>`,
-`<link href>`): the upload is refused.
+An upload whose `ui.html` loads scripts or stylesheets by URL
+(`<script src>`, `<link href>`) is refused.
 
 ## Manifest
 
-This minimal manifest contains every required field. It only reads basic editor context:
+This minimal manifest has every required field. It only reads basic editor
+context:
 
 ```json
 {
@@ -114,28 +128,29 @@ This minimal manifest contains every required field. It only reads basic editor 
 | Field | Rules |
 |---|---|
 | `apiVersion` | `1`. |
-| `id` | 3–64 lowercase letters, digits or hyphens; starts with a letter. Keep stable across updates. |
+| `id` | 3–64 lowercase letters, digits or hyphens; starts with a letter. Keep it stable across updates. |
 | `name`, `description` | Name: 1–80 characters. Description: up to 300. |
-| `version` | `major.minor.patch`, e.g. `0.1.0`. Increase whenever package contents change. |
+| `version` | `major.minor.patch`, e.g. `0.1.0`. Increase it whenever the package contents change. |
 | `main`, `ui` | Exactly `main.js` and `ui.html`. |
 | `surfaces` | Schematic: `editor:eeschema`. Board: `editor:pcbnew`. Choose one or both. |
 | `permissions` | Both UI permissions are required. Add only the [API permissions](api-and-permissions.md) your feature uses. |
 | `uiSize` (optional) | Preferred floating window size: `{ "width": 640, "height": 480 }`. Integer CSS pixels; width 280–4096, height 240–4096. |
 
-`ui:custom` allows your iframe UI; `ui:project-data` allows passing logic results
-into it. Neither grants document reads. Unknown fields, surfaces and permissions
-are rejected.
+`ui:custom` allows your iframe UI and `ui:project-data` allows passing logic
+results into it. Neither lets you read the document. Unknown fields, surfaces
+and permissions are refused.
 
-Without `uiSize`, the window starts at 360 × 560. Dimensions include PCBJam's
-header, status bar and confirmation area; the iframe fills the remaining space.
-PCBJam fits the window inside the viewport. Users can resize from either bottom
-corner (or focus a resize handle and use arrow keys; Shift makes larger steps).
-Their chosen size takes precedence over `uiSize` and is remembered per account
-and plugin in that browser. Make your UI responsive: resizing preserves its state.
+**Window size.** Without `uiSize` the window opens at 360 × 560. The size
+includes PCBJam's header, status bar and confirmation area; your iframe fills
+the rest. PCBJam keeps the window inside the viewport. Users resize it from
+either bottom corner (or focus a resize handle and use the arrow keys; Shift
+takes larger steps), and their size wins over `uiSize`. PCBJam remembers it
+per account and plugin in that browser. Resizing keeps your UI's state, so
+make the UI responsive.
 
 ## Write logic and UI
 
-Register commands in `main.js` (or `src/main.ts` when using TypeScript):
+Register commands in `main.js` (or `src/main.ts` with TypeScript):
 
 ```js
 pcbjam.handle('describeEditor', async () => {
@@ -172,33 +187,39 @@ Call the command from your UI. This complete `ui.html` works without a build:
 </html>
 ```
 
-React components use the same `pcbjamUI.call()` from event handlers. Keep React
-in UI code; logic has no DOM, Node.js or `fetch`. Logic does have `setTimeout`
-and `clearTimeout`, but only while it is handling a command: pending timers are
-cancelled when the command settles, so nothing runs in the background. Bundle CSS
-into `ui.html`; runtime-injected styles are restricted. Embedded `data:` and
-`blob:` images work in the UI; images, fonts or scripts from a server do not,
-and inline `style="…"` attributes are blocked (set styles from script instead).
+React components call the same `pcbjamUI.call()` from event handlers.
 
-A message from the UI to logic is limited to 64,000 characters. Build anything
-large, such as a page for `files.saveHtml()`, in logic, from data logic read
-itself, and send the UI only what it displays.
+Rules for **logic** (`main.js`):
+- Register commands at startup and call host APIs inside handlers.
+- Pass only JSON arguments and results, and validate what comes in.
+- There is no DOM, Node.js, `fetch` or `console`. `setTimeout` and
+  `clearTimeout` work only while a command is being handled: pending timers
+  are cancelled when the command settles, so nothing runs in the background.
+  [Debugging and errors](api-and-permissions.md#debugging-and-errors) shows
+  how to see what your logic does.
 
-Register commands at startup, call host APIs inside handlers, and pass only JSON
-arguments/results. Validate incoming arguments. Allow one UI command at a time
-and handle errors. The [SDK declarations](download/sdk.d.ts) provide autocomplete.
+Rules for **UI** (`ui.html`):
+- Keep React and all DOM code here.
+- Bundle your CSS into `ui.html`. Inline `style="…"` attributes pass the
+  upload check but are ignored at run time: the page's security policy only
+  allows the styles and scripts that were in `ui.html` when you uploaded it.
+  Use classes, or set `element.style` from script.
+- `data:` and `blob:` images work. Images, fonts and scripts from a server
+  don't.
+- A message from the UI to logic is limited to 64,000 characters. Build
+  anything large, such as a page for `files.saveHtml()`, in logic from data
+  logic read itself, and send the UI only what it displays.
+- Allow one command at a time and show errors to the user.
 
-Inline `style="…"` attributes pass the upload check but are silently ignored
-when the UI runs, because the page's security policy only allows the styles and
-scripts that were in `ui.html` when it was uploaded. Use classes, or set
-`element.style` from script. See [Debugging and errors](api-and-permissions.md#debugging-and-errors)
-for what logic can and cannot do (there is no `console`).
+The [SDK declarations](download/sdk.d.ts) give your editor autocomplete.
 
 ## Example: a parts list that highlights and exports
 
 A board plugin in the style of an interactive BOM: group the parts, draw their
 pads, select a group on the board when its row is clicked, and export a
-standalone page. It shows the three habits that matter on real boards.
+standalone page. It shows three habits that matter on real boards, numbered
+in the code: read in slices, retry when the design changes, and escape design
+text.
 
 `manifest.json` asks for exactly what it uses:
 
@@ -281,75 +302,86 @@ every download, so treat a cancel as a normal outcome. Check
 `editor.select` are absent on editor builds that predate them.
 `editor.select` works in the schematic editor as well.
 
-## Authentication and permissions
+## Update a plugin
 
-**You do not create or embed an API key.** Sign into PCBJam to upload and install.
-The user reviews the manifest permissions; PCBJam binds calls to that installation
-and checks the user's current project access. Your code receives no login cookie
-or access token. Use `pcbjam.context.get()` to discover available methods.
+1. Increase `version` in `manifest.json`.
+2. Build. (`npm run dev` rebuilds on every save while you work.)
+3. Upload the new build with **Plugins → Add plugin…** and approve it.
 
-For your own backend, download the [backend starter](download/backend-preferences-source.zip).
-Declare one HTTPS origin, exact paths and `GET`/`POST` methods in optional
-`endpoints`; request `network:<name>` and, for signed identity,
-`backend:identity:<name>`. PCBJam must approve those routes in addition to the
-user's installation consent. See [the HTTP API](api-and-permissions.md#backend-requests).
+Restarting a plugin runs the installed version; it doesn't reload your local
+source.
 
-Upload first, post the plugin UUID shown in the review on the
-[PCBJam Discord](https://discord.gg/ybhqJxjR3E), and publish the DNS TXT
-challenge PCBJam gives you there. After verification and approval, re-upload
-the same ZIP to refresh its status and install it. Configure your backend with
-the issuer, audience and plugin UUID PCBJam gives you. The starter includes a
-verifier and Postgres replay protection. Your backend verifies the signature and
-uses the verified subject as the user ID; it must never trust a user ID in request
-JSON. No PCBJam API key is involved. Keep secrets on your backend.
+> **Uploads are limited.** Each account keeps at most **32 releases and
+> 64 MiB** of uploads across all its plugins, and you can't delete releases
+> yet. Every new version you upload uses one. Uploading the same version with
+> the same files again reuses the existing release; the same version with
+> different files is refused. Check your change locally first (type check, a
+> small mock of `pcbjam` for logic) and upload the versions you want to try in
+> PCBJam. Deleting old releases and a developer mode that reloads local builds
+> are planned.
 
-For local backend development use an HTTPS tunnel on a hostname you control;
-private IPs, localhost and PCBJam infrastructure destinations are blocked.
-Domain verification lasts 30 days. There is no OAuth delegation or public
-publisher/marketplace registration yet.
+Installations are private to your account and follow you across browsers.
+`storage:local` settings stay in that browser and project. Disabling a plugin
+keeps its settings; resetting or uninstalling it removes them. Before you share
+a package, try it on a read-only document, cancel its prompts and make it fail.
 
-## Install and update
+## Call your own backend
 
-1. Open a supported editor. Choose **Plugins → Add plugin…** in the floating session menu.
-2. Choose **Install ZIP** or **Install folder**, then select the compiled package.
-3. Review permissions and install. Open the plugin by name from **Plugins**.
+You never create or embed an API key. You sign into PCBJam to upload and
+install, the user reviews the permissions, and PCBJam ties every call to that
+installation and checks the user's access to the project. Your code never sees
+a login cookie or access token. Use `pcbjam.context.get()` to find out which
+methods are available.
 
-Only accounts with [developer access](#get-access) see **Add plugin…**;
-everyone else installs from the marketplace (**Plugins → Browse plugins…**).
+To call your own server:
 
-Use `npm run dev` for automatic local rebuilds. To test changes, increase
-`manifest.version`, build, then upload and approve the new version.
-Restart runs the installed version; it does not reload local source.
+1. Download the [backend starter](download/backend-preferences-source.zip).
+   It includes a verifier and Postgres replay protection.
+2. Declare one HTTPS origin, exact paths and `GET`/`POST` methods in the
+   optional `endpoints` field. Request `network:<name>`, and for signed
+   identity also `backend:identity:<name>`. Details:
+   [Backend requests](api-and-permissions.md#backend-requests).
+3. Upload the plugin, then post the plugin UUID shown in the review on the
+   [PCBJam Discord](https://discord.gg/ybhqJxjR3E).
+4. Publish the DNS TXT challenge PCBJam gives you there. Domain verification
+   lasts 30 days.
+5. After verification and approval, upload the same ZIP again to refresh its
+   status, and install it.
+6. Configure your backend with the issuer, audience and plugin UUID PCBJam
+   gives you.
 
-> **Uploads are limited.** Each account keeps at most **32 releases and 64 MiB**
-> of uploads, across all its plugins, and releases cannot be deleted yet. Every
-> new version you upload uses one. Re-uploading the same version with the same
-> files reuses the existing release; the same version with different files is
-> refused. Check your change locally (type check, a small mock of `pcbjam` for
-> logic), then upload the versions you actually want to try in PCBJam. Deleting
-> old releases and a developer mode that reloads local builds are planned.
+PCBJam has to approve the routes, in addition to each user agreeing at
+install. Your backend verifies the signature and uses the verified subject as
+the user ID; never trust a user ID sent in the request JSON. Keep your secrets
+on your backend.
 
-Installations are private to your account and follow it across browsers.
-`storage:local` settings stay in that browser and project. Disable preserves
-settings; reset or uninstall revokes them. Test read-only documents, cancelled
-prompts and errors before sharing a package.
+For local development, use an HTTPS tunnel on a hostname you control: private
+IPs, localhost and PCBJam's own infrastructure are blocked. There is no OAuth
+delegation or public publisher registration yet.
 
 ## Share a plugin
 
 PCBJam publishes plugins in the **marketplace** at `app.pcbjam.com/plugins`
 (also **Plugins → Browse plugins…** in the editor). Any signed-in account can
-install from there, without developer access; an installed plugin appears in
-the editor's **Plugins** menu. When PCBJam publishes a new version, users get an
-**Update** button: one click if the permissions are unchanged, a new review if
-the plugin asks for more. To get your plugin listed, send it to PCBJam on the
-[Discord](https://discord.gg/ybhqJxjR3E); PCBJam reviews it and any backend
+install from there without developer access, and the plugin then appears in
+the editor's **Plugins** menu. When PCBJam publishes a new version, users get
+an **Update** button: one click if the permissions are unchanged, a new review
+if the plugin asks for more.
+
+To get your plugin listed, send it to PCBJam on the
+[Discord](https://discord.gg/ybhqJxjR3E). PCBJam reviews it, and any backend,
 before publishing.
 
-Before it is listed, a teammate with developer access can upload your ZIP
-privately with **Plugins → Add plugin…**; that upload counts against their own
-release limit, and a backend on their copy needs its own approval (ask on
-Discord with their plugin UUID).
+Until then, a teammate with developer access can upload your ZIP privately
+with **Plugins → Add plugin…**. The upload counts against their own release
+limit, and a backend on their copy needs its own approval (they ask on Discord
+with their plugin UUID).
 
-Next: [Available APIs](api-and-permissions.md) ·
-[Architecture](architecture.md) ·
-[Remote Symbols](remote-symbols.md).
+## Next
+
+- [API and permissions](api-and-permissions.md): every call, permission and
+  limit.
+- [Plugin architecture](architecture.md): how logic, UI and PCBJam fit
+  together.
+- [Remote Symbols](remote-symbols.md): your parts catalog in the schematic
+  editor, without writing a plugin.
