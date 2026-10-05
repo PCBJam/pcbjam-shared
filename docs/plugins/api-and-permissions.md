@@ -31,7 +31,7 @@ permissions. `context.get()` needs no additional permission.
 | `ui.openExternal(url)` | `ui:open-external` | Open an https page of one of the plugin’s approved endpoint sites in a new tab after the user confirms; opened or cancelled. |
 | `context.get()` | None extra | Editor name, read-only state, supported host methods and limits. |
 | `project.getInfo()` | `project:read-info` | Current project ID, scope, name and editor read-only state. |
-| `documents.list(page)` | `project:read-info` | Paged project design-file names; defaults cursor 0, limit 50. |
+| `documents.list({cursor?, limit?})` | `project:read-info` | Paged project design-file names; defaults cursor 0, limit 50. |
 | `documents.getCurrent()` | `documents:read` | Current document handle, name, revision and read-only state. |
 | `documents.snapshot(ref)` | `documents:read` | Bounded canonical content at an exact document revision. |
 | `documents.poll({document, since})` | `documents:read` | Whether content changed since a revision; no event subscription. |
@@ -52,8 +52,8 @@ permissions. `context.get()` needs no additional permission.
 | `files.save({name, text})` | `files:save` | Trusted text download confirmation; download-requested or cancelled. |
 | `files.saveHtml({name, html})` | `files:save-html` | Trusted download confirmation for a standalone web page; PCBJam prepends a policy that blocks all network access from the saved file. |
 | `files.saveImage({name, base64})` | `files:save` | Trusted download confirmation for a PNG; bytes that are not a PNG are refused. |
-| `exports.run({kind})` | `project:export` | Run a KiCad export (`gerbers`, `drill`, `ipc356`, `fab-components`) of the open document on PCBJam’s servers; returns an export id and its file names and sizes. The bytes stay on the server. |
-| `exports.readJson({exportId, name})` | `project:export` | Read a JSON output of an export (at most 1 MiB), e.g. the `fab-components` component list. |
+| `exports.run(kind)` | `project:export` | Run a KiCad export (`gerbers`, `drill`, `ipc356`, `fab-components`) of the open document on PCBJam’s servers; returns an export id and its file names and sizes. The bytes stay on the server. |
+| `exports.readJson(exportId, name)` | `project:export` | Read a JSON output of an export (at most 1 MiB), e.g. the `fab-components` component list. |
 | `exports.bundle({parts, extraFiles?, zipName})` | `project:export` | Zip exports (optionally renaming files) with text files the plugin made; returns a bundle id, name, size and file list. |
 | `files.saveBundle({bundleId})` | `files:save` | Trusted download confirmation for a bundle ZIP; download-requested or cancelled. |
 | `editor.requestPlacement({label, sexpr})` | `editor:place-items` | Confirmed symbol placement: placed or cancelled. |
@@ -469,8 +469,8 @@ rejects with `Invalid API arguments` and does nothing.
 ## Exports (Gerbers, drill files, netlists)
 
 With `project:export`, a plugin in the PCB editor can have PCBJam run KiCad's
-own exporters on the saved project (including unsaved collaborative edits) on
-PCBJam's servers. The files stay on the server: you get ids, names and sizes,
+own exporters on the project's current state, including live collaborative
+edits, on PCBJam's servers. The files stay on the server: you get ids, names and sizes,
 and the user downloads a ZIP after confirming.
 
 ```ts
