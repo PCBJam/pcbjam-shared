@@ -40,6 +40,7 @@ import {
   unreferencedRoots,
   kicadItemSchema,
   libSymbolsFromLayout,
+  SCH_ROOT_CONTEXT_HEADS,
   slotFromSexpr,
   type KicadDoc,
   type KicadItem,
@@ -819,6 +820,16 @@ export function syncLayoutToY(
       const curGroup = cur.filter((s) => "k" in s && s.k === head);
       const fileGroup = fileGroups.get(head) ?? [];
       if (JSON.stringify(curGroup) === JSON.stringify(fileGroup)) continue;
+      // A root-context schematic section (SCH_ROOT_CONTEXT_HEADS) is never added
+      // to or removed from a sheet by a save — its presence says how the editor
+      // opened the sheet, not what the user changed.
+      if (
+        fileDoc.root === "kicad_sch" &&
+        SCH_ROOT_CONTEXT_HEADS.has(head) &&
+        (curGroup.length === 0) !== (fileGroup.length === 0)
+      ) {
+        continue;
+      }
       // Untouched locally since the baseline: the doc's version is a peer's.
       if (
         baseGroups &&

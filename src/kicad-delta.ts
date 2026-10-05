@@ -11,6 +11,7 @@ import {
   args,
   kicadItemSchema,
   scalar,
+  SCH_ROOT_CONTEXT_HEADS,
   slotSchema,
   unquoteAtom,
   type KicadDoc,
@@ -221,5 +222,20 @@ export function compareDriftLayouts(ydocDoc: KicadDoc, wasmDoc: KicadDoc): Slots
       }),
     };
   });
+  // Root-context schematic sections present on one side only are how the sheet
+  // was opened (standalone subsheet / former root), not an edit (SCH_ROOT_CONTEXT_HEADS).
+  if (ydocDoc.root === "kicad_sch" && wasmDoc.root === "kicad_sch") {
+    const heads = (slots: readonly Slot[]) =>
+      new Set(slots.flatMap((s) => ("k" in s ? [s.k] : [])));
+    const yHeads = heads(layout);
+    const wHeads = heads(wasmDoc.layout);
+    const oneSided = new Set(
+      [...SCH_ROOT_CONTEXT_HEADS].filter((h) => yHeads.has(h) !== wHeads.has(h)),
+    );
+    if (oneSided.size) {
+      const drop = (slots: readonly Slot[]) => slots.filter((s) => !("k" in s && oneSided.has(s.k)));
+      return compareSlots(drop(layout), drop(wasmDoc.layout));
+    }
+  }
   return compareSlots(layout, wasmDoc.layout);
 }

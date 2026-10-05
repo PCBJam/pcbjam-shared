@@ -351,6 +351,24 @@ export const SINGLETON_HEADS: ReadonlySet<string> = new Set([
   "setup",
 ]);
 
+/**
+ * Schematic sections KiCad writes only for the hierarchy ROOT / first top-level
+ * sheet (`sheet_instances`, `symbol_instances` — root instance; `embedded_fonts`,
+ * `embedded_files` — schematic-wide data anchored to the first top-level sheet).
+ * Whether a sheet file carries them depends on how it was OPENED, not on any
+ * edit: a subsheet opened on its own becomes a root and writes them; a former
+ * root opened under the project root stops writing them. Their presence in an
+ * editor save is therefore context, never document content — drift ignores a
+ * presence-only difference and the save-sync never adds or removes them
+ * (content changes while both sides have one still sync).
+ */
+export const SCH_ROOT_CONTEXT_HEADS: ReadonlySet<string> = new Set([
+  "sheet_instances",
+  "symbol_instances",
+  "embedded_fonts",
+  "embedded_files",
+]);
+
 /** Singleton heads KiCad writes AFTER the items (everything else precedes them). */
 const TRAILER_HEADS: ReadonlySet<string> = new Set(["sheet_instances", "symbol_instances"]);
 
