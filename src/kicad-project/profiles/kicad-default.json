@@ -1,0 +1,68 @@
+{
+  "id": "kicad-default",
+  "name": "KiCad default",
+  "kind": "kicad",
+  "version": 1,
+  "createdAt": "2026-10-05",
+  "reviewedAt": "2026-10-05",
+  "reviewers": [],
+  "website": "https://www.kicad.org",
+  "sources": [
+    {
+      "id": "bds-header",
+      "url": "https://gitlab.com/kicad/code/kicad/-/blob/master/include/board_design_settings.h",
+      "title": "KiCad include/board_design_settings.h (default design rules)",
+      "retrievedAt": "2026-10-05"
+    },
+    {
+      "id": "bds-source",
+      "url": "https://gitlab.com/kicad/code/kicad/-/blob/master/pcbnew/board_design_settings.cpp",
+      "title": "KiCad pcbnew/board_design_settings.cpp (BOARD_DESIGN_SETTINGS constructor)",
+      "retrievedAt": "2026-10-05"
+    }
+  ],
+  "tiers": {
+    "standard": {
+      "label": "KiCad defaults",
+      "description": "The rules KiCad gives a new board. Not tied to any manufacturer.",
+      "rules": {
+        "trackWidth": { "mm": 0.2, "source": "bds-header", "anchor": "DEFAULT_TRACKMINWIDTH", "quote": "#define DEFAULT_TRACKMINWIDTH         0.2     // track width min value (mm)" },
+        "viaDiameter": { "mm": 0.5, "source": "bds-header", "anchor": "DEFAULT_VIASMINSIZE", "quote": "#define DEFAULT_VIASMINSIZE           0.5     // vias (not micro vias) min diameter" },
+        "viaDrill": { "mm": 0.3, "source": "bds-header", "anchor": "DEFAULT_MINTHROUGHDRILL", "quote": "#define DEFAULT_MINTHROUGHDRILL       0.3     // through holes (not micro vias) min drill diameter" },
+        "holeMin": { "mm": 0.3, "source": "bds-header", "anchor": "DEFAULT_MINTHROUGHDRILL", "quote": "#define DEFAULT_MINTHROUGHDRILL       0.3     // through holes (not micro vias) min drill diameter" },
+        "viaAnnular": {
+          "mm": 0.1,
+          "source": "bds-source",
+          "anchor": "m_ViasMinAnnularWidth",
+          "quote": "m_ViasMinAnnularWidth = pcbIUScale.mmToIU( DEFAULT_VIASMINSIZE - DEFAULT_MINTHROUGHDRILL ) / 2;",
+          "note": "(0.5 − 0.3) / 2."
+        },
+        "holeToHole": { "mm": 0.25, "source": "bds-header", "anchor": "DEFAULT_HOLETOHOLEMIN", "quote": "#define DEFAULT_HOLETOHOLEMIN         0.25    // minimum web thickness between two drilled holes" },
+        "holeClearance": { "mm": 0.25, "source": "bds-header", "anchor": "DEFAULT_HOLECLEARANCE", "quote": "#define DEFAULT_HOLECLEARANCE         0.25    // copper-to-hole clearance (from IPC level A)" },
+        "copperEdge": { "mm": 0.5, "source": "bds-header", "anchor": "DEFAULT_COPPEREDGECLEARANCE", "quote": "#define DEFAULT_COPPEREDGECLEARANCE   0.5     // clearance between copper items and edge cuts" },
+        "silkTextHeight": {
+          "mm": 0.8,
+          "source": "bds-source",
+          "anchor": "m_MinSilkTextHeight",
+          "quote": "m_MinSilkTextHeight   = pcbIUScale.mmToIU( DEFAULT_SILK_TEXT_SIZE * 0.8 );",
+          "note": "DEFAULT_SILK_TEXT_SIZE is 1.0 mm."
+        },
+        "silkWidth": {
+          "mm": 0.08,
+          "source": "bds-source",
+          "anchor": "m_MinSilkTextThickness",
+          "quote": "m_MinSilkTextThickness= pcbIUScale.mmToIU( DEFAULT_SILK_TEXT_WIDTH * 0.8 );",
+          "note": "DEFAULT_SILK_TEXT_WIDTH is 0.1 mm."
+        }
+      }
+    }
+  },
+  "stackups": [],
+  "options": {
+    "layers": [2, 4, 6],
+    "thicknessMm": [0.8, 1.0, 1.2, 1.6, 2.0],
+    "copperOuter": [1, 2],
+    "copperInner": [0.5, 1]
+  },
+  "defaults": { "layers": 2, "thicknessMm": 1.6, "copperOuter": 1, "copperInner": 1 }
+}

@@ -1,0 +1,90 @@
+{
+  "id": "pcbway",
+  "name": "PCBWay",
+  "kind": "fab",
+  "version": 1,
+  "createdAt": "2026-10-05",
+  "reviewedAt": "2026-10-05",
+  "reviewers": [],
+  "website": "https://www.pcbway.com",
+  "sources": [
+    {
+      "id": "capabilities",
+      "url": "https://www.pcbway.com/capabilities.html",
+      "title": "PCBWay PCB Capabilities",
+      "retrievedAt": "2026-10-05"
+    }
+  ],
+  "tiers": {
+    "standard": {
+      "label": "Standard",
+      "description": "Rules that keep the order at PCBWay's base price: holes of 0.2 mm or more avoid the small-drill charge.",
+      "rules": {
+        "trackWidth": { "mm": 0.1, "source": "capabilities", "anchor": "Min Trace", "quote": "Min manufacturable trace is 4mil(0.1mm), Please view the below \"Advanced PCB\" or contact us if your board exceeds these." },
+        "clearance": { "mm": 0.1, "source": "capabilities", "anchor": "Min Spacing", "quote": "Min manufacturable spacing is 4mil(0.1mm), Please view the below \"Advanced PCB\" or contact us if your board exceeds these." },
+        "viaDrill": {
+          "mm": 0.2,
+          "source": "capabilities",
+          "anchor": "Drill Sizes (CNC)",
+          "quote": "Min drill size is 0.15mm, max drill is 6.0mm. Any holes greater than 6mm or smaller than 0.2mm will be subject to extra charges.",
+          "note": "0.2 mm is the smallest hole with no extra charge."
+        },
+        "viaAnnular": { "mm": 0.15, "source": "capabilities", "anchor": "Min Width of Annular Ring", "quote": "For pads with vias in the middle, Min width for Annular Ring is 0.15mm(6mil)." },
+        "viaDiameter": {
+          "mm": 0.5,
+          "source": "capabilities",
+          "anchor": "Min Width of Annular Ring",
+          "quote": "For pads with vias in the middle, Min width for Annular Ring is 0.15mm(6mil).",
+          "note": "0.2 mm hole + 2 × 0.15 mm ring."
+        },
+        "holeMin": {
+          "mm": 0.2,
+          "source": "capabilities",
+          "anchor": "Drill Sizes (CNC)",
+          "quote": "Min drill size is 0.15mm, max drill is 6.0mm. Any holes greater than 6mm or smaller than 0.2mm will be subject to extra charges.",
+          "note": "0.2 mm is the smallest hole with no extra charge."
+        },
+        "holeToHole": { "mm": 0.28, "source": "capabilities", "anchor": "Hole to hole spacing", "quote": "≥11MIL", "note": "11 mil = 0.279 mm, the via (≤ 0.45 mm) row, Normal process column of the Advanced PCB table." },
+        "padHoleToHole": { "mm": 0.41, "source": "capabilities", "anchor": "Hole to hole spacing", "quote": "≥16MIL", "note": "16 mil = 0.406 mm, the component hole row, Normal process column." },
+        "pthAnnular": { "mm": 0.254, "source": "capabilities", "anchor": "Minimum weld ring (outer layer)", "quote": "≥10mil", "note": "Component hole, 35 µm (1 oz) copper, Normal process column." },
+        "copperEdge": { "mm": 0.25, "source": "capabilities", "anchor": "Line to board edge distance", "quote": "0.25mm", "note": "CNC milling, Normal process column." },
+        "silkWidth": { "mm": 0.15, "source": "capabilities", "anchor": "Minimum Character Width(Legend)", "quote": "Characters of less than 0.15mm wide will be too narrow to be identifiable." },
+        "silkTextHeight": { "mm": 0.8, "source": "capabilities", "anchor": "Minimum Character Height (Legend)", "quote": "Characters of less than 0.8mm high will be too small to be recognizable." }
+      },
+      "byCopper": {
+        "2": {
+          "rules": {
+            "trackWidth": { "mm": 0.178, "source": "capabilities", "anchor": "The min width/spacing of outer layer (before compensation)", "quote": "≥7/8mil", "note": "7 mil width, 70 µm (2 oz) copper, Normal process column." },
+            "clearance": { "mm": 0.203, "source": "capabilities", "anchor": "The min width/spacing of outer layer (before compensation)", "quote": "≥7/8mil", "note": "8 mil spacing, 70 µm (2 oz) copper, Normal process column." },
+            "pthAnnular": { "mm": 0.305, "source": "capabilities", "anchor": "Minimum weld ring (outer layer)", "quote": "≥12mil", "note": "Component hole, 70 µm (2 oz) copper, Normal process column." }
+          }
+        }
+      }
+    },
+    "advanced": {
+      "label": "Advanced",
+      "description": "PCBWay's smallest drills (0.15 mm) and edge clearance. Holes under 0.2 mm cost extra.",
+      "extends": "standard",
+      "rules": {
+        "viaDrill": { "mm": 0.15, "source": "capabilities", "anchor": "Drill Sizes (CNC)", "quote": "Min drill size is 0.15mm, max drill is 6.0mm. Any holes greater than 6mm or smaller than 0.2mm will be subject to extra charges." },
+        "viaDiameter": {
+          "mm": 0.45,
+          "source": "capabilities",
+          "anchor": "Min Width of Annular Ring",
+          "quote": "For pads with vias in the middle, Min width for Annular Ring is 0.15mm(6mil).",
+          "note": "0.15 mm hole + 2 × 0.15 mm ring."
+        },
+        "holeMin": { "mm": 0.15, "source": "capabilities", "anchor": "Drill Sizes (CNC)", "quote": "Min drill size is 0.15mm, max drill is 6.0mm. Any holes greater than 6mm or smaller than 0.2mm will be subject to extra charges." },
+        "copperEdge": { "mm": 0.2, "source": "capabilities", "anchor": "Line to board edge distance", "quote": "0.20mm", "note": "CNC milling, Medium difficulty column." }
+      }
+    }
+  },
+  "stackups": [],
+  "options": {
+    "layers": [2, 4, 6],
+    "thicknessMm": [0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0, 2.4, 2.6, 2.8, 3.0, 3.2],
+    "copperOuter": [1, 2],
+    "copperInner": [1, 1.5, 2]
+  },
+  "defaults": { "layers": 2, "thicknessMm": 1.6, "copperOuter": 1, "copperInner": 1 }
+}

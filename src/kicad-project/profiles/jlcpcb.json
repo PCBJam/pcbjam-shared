@@ -1,0 +1,196 @@
+{
+  "id": "jlcpcb",
+  "name": "JLCPCB",
+  "kind": "fab",
+  "version": 1,
+  "createdAt": "2026-10-05",
+  "reviewedAt": "2026-10-05",
+  "reviewers": [],
+  "website": "https://jlcpcb.com",
+  "sources": [
+    {
+      "id": "capabilities",
+      "url": "https://jlcpcb.com/capabilities/pcb-capabilities",
+      "title": "JLCPCB PCB Manufacturing & Assembly Capabilities",
+      "retrievedAt": "2026-10-05"
+    },
+    {
+      "id": "impedance",
+      "url": "https://jlcpcb.com/impedance",
+      "title": "JLCPCB Controlled Impedance PCB Parameters and Stackup",
+      "retrievedAt": "2026-10-05"
+    }
+  ],
+  "tiers": {
+    "standard": {
+      "label": "Standard",
+      "description": "Rules that keep the order at JLCPCB's base price: 0.3 mm via holes avoid the small-via surcharge.",
+      "rules": {
+        "trackWidth": { "mm": 0.1, "source": "capabilities", "anchor": "Min. track width and spacing (1 oz)", "quote": "1- and 2-layer: 0.10 / 0.10 mm (4 / 4 mil)" },
+        "clearance": { "mm": 0.1, "source": "capabilities", "anchor": "Min. track width and spacing (1 oz)", "quote": "1- and 2-layer: 0.10 / 0.10 mm (4 / 4 mil)" },
+        "viaDrill": {
+          "mm": 0.3,
+          "source": "capabilities",
+          "anchor": "Min. Via hole size/diameter",
+          "quote": "③ 0.1mm or 0.15mm hole size with any size via diameter, and 0.2mm or 0.25mm hole size with via diameter less than 0.45mm, will cost more. Please select corresponding via size option when placing order.",
+          "note": "0.3 mm is the smallest via hole with no surcharge at any via diameter."
+        },
+        "viaDiameter": {
+          "mm": 0.4,
+          "source": "capabilities",
+          "anchor": "Min. Via hole size/diameter",
+          "quote": "① Via diameter should be 0.1mm(0.15mm preferred) larger than Via hole size.",
+          "note": "0.3 mm hole + 0.1 mm."
+        },
+        "viaAnnular": {
+          "mm": 0.05,
+          "source": "capabilities",
+          "anchor": "Min. Via hole size/diameter",
+          "quote": "① Via diameter should be 0.1mm(0.15mm preferred) larger than Via hole size.",
+          "note": "Half of the 0.1 mm diameter margin."
+        },
+        "holeMin": {
+          "mm": 0.3,
+          "source": "capabilities",
+          "anchor": "Min. Via hole size/diameter",
+          "quote": "③ 0.1mm or 0.15mm hole size with any size via diameter, and 0.2mm or 0.25mm hole size with via diameter less than 0.45mm, will cost more. Please select corresponding via size option when placing order.",
+          "note": "KiCad applies one smallest-hole rule to vias and pads, so it follows the via hole."
+        },
+        "holeToHole": { "mm": 0.2, "source": "capabilities", "anchor": "Via Hole-to-Hole Spacing", "quote": "0.2mm" },
+        "padHoleToHole": { "mm": 0.45, "source": "capabilities", "anchor": "Pad Hole-to-Hole Spacing", "quote": "0.45mm" },
+        "holeClearance": { "mm": 0.2, "source": "capabilities", "anchor": "Via hole to Track", "quote": "0.2mm" },
+        "pthToTrack": { "mm": 0.28, "source": "capabilities", "anchor": "PTH to Track", "quote": "0.35mm is recommended, minimum 0.28mm" },
+        "pthAnnular": { "mm": 0.18, "source": "capabilities", "anchor": "PTH annular ring", "quote": "1 oz: Recommended 0.25 mm or above; absolute minimum 0.18 mm", "note": "The 2-layer line." },
+        "copperEdge": { "mm": 0.2, "source": "capabilities", "anchor": "Routed", "quote": "① Copper clearance from routed board edges: ≧0.2 mm" },
+        "silkWidth": { "mm": 0.15, "source": "capabilities", "anchor": "Minimum Line Width", "quote": "Characters width less than 0.15mm will be unidentifiable." },
+        "silkTextHeight": { "mm": 1.0, "source": "capabilities", "anchor": "Minimum text height", "quote": "Characters height less than 40 mil(1.0mm) will be unidentifiable." },
+        "silkClearance": { "mm": 0.15, "source": "capabilities", "anchor": "Pad To Silkscreen", "quote": "The Minimum Distance Between Pad and Silkscreen is 0.15mm." },
+        "maskWeb": { "mm": 0.1, "source": "capabilities", "anchor": "Soldermask bridge", "quote": "Min. pad spacing: 0.10 mm (green, red, yellow, blue, purple)" }
+      },
+      "byLayers": {
+        "4": {
+          "trackWidth": { "mm": 0.09, "source": "capabilities", "anchor": "Min. track width and spacing (1 oz)", "quote": "Multilayer: 0.09 / 0.09 mm (3.5 / 3.5 mil). 3 mil is acceptable in BGA fan-outs." },
+          "clearance": { "mm": 0.09, "source": "capabilities", "anchor": "Min. track width and spacing (1 oz)", "quote": "Multilayer: 0.09 / 0.09 mm (3.5 / 3.5 mil). 3 mil is acceptable in BGA fan-outs." },
+          "pthAnnular": { "mm": 0.15, "source": "capabilities", "anchor": "PTH annular ring", "quote": "1 oz: Recommended 0.20 mm or above; absolute minimum 0.15 mm", "note": "The multilayer line." }
+        },
+        "6": {
+          "trackWidth": { "mm": 0.09, "source": "capabilities", "anchor": "Min. track width and spacing (1 oz)", "quote": "Multilayer: 0.09 / 0.09 mm (3.5 / 3.5 mil). 3 mil is acceptable in BGA fan-outs." },
+          "clearance": { "mm": 0.09, "source": "capabilities", "anchor": "Min. track width and spacing (1 oz)", "quote": "Multilayer: 0.09 / 0.09 mm (3.5 / 3.5 mil). 3 mil is acceptable in BGA fan-outs." },
+          "pthAnnular": { "mm": 0.15, "source": "capabilities", "anchor": "PTH annular ring", "quote": "1 oz: Recommended 0.20 mm or above; absolute minimum 0.15 mm", "note": "The multilayer line." }
+        }
+      },
+      "byCopper": {
+        "2": {
+          "rules": {
+            "trackWidth": { "mm": 0.16, "source": "capabilities", "anchor": "Min. track width and spacing (2 oz)", "quote": "2-layer: 0.16 / 0.16 mm (6.5 / 6.5 mil)" },
+            "clearance": { "mm": 0.16, "source": "capabilities", "anchor": "Min. track width and spacing (2 oz)", "quote": "2-layer: 0.16 / 0.16 mm (6.5 / 6.5 mil)" },
+            "pthAnnular": { "mm": 0.254, "source": "capabilities", "anchor": "PTH annular ring", "quote": "2 oz: 0.254 mm or above" },
+            "maskWeb": { "mm": 0.2, "source": "capabilities", "anchor": "Soldermask bridge", "quote": "Min. pad spacing: 0.20 mm (any color)" }
+          },
+          "byLayers": {
+            "4": {
+              "trackWidth": { "mm": 0.15, "source": "capabilities", "anchor": "Min. track width and spacing (2 oz)", "quote": "Multilayer: 0.15 / 0.15 mm (6 / 6 mil)" },
+              "clearance": { "mm": 0.15, "source": "capabilities", "anchor": "Min. track width and spacing (2 oz)", "quote": "Multilayer: 0.15 / 0.15 mm (6 / 6 mil)" }
+            },
+            "6": {
+              "trackWidth": { "mm": 0.15, "source": "capabilities", "anchor": "Min. track width and spacing (2 oz)", "quote": "Multilayer: 0.15 / 0.15 mm (6 / 6 mil)" },
+              "clearance": { "mm": 0.15, "source": "capabilities", "anchor": "Min. track width and spacing (2 oz)", "quote": "Multilayer: 0.15 / 0.15 mm (6 / 6 mil)" }
+            }
+          }
+        }
+      }
+    },
+    "advanced": {
+      "label": "Advanced",
+      "description": "JLCPCB's smallest standard vias (0.15 mm holes). Small vias cost extra; select the matching via option when ordering.",
+      "extends": "standard",
+      "rules": {
+        "viaDrill": { "mm": 0.15, "source": "capabilities", "anchor": "Min. Via hole size/diameter", "quote": "2-layer: 0.15mm hole size / 0.25mm via diameter (0.1mm hole size / 0.2mm via diameter only available for board thickness ≤1mm; ENIG/OSP surface finish required)" },
+        "viaDiameter": { "mm": 0.25, "source": "capabilities", "anchor": "Min. Via hole size/diameter", "quote": "2-layer: 0.15mm hole size / 0.25mm via diameter (0.1mm hole size / 0.2mm via diameter only available for board thickness ≤1mm; ENIG/OSP surface finish required)" },
+        "holeMin": { "mm": 0.15, "source": "capabilities", "anchor": "Drill Diameter", "quote": "2-layer: 0.15 – 6.3 mm (0.1mm microvias only available for board thickness ≤1mm; ENIG/OSP surface finish required)" }
+      },
+      "byLayers": {
+        "4": {
+          "viaDrill": { "mm": 0.15, "source": "capabilities", "anchor": "Min. Via hole size/diameter", "quote": "Multilayer: 0.15 mm hole size / 0.25 mm via diameter (0.1mm hole size / 0.2mm via diameter only available for board thickness ≤1mm; ENIG/OSP surface finish required)" },
+          "viaDiameter": { "mm": 0.25, "source": "capabilities", "anchor": "Min. Via hole size/diameter", "quote": "Multilayer: 0.15 mm hole size / 0.25 mm via diameter (0.1mm hole size / 0.2mm via diameter only available for board thickness ≤1mm; ENIG/OSP surface finish required)" },
+          "holeMin": { "mm": 0.15, "source": "capabilities", "anchor": "Drill Diameter", "quote": "Multilayer: 0.15 – 6.3 mm (0.1mm microvias only available for board thickness ≤1mm; ENIG/OSP surface finish required)" }
+        },
+        "6": {
+          "viaDrill": { "mm": 0.15, "source": "capabilities", "anchor": "Min. Via hole size/diameter", "quote": "Multilayer: 0.15 mm hole size / 0.25 mm via diameter (0.1mm hole size / 0.2mm via diameter only available for board thickness ≤1mm; ENIG/OSP surface finish required)" },
+          "viaDiameter": { "mm": 0.25, "source": "capabilities", "anchor": "Min. Via hole size/diameter", "quote": "Multilayer: 0.15 mm hole size / 0.25 mm via diameter (0.1mm hole size / 0.2mm via diameter only available for board thickness ≤1mm; ENIG/OSP surface finish required)" },
+          "holeMin": { "mm": 0.15, "source": "capabilities", "anchor": "Drill Diameter", "quote": "Multilayer: 0.15 – 6.3 mm (0.1mm microvias only available for board thickness ≤1mm; ENIG/OSP surface finish required)" }
+        }
+      }
+    }
+  },
+  "stackups": [
+    {
+      "id": "JLC04161H-7628",
+      "name": "JLC04161H-7628 (JLCPCB's default 4-layer)",
+      "layers": 4,
+      "thicknessMm": 1.6,
+      "copperOuter": 1,
+      "copperInner": 0.5,
+      "source": "impedance",
+      "anchor": "2) JLC04161H-7628 Stackup",
+      "build": [
+        { "kind": "copper", "mm": 0.035 },
+        { "kind": "prepreg", "mm": 0.2104, "material": "7628", "er": 4.4 },
+        { "kind": "copper", "mm": 0.0152 },
+        { "kind": "core", "mm": 1.065, "material": "FR4 core", "er": 4.6 },
+        { "kind": "copper", "mm": 0.0152 },
+        { "kind": "prepreg", "mm": 0.2104, "material": "7628", "er": 4.4 },
+        { "kind": "copper", "mm": 0.035 }
+      ]
+    },
+    {
+      "id": "JLC04161H-3313",
+      "name": "JLC04161H-3313 (thin prepreg)",
+      "layers": 4,
+      "thicknessMm": 1.6,
+      "copperOuter": 1,
+      "copperInner": 0.5,
+      "source": "impedance",
+      "anchor": "3) JLC04161H-3313 Stackup",
+      "build": [
+        { "kind": "copper", "mm": 0.035 },
+        { "kind": "prepreg", "mm": 0.0994, "material": "3313", "er": 4.1 },
+        { "kind": "copper", "mm": 0.0152 },
+        { "kind": "core", "mm": 1.265, "material": "FR4 core", "er": 4.6 },
+        { "kind": "copper", "mm": 0.0152 },
+        { "kind": "prepreg", "mm": 0.0994, "material": "3313", "er": 4.1 },
+        { "kind": "copper", "mm": 0.035 }
+      ]
+    },
+    {
+      "id": "JLC06161H-default",
+      "name": "JLCPCB 6-layer, no impedance requirement",
+      "layers": 6,
+      "thicknessMm": 1.6,
+      "copperOuter": 1,
+      "copperInner": 0.5,
+      "source": "impedance",
+      "anchor": "6-Layer Impedance Control Stackup",
+      "build": [
+        { "kind": "copper", "mm": 0.035 },
+        { "kind": "prepreg", "mm": 0.0994, "material": "3313", "er": 4.1 },
+        { "kind": "copper", "mm": 0.0152 },
+        { "kind": "core", "mm": 0.55, "material": "FR4 core", "er": 4.6 },
+        { "kind": "copper", "mm": 0.0152 },
+        { "kind": "prepreg", "mm": 0.1164, "material": "2116", "er": 4.16 },
+        { "kind": "copper", "mm": 0.0152 },
+        { "kind": "core", "mm": 0.55, "material": "FR4 core", "er": 4.6 },
+        { "kind": "copper", "mm": 0.0152 },
+        { "kind": "prepreg", "mm": 0.0994, "material": "3313", "er": 4.1 },
+        { "kind": "copper", "mm": 0.035 }
+      ]
+    }
+  ],
+  "options": {
+    "layers": [2, 4, 6],
+    "thicknessMm": [0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],
+    "copperOuter": [1, 2],
+    "copperInner": [0.5, 1, 2]
+  },
+  "defaults": { "layers": 2, "thicknessMm": 1.6, "copperOuter": 1, "copperInner": 0.5 }
+}
