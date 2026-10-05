@@ -1,5 +1,19 @@
 import { describe, expect, it, test } from "vitest";
-import { bundledLibDir, carriedKicadProjects, parseLockfile, serializeLockfile, type Lockfile } from "../src/index.js";
+import {
+  bundledLibDir,
+  carriedKicadProjects,
+  isLockfilePath,
+  kicadProjectsByPath,
+  kicadProjectsForDir,
+  lockfileDirOf,
+  lockfileOwnerDirs,
+  lockfilePathFor,
+  mergeLockfiles,
+  ownerDirOf,
+  parseLockfile,
+  serializeLockfile,
+  type Lockfile,
+} from "../src/index.js";
 
 describe("lockfile wire", () => {
   it("round-trips a v1 lockfile and rejects other shapes", () => {
@@ -43,5 +57,48 @@ describe("lockfile kicadProjects section (new-kicad-project 0001)", () => {
     expect(carriedKicadProjects(null)).toBeUndefined();
     expect(carriedKicadProjects("not json")).toBeUndefined();
     expect(carriedKicadProjects(JSON.stringify({ kicadProjects: {} }))).toBeUndefined();
+  });
+});
+
+describe("one lockfile per KiCad project folder (git-integration 0018)", () => {
+  const rec = { profile: "jlcpcb", profileVersion: 3, choices: { layers: 2 }, generatedAt: "2026-10-05T10:00:00.000Z" } as never;
+
+  test("owner folders: nested projects, two .kicad_pro in one folder, files under none", () => {
+    const owners = lockfileOwnerDirs(["a/a.kicad_pro", "a/x.kicad_pro", "a/sub/s.kicad_pro", "root.kicad_pro", "b/b.kicad_sch"]);
+    expect(owners).toEqual(["", "a", "a/sub"]);
+    expect(ownerDirOf("a/sub/deep/s.kicad_sch", owners)).toBe("a/sub");
+    expect(ownerDirOf("a/a.kicad_pcb", owners)).toBe("a");
+    expect(ownerDirOf("b/b.kicad_sch", owners)).toBe("");
+    expect(ownerDirOf("b/b.kicad_sch", ["a"])).toBeNull();
+  });
+
+  test("lockfile paths", () => {
+    expect(lockfilePathFor("")).toBe("pcbjam.lock.json");
+    expect(lockfilePathFor("b")).toBe("b/pcbjam.lock.json");
+    expect(isLockfilePath("b/pcbjam.lock.json")).toBe(true);
+    expect(isLockfilePath("b/other.json")).toBe(false);
+    expect(lockfileDirOf("b/c/pcbjam.lock.json")).toBe("b/c");
+  });
+
+  test("records: folder-relative keys, legacy root-relative keys read as is", () => {
+    const byPath = kicadProjectsByPath("a", { "a.kicad_pro": rec, "b/b.kicad_pro": rec });
+    expect(Object.keys(byPath).sort()).toEqual(["a/a.kicad_pro", "b/b.kicad_pro"]);
+    expect(Object.keys(kicadProjectsForDir("a", byPath)!)).toEqual(["a.kicad_pro"]);
+    expect(Object.keys(kicadProjectsForDir("b", byPath)!)).toEqual(["b.kicad_pro"]);
+    expect(kicadProjectsForDir("c", byPath)).toBeUndefined();
+  });
+
+  test("mergeLockfiles: bundled paths from the root, one entry per library, bundled wins", () => {
+    const lib = (over: object) => ({ nickname: "Device", kinds: ["symbol"], libId: "L1", type: "origin", revision: null, bundled: false, ...over }) as never;
+    const merged = mergeLockfiles([
+      { path: "b/pcbjam.lock.json", lock: { version: 1, generatedAt: "t", libs: [lib({ bundled: "used-items", path: "libs/Device" })], kicadProjects: { "b.kicad_pro": rec } } },
+      { path: "a/pcbjam.lock.json", lock: { version: 1, generatedAt: "t", libs: [lib({}), lib({ libId: "L2", nickname: "Other" })] } },
+    ])!;
+    expect(merged.libs.map((l) => [l.libId, l.path ?? null])).toEqual([
+      ["L1", "b/libs/Device"],
+      ["L2", null],
+    ]);
+    expect(Object.keys(merged.kicadProjects!)).toEqual(["b/b.kicad_pro"]);
+    expect(mergeLockfiles([])).toBeNull();
   });
 });

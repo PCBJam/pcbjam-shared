@@ -116,6 +116,111 @@ export function carriedKicadProjects(text: string | null | undefined): Lockfile[
   }
 }
 
+/*
+ * One lockfile per KiCad project folder (git-integration 0018, revising
+ * L-D4): `pcbjam.lock.json` sits next to its `.kicad_pro`, lists only that
+ * KiCad project's libraries and template records, and keys the records by
+ * file name relative to its own folder, so any subtree checkout is whole.
+ */
+
+const dirOf = (p: string): string => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
+const baseOf = (p: string): string => p.slice(p.lastIndexOf("/") + 1);
+
+/** True for a lockfile at any depth (`pcbjam.lock.json`, `b/pcbjam.lock.json`). */
+export function isLockfilePath(path: string): boolean {
+  return baseOf(path) === LOCKFILE_NAME;
+}
+
+/** The lockfile of a folder (`""` = the root). */
+export function lockfilePathFor(dir: string): string {
+  return dir ? `${dir}/${LOCKFILE_NAME}` : LOCKFILE_NAME;
+}
+
+/** The folder a lockfile describes. */
+export function lockfileDirOf(lockPath: string): string {
+  return dirOf(lockPath);
+}
+
+/** Folders holding a `.kicad_pro` — each owns one lockfile. Sorted, unique. */
+export function lockfileOwnerDirs(paths: Iterable<string>): string[] {
+  const dirs = new Set<string>();
+  for (const p of paths) if (p.endsWith(".kicad_pro")) dirs.add(dirOf(p));
+  return [...dirs].sort();
+}
+
+/**
+ * The KiCad project folder a file belongs to: the nearest folder at or above
+ * it that holds a `.kicad_pro`. Null for a file under no KiCad project.
+ */
+export function ownerDirOf(path: string, ownerDirs: readonly string[]): string | null {
+  const owners = new Set(ownerDirs);
+  let dir = dirOf(path);
+  for (;;) {
+    if (owners.has(dir)) return dir;
+    if (dir === "") return null;
+    dir = dirOf(dir);
+  }
+}
+
+type KicadProjects = NonNullable<Lockfile["kicadProjects"]>;
+
+/**
+ * A lockfile's template records keyed by `.kicad_pro` path from the project
+ * root. Current keys are file names in the lock's folder; a key with a slash
+ * is a pre-0018 root-relative key and is taken as is.
+ */
+export function kicadProjectsByPath(lockDir: string, records: Lockfile["kicadProjects"]): KicadProjects {
+  const out: KicadProjects = {};
+  for (const [key, rec] of Object.entries(records ?? {})) {
+    const abs = key.includes("/") ? key : lockDir ? `${lockDir}/${key}` : key;
+    out[abs] = rec;
+  }
+  return out;
+}
+
+/** The records of the `.kicad_pro` files directly in `dir`, keyed by file name; undefined when none. */
+export function kicadProjectsForDir(dir: string, byPath: KicadProjects): Lockfile["kicadProjects"] {
+  const out: KicadProjects = {};
+  for (const [abs, rec] of Object.entries(byPath)) if (dirOf(abs) === dir) out[baseOf(abs)] = rec;
+  return Object.keys(out).length ? out : undefined;
+}
+
+/**
+ * Every lockfile of an archive or tree read as one, for the readers (relink,
+ * zip update): bundled `path`s become root-relative, a library listed by
+ * several folders appears once (a bundled entry wins), and template records
+ * are keyed from the root.
+ */
+export function mergeLockfiles(locks: ReadonlyArray<{ path: string; lock: Lockfile }>): Lockfile | null {
+  if (!locks.length) return null;
+  const sorted = [...locks].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  const libs: Lockfile["libs"] = [];
+  const at = new Map<string, number>();
+  let kicadProjects: KicadProjects = {};
+  for (const { path, lock } of sorted) {
+    const dir = lockfileDirOf(path);
+    for (const lib of lock.libs) {
+      const entry = lib.path && dir ? { ...lib, path: `${dir}/${lib.path}` } : lib;
+      const seen = at.get(lib.libId);
+      if (seen === undefined) {
+        at.set(lib.libId, libs.length);
+        libs.push(entry);
+      } else if (!libs[seen]?.path && entry.path) {
+        libs[seen] = entry;
+      }
+    }
+    kicadProjects = { ...kicadProjects, ...kicadProjectsByPath(dir, lock.kicadProjects) };
+  }
+  const first = sorted[0]!.lock;
+  return {
+    version: LOCKFILE_VERSION,
+    generatedAt: first.generatedAt,
+    ...(first.projectId ? { projectId: first.projectId } : {}),
+    libs,
+    ...(Object.keys(kicadProjects).length ? { kicadProjects } : {}),
+  };
+}
+
 /** Stable serialization (2-space JSON, trailing newline) — Git-diff friendly. */
 export function serializeLockfile(lock: Lockfile): string {
   return JSON.stringify(lock, null, 2) + "\n";
