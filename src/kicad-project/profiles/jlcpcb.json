@@ -2,7 +2,7 @@
   "id": "jlcpcb",
   "name": "JLCPCB",
   "kind": "fab",
-  "version": 1,
+  "version": 2,
   "createdAt": "2026-10-05",
   "reviewedAt": "2026-10-05",
   "reviewers": [],
@@ -59,8 +59,8 @@
         "holeToHole": { "mm": 0.2, "source": "capabilities", "anchor": "Via Hole-to-Hole Spacing", "quote": "0.2mm" },
         "padHoleToHole": { "mm": 0.45, "source": "capabilities", "anchor": "Pad Hole-to-Hole Spacing", "quote": "0.45mm" },
         "holeClearance": { "mm": 0.2, "source": "capabilities", "anchor": "Via hole to Track", "quote": "0.2mm" },
-        "pthToTrack": { "mm": 0.28, "source": "capabilities", "anchor": "PTH to Track", "quote": "0.35mm is recommended, minimum 0.28mm" },
-        "pthAnnular": { "mm": 0.18, "source": "capabilities", "anchor": "PTH annular ring", "quote": "1 oz: Recommended 0.25 mm or above; absolute minimum 0.18 mm", "note": "The 2-layer line." },
+        "pthToTrack": { "mm": 0.35, "source": "capabilities", "anchor": "PTH to Track", "quote": "0.35mm is recommended, minimum 0.28mm", "minimum": { "mm": 0.28 } },
+        "pthAnnular": { "mm": 0.25, "source": "capabilities", "anchor": "PTH annular ring", "quote": "1 oz: Recommended 0.25 mm or above; absolute minimum 0.18 mm", "note": "The 2-layer line.", "minimum": { "mm": 0.18 } },
         "copperEdge": { "mm": 0.2, "source": "capabilities", "anchor": "Routed", "quote": "① Copper clearance from routed board edges: ≧0.2 mm" },
         "silkWidth": { "mm": 0.15, "source": "capabilities", "anchor": "Minimum Line Width", "quote": "Characters width less than 0.15mm will be unidentifiable." },
         "silkTextHeight": { "mm": 1.0, "source": "capabilities", "anchor": "Minimum text height", "quote": "Characters height less than 40 mil(1.0mm) will be unidentifiable." },
@@ -71,12 +71,12 @@
         "4": {
           "trackWidth": { "mm": 0.09, "source": "capabilities", "anchor": "Min. track width and spacing (1 oz)", "quote": "Multilayer: 0.09 / 0.09 mm (3.5 / 3.5 mil). 3 mil is acceptable in BGA fan-outs." },
           "clearance": { "mm": 0.09, "source": "capabilities", "anchor": "Min. track width and spacing (1 oz)", "quote": "Multilayer: 0.09 / 0.09 mm (3.5 / 3.5 mil). 3 mil is acceptable in BGA fan-outs." },
-          "pthAnnular": { "mm": 0.15, "source": "capabilities", "anchor": "PTH annular ring", "quote": "1 oz: Recommended 0.20 mm or above; absolute minimum 0.15 mm", "note": "The multilayer line." }
+          "pthAnnular": { "mm": 0.2, "source": "capabilities", "anchor": "PTH annular ring", "quote": "1 oz: Recommended 0.20 mm or above; absolute minimum 0.15 mm", "note": "The multilayer line.", "minimum": { "mm": 0.15 } }
         },
         "6": {
           "trackWidth": { "mm": 0.09, "source": "capabilities", "anchor": "Min. track width and spacing (1 oz)", "quote": "Multilayer: 0.09 / 0.09 mm (3.5 / 3.5 mil). 3 mil is acceptable in BGA fan-outs." },
           "clearance": { "mm": 0.09, "source": "capabilities", "anchor": "Min. track width and spacing (1 oz)", "quote": "Multilayer: 0.09 / 0.09 mm (3.5 / 3.5 mil). 3 mil is acceptable in BGA fan-outs." },
-          "pthAnnular": { "mm": 0.15, "source": "capabilities", "anchor": "PTH annular ring", "quote": "1 oz: Recommended 0.20 mm or above; absolute minimum 0.15 mm", "note": "The multilayer line." }
+          "pthAnnular": { "mm": 0.2, "source": "capabilities", "anchor": "PTH annular ring", "quote": "1 oz: Recommended 0.20 mm or above; absolute minimum 0.15 mm", "note": "The multilayer line.", "minimum": { "mm": 0.15 } }
         }
       },
       "byCopper": {

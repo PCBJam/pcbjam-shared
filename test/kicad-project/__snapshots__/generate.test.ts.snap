@@ -12,7 +12,7 @@ exports[`generateKicadProject > jlcpcb advanced 2-layer matches its snapshot 1`]
 	(constraint annular_width (min 0.05mm))
 	(condition "A.Type == 'Via'"))
 (rule "JLCPCB: plated hole annular ring"
-	(constraint annular_width (min 0.18mm))
+	(constraint annular_width (min 0.25mm))
 	(condition "A.Type == 'Pad' && A.Pad_Type == 'Through-hole'"))
 (rule "JLCPCB: hole to hole"
 	(constraint hole_to_hole (min 0.2mm)))
@@ -20,7 +20,7 @@ exports[`generateKicadProject > jlcpcb advanced 2-layer matches its snapshot 1`]
 	(constraint hole_to_hole (min 0.45mm))
 	(condition "A.Type == 'Pad' && B.Type == 'Pad'"))
 (rule "JLCPCB: plated hole to track"
-	(constraint hole_clearance (min 0.28mm))
+	(constraint hole_clearance (min 0.35mm))
 	(condition "A.Type == 'Pad' && A.Pad_Type == 'Through-hole' && B.Type == 'Track'"))
 (rule "JLCPCB: copper to board edge"
 	(constraint edge_clearance (min 0.2mm)))
@@ -169,7 +169,7 @@ exports[`generateKicadProject > jlcpcb advanced 2-layer matches its snapshot 1`]
   },
   "text_variables": {
     "FAB": "JLCPCB",
-    "FAB_PROFILE": "jlcpcb v1 (advanced)"
+    "FAB_PROFILE": "jlcpcb v2 (advanced)"
   }
 }
 ",
@@ -208,7 +208,7 @@ exports[`generateKicadProject > jlcpcb advanced 4-layer matches its snapshot 1`]
 	(constraint annular_width (min 0.05mm))
 	(condition "A.Type == 'Via'"))
 (rule "JLCPCB: plated hole annular ring"
-	(constraint annular_width (min 0.15mm))
+	(constraint annular_width (min 0.2mm))
 	(condition "A.Type == 'Pad' && A.Pad_Type == 'Through-hole'"))
 (rule "JLCPCB: hole to hole"
 	(constraint hole_to_hole (min 0.2mm)))
@@ -216,7 +216,7 @@ exports[`generateKicadProject > jlcpcb advanced 4-layer matches its snapshot 1`]
 	(constraint hole_to_hole (min 0.45mm))
 	(condition "A.Type == 'Pad' && B.Type == 'Pad'"))
 (rule "JLCPCB: plated hole to track"
-	(constraint hole_clearance (min 0.28mm))
+	(constraint hole_clearance (min 0.35mm))
 	(condition "A.Type == 'Pad' && A.Pad_Type == 'Through-hole' && B.Type == 'Track'"))
 (rule "JLCPCB: copper to board edge"
 	(constraint edge_clearance (min 0.2mm)))
@@ -386,7 +386,7 @@ exports[`generateKicadProject > jlcpcb advanced 4-layer matches its snapshot 1`]
   },
   "text_variables": {
     "FAB": "JLCPCB",
-    "FAB_PROFILE": "jlcpcb v1 (advanced)"
+    "FAB_PROFILE": "jlcpcb v2 (advanced)"
   }
 }
 ",
@@ -425,7 +425,7 @@ exports[`generateKicadProject > jlcpcb advanced 6-layer matches its snapshot 1`]
 	(constraint annular_width (min 0.05mm))
 	(condition "A.Type == 'Via'"))
 (rule "JLCPCB: plated hole annular ring"
-	(constraint annular_width (min 0.15mm))
+	(constraint annular_width (min 0.2mm))
 	(condition "A.Type == 'Pad' && A.Pad_Type == 'Through-hole'"))
 (rule "JLCPCB: hole to hole"
 	(constraint hole_to_hole (min 0.2mm)))
@@ -433,7 +433,7 @@ exports[`generateKicadProject > jlcpcb advanced 6-layer matches its snapshot 1`]
 	(constraint hole_to_hole (min 0.45mm))
 	(condition "A.Type == 'Pad' && B.Type == 'Pad'"))
 (rule "JLCPCB: plated hole to track"
-	(constraint hole_clearance (min 0.28mm))
+	(constraint hole_clearance (min 0.35mm))
 	(condition "A.Type == 'Pad' && A.Pad_Type == 'Through-hole' && B.Type == 'Track'"))
 (rule "JLCPCB: copper to board edge"
 	(constraint edge_clearance (min 0.2mm)))
@@ -625,7 +625,7 @@ exports[`generateKicadProject > jlcpcb advanced 6-layer matches its snapshot 1`]
   },
   "text_variables": {
     "FAB": "JLCPCB",
-    "FAB_PROFILE": "jlcpcb v1 (advanced)"
+    "FAB_PROFILE": "jlcpcb v2 (advanced)"
   }
 }
 ",
@@ -664,7 +664,7 @@ exports[`generateKicadProject > jlcpcb standard 2-layer matches its snapshot 1`]
 	(constraint annular_width (min 0.05mm))
 	(condition "A.Type == 'Via'"))
 (rule "JLCPCB: plated hole annular ring"
-	(constraint annular_width (min 0.18mm))
+	(constraint annular_width (min 0.25mm))
 	(condition "A.Type == 'Pad' && A.Pad_Type == 'Through-hole'"))
 (rule "JLCPCB: hole to hole"
 	(constraint hole_to_hole (min 0.2mm)))
@@ -672,7 +672,7 @@ exports[`generateKicadProject > jlcpcb standard 2-layer matches its snapshot 1`]
 	(constraint hole_to_hole (min 0.45mm))
 	(condition "A.Type == 'Pad' && B.Type == 'Pad'"))
 (rule "JLCPCB: plated hole to track"
-	(constraint hole_clearance (min 0.28mm))
+	(constraint hole_clearance (min 0.35mm))
 	(condition "A.Type == 'Pad' && A.Pad_Type == 'Through-hole' && B.Type == 'Track'"))
 (rule "JLCPCB: copper to board edge"
 	(constraint edge_clearance (min 0.2mm)))
@@ -821,7 +821,7 @@ exports[`generateKicadProject > jlcpcb standard 2-layer matches its snapshot 1`]
   },
   "text_variables": {
     "FAB": "JLCPCB",
-    "FAB_PROFILE": "jlcpcb v1 (standard)"
+    "FAB_PROFILE": "jlcpcb v2 (standard)"
   }
 }
 ",
@@ -860,7 +860,7 @@ exports[`generateKicadProject > jlcpcb standard 4-layer matches its snapshot 1`]
 	(constraint annular_width (min 0.05mm))
 	(condition "A.Type == 'Via'"))
 (rule "JLCPCB: plated hole annular ring"
-	(constraint annular_width (min 0.15mm))
+	(constraint annular_width (min 0.2mm))
 	(condition "A.Type == 'Pad' && A.Pad_Type == 'Through-hole'"))
 (rule "JLCPCB: hole to hole"
 	(constraint hole_to_hole (min 0.2mm)))
@@ -868,7 +868,7 @@ exports[`generateKicadProject > jlcpcb standard 4-layer matches its snapshot 1`]
 	(constraint hole_to_hole (min 0.45mm))
 	(condition "A.Type == 'Pad' && B.Type == 'Pad'"))
 (rule "JLCPCB: plated hole to track"
-	(constraint hole_clearance (min 0.28mm))
+	(constraint hole_clearance (min 0.35mm))
 	(condition "A.Type == 'Pad' && A.Pad_Type == 'Through-hole' && B.Type == 'Track'"))
 (rule "JLCPCB: copper to board edge"
 	(constraint edge_clearance (min 0.2mm)))
@@ -1038,7 +1038,7 @@ exports[`generateKicadProject > jlcpcb standard 4-layer matches its snapshot 1`]
   },
   "text_variables": {
     "FAB": "JLCPCB",
-    "FAB_PROFILE": "jlcpcb v1 (standard)"
+    "FAB_PROFILE": "jlcpcb v2 (standard)"
   }
 }
 ",
@@ -1077,7 +1077,7 @@ exports[`generateKicadProject > jlcpcb standard 6-layer matches its snapshot 1`]
 	(constraint annular_width (min 0.05mm))
 	(condition "A.Type == 'Via'"))
 (rule "JLCPCB: plated hole annular ring"
-	(constraint annular_width (min 0.15mm))
+	(constraint annular_width (min 0.2mm))
 	(condition "A.Type == 'Pad' && A.Pad_Type == 'Through-hole'"))
 (rule "JLCPCB: hole to hole"
 	(constraint hole_to_hole (min 0.2mm)))
@@ -1085,7 +1085,7 @@ exports[`generateKicadProject > jlcpcb standard 6-layer matches its snapshot 1`]
 	(constraint hole_to_hole (min 0.45mm))
 	(condition "A.Type == 'Pad' && B.Type == 'Pad'"))
 (rule "JLCPCB: plated hole to track"
-	(constraint hole_clearance (min 0.28mm))
+	(constraint hole_clearance (min 0.35mm))
 	(condition "A.Type == 'Pad' && A.Pad_Type == 'Through-hole' && B.Type == 'Track'"))
 (rule "JLCPCB: copper to board edge"
 	(constraint edge_clearance (min 0.2mm)))
@@ -1277,7 +1277,7 @@ exports[`generateKicadProject > jlcpcb standard 6-layer matches its snapshot 1`]
   },
   "text_variables": {
     "FAB": "JLCPCB",
-    "FAB_PROFILE": "jlcpcb v1 (standard)"
+    "FAB_PROFILE": "jlcpcb v2 (standard)"
   }
 }
 ",

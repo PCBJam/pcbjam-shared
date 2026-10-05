@@ -9,6 +9,7 @@ import {
   matchingStackups,
   resolveFabRules,
   summarizeFabRules,
+  profileHasMinimums,
 } from "../../src/index.js";
 
 describe("built-in fab profiles", () => {
@@ -66,6 +67,37 @@ describe("resolveFabRules", () => {
     const adv = resolveFabRules(jlc, { tier: "advanced", layers: 2, copperOuter: 1 });
     expect(adv.viaDrill?.mm).toBe(0.15);
     expect(adv.silkTextHeight?.mm).toBe(1.0);
+  });
+
+  test("recommended values by default, the published absolute minimums with smallest", () => {
+    const rec = resolveFabRules(jlc, { tier: "standard", layers: 2, copperOuter: 1 });
+    expect(rec.pthAnnular?.mm).toBe(0.25);
+    expect(rec.pthToTrack?.mm).toBe(0.35);
+    const min = resolveFabRules(jlc, { tier: "standard", layers: 2, copperOuter: 1, smallest: true });
+    expect(min.pthAnnular?.mm).toBe(0.18);
+    expect(min.pthToTrack?.mm).toBe(0.28);
+    expect(min.pthAnnular?.quote).toContain("absolute minimum 0.18 mm");
+    // Rules without a published minimum stay as they are.
+    expect(min.trackWidth?.mm).toBe(rec.trackWidth?.mm);
+    expect(resolveFabRules(jlc, { tier: "standard", layers: 4, copperOuter: 1, smallest: true }).pthAnnular?.mm).toBe(0.15);
+  });
+
+  test("only profiles with published minimums offer the option", () => {
+    expect(profileHasMinimums(jlc)).toBe(true);
+    expect(profileHasMinimums(builtinFabProfile("pcbway")!)).toBe(false);
+    expect(profileHasMinimums(builtinFabProfile("kicad-default")!)).toBe(false);
+  });
+
+  test("a minimum is never larger than its recommended value", () => {
+    for (const p of BUILTIN_FAB_PROFILES) {
+      const walk = (o: unknown): void => {
+        if (!o || typeof o !== "object") return;
+        const v = o as { mm?: number; minimum?: { mm: number } };
+        if (typeof v.mm === "number" && v.minimum) expect(v.minimum.mm, p.id).toBeLessThanOrEqual(v.mm);
+        for (const c of Object.values(o)) walk(c);
+      };
+      walk(p.tiers);
+    }
   });
 
   test("summary line", () => {

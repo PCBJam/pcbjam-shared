@@ -196,7 +196,7 @@ function kicadPro(profile: FabProfile, choices: KicadProjectChoices, rules: Reso
     },
   };
   if (profile.kind === "fab") {
-    pro.text_variables = { FAB: profile.name, FAB_PROFILE: `${profile.id} v${profile.version} (${choices.tier})` };
+    pro.text_variables = { FAB: profile.name, FAB_PROFILE: `${profile.id} v${profile.version} (${choices.tier}${choices.smallest ? ", smallest" : ""})` };
   }
   return `${JSON.stringify(pro, null, 2)}\n`;
 }

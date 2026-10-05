@@ -94,6 +94,16 @@ describe("generateKicadProject", () => {
     expect(dru).not.toContain("(constraint clearance");
   });
 
+  test("recommended values by default; smallest switches to the published minimums", () => {
+    const p = builtinFabProfile("jlcpcb")!;
+    const files = (smallest: boolean) => byPath(generateKicadProject(p, { ...defaultChoices(p), smallest }, opts));
+    const rec = files(false);
+    const min = files(true);
+    expect(rec.get("blinky/blinky.kicad_dru")).toContain("(constraint annular_width (min 0.25mm))");
+    expect(min.get("blinky/blinky.kicad_dru")).toContain("(constraint annular_width (min 0.18mm))");
+    expect(JSON.parse(min.get("blinky/blinky.kicad_pro")!).text_variables.FAB_PROFILE).toBe(`jlcpcb v${p.version} (standard, smallest)`);
+  });
+
   test("rejects choices the profile does not offer", () => {
     const p = builtinFabProfile("jlcpcb")!;
     expect(() => generateKicadProject(p, { ...defaultChoices(p), layers: 8 }, opts)).toThrow(/8 layers/);

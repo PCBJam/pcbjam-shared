@@ -22,6 +22,19 @@ export const fabValueSchema = z.object({
   quote: z.string().min(1),
   /** How the number follows from the quote when it is not literally in it. */
   note: z.string().optional(),
+  /**
+   * The fab's absolute minimum, set only when the page publishes both a
+   * recommended value (`mm`) and a smaller "absolute minimum". The dialog's
+   * "Use the fab's smallest values" switches to it.
+   */
+  minimum: z
+    .object({
+      mm: z.number().nonnegative(),
+      /** Defaults to the parent's quote when the same sentence gives both. */
+      quote: z.string().min(1).optional(),
+      note: z.string().optional(),
+    })
+    .optional(),
 });
 export type FabValue = z.infer<typeof fabValueSchema>;
 
@@ -190,6 +203,8 @@ export const kicadProjectChoicesSchema = z.object({
   copperOuter: z.number().positive(),
   copperInner: z.number().positive(),
   stackup: z.string().nullable().optional(),
+  /** Use the fab's absolute minimums where it publishes them (default: recommended). */
+  smallest: z.boolean().optional(),
 });
 export type KicadProjectChoices = z.infer<typeof kicadProjectChoicesSchema>;
 
@@ -224,7 +239,10 @@ function tierChain(profile: FabProfile, tierId: string): FabTier[] {
  * The rules for one set of choices. Order (later wins): each tier from the
  * base up, its layer-count overrides, then its copper-weight overrides.
  */
-export function resolveFabRules(profile: FabProfile, choices: Pick<KicadProjectChoices, "tier" | "layers" | "copperOuter">): ResolvedFabRules {
+export function resolveFabRules(
+  profile: FabProfile,
+  choices: Pick<KicadProjectChoices, "tier" | "layers" | "copperOuter" | "smallest">,
+): ResolvedFabRules {
   const out: ResolvedFabRules = {};
   const n = String(choices.layers);
   const oz = String(choices.copperOuter);
@@ -235,7 +253,24 @@ export function resolveFabRules(profile: FabProfile, choices: Pick<KicadProjectC
     mergeRules(out, copper?.rules);
     mergeRules(out, copper?.byLayers?.[n]);
   }
+  if (choices.smallest) {
+    for (const k of FAB_RULE_KEYS) {
+      const v = out[k];
+      if (v?.minimum) out[k] = { ...v, mm: v.minimum.mm, quote: v.minimum.quote ?? v.quote, note: v.minimum.note ?? v.note };
+    }
+  }
   return out;
+}
+
+/** True when any rule of the profile has a published absolute minimum (the dialog shows the option only then). */
+export function profileHasMinimums(profile: FabProfile): boolean {
+  const has = (r: FabRules | undefined) => !!r && FAB_RULE_KEYS.some((k) => r[k]?.minimum);
+  return Object.values(profile.tiers).some(
+    (t) =>
+      has(t.rules) ||
+      Object.values(t.byLayers ?? {}).some(has) ||
+      Object.values(t.byCopper ?? {}).some((c) => has(c.rules) || Object.values(c.byLayers ?? {}).some(has)),
+  );
 }
 
 /** Stackups that fit the choices (same layer count, thickness, outer copper). */
