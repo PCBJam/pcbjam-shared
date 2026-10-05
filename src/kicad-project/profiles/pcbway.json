@@ -2,10 +2,10 @@
   "id": "pcbway",
   "name": "PCBWay",
   "kind": "fab",
-  "version": 2,
+  "version": 3,
   "createdAt": "2026-10-05",
   "reviewedAt": "2026-10-05",
-  "reviewers": [],
+  "reviewers": ["Gergő Törcsvári"],
   "website": "https://www.pcbway.com",
   "sources": [
     {
@@ -24,64 +24,40 @@
   "tiers": {
     "standard": {
       "label": "Standard",
-      "description": "Rules that keep the order at PCBWay's base price: holes of 0.2 mm or more avoid the small-drill charge.",
+      "description": "PCBWay's own KiCad design rules (their 2-layer, 1 oz set) as the starting point. \"Use the fab's smallest values\" switches to the capabilities page's minimums, which can cost more.",
       "rules": {
-        "trackWidth": { "mm": 0.127, "source": "kicad-drc", "anchor": "# 2-layer, 1oz copper", "quote": "(rule \"Minimum Trace Width and Spacing (outer layer)\" (constraint track_width (min 0.127mm)) (constraint clearance (min 0.127mm)) (layer outer)", "note": "PCBWay's own KiCad rules for 2-layer 1 oz (outer layers; their inner-layer rule is 0.1 mm). The smallest value is the capabilities page's 4 mil.", "minimum": { "mm": 0.1, "source": "capabilities", "anchor": "Min Trace", "quote": "Min manufacturable trace is 4mil(0.1mm), Please view the below \"Advanced PCB\" or contact us if your board exceeds these."  } },
-        "clearance": { "mm": 0.127, "source": "kicad-drc", "anchor": "# 2-layer, 1oz copper", "quote": "(rule \"Minimum Trace Width and Spacing (outer layer)\" (constraint track_width (min 0.127mm)) (constraint clearance (min 0.127mm)) (layer outer)", "note": "PCBWay's own KiCad rules for 2-layer 1 oz (outer layers; their inner-layer rule is 0.1 mm). The smallest value is the capabilities page's 4 mil.", "minimum": { "mm": 0.1, "source": "capabilities", "anchor": "Min Spacing", "quote": "Min manufacturable spacing is 4mil(0.1mm), Please view the below \"Advanced PCB\" or contact us if your board exceeds these."  } },
-        "viaDrill": {
-          "mm": 0.2,
-          "source": "capabilities",
-          "anchor": "Drill Sizes (CNC)",
-          "quote": "Min drill size is 0.15mm, max drill is 6.0mm. Any holes greater than 6mm or smaller than 0.2mm will be subject to extra charges.",
-          "note": "0.2 mm is the smallest hole with no extra charge."
-        },
-        "viaAnnular": { "mm": 0.15, "source": "capabilities", "anchor": "Min Width of Annular Ring", "quote": "For pads with vias in the middle, Min width for Annular Ring is 0.15mm(6mil)." },
-        "viaDiameter": {
-          "mm": 0.5,
-          "source": "capabilities",
-          "anchor": "Min Width of Annular Ring",
-          "quote": "For pads with vias in the middle, Min width for Annular Ring is 0.15mm(6mil).",
-          "note": "0.2 mm hole + 2 × 0.15 mm ring."
-        },
-        "holeMin": {
-          "mm": 0.2,
-          "source": "capabilities",
-          "anchor": "Drill Sizes (CNC)",
-          "quote": "Min drill size is 0.15mm, max drill is 6.0mm. Any holes greater than 6mm or smaller than 0.2mm will be subject to extra charges.",
-          "note": "0.2 mm is the smallest hole with no extra charge."
-        },
-        "holeToHole": { "mm": 0.28, "source": "capabilities", "anchor": "Hole to hole spacing", "quote": "≥11MIL", "note": "11 mil = 0.279 mm, the via (≤ 0.45 mm) row, Normal process column of the Advanced PCB table." },
-        "padHoleToHole": { "mm": 0.41, "source": "capabilities", "anchor": "Hole to hole spacing", "quote": "≥16MIL", "note": "16 mil = 0.406 mm, the component hole row, Normal process column." },
-        "pthAnnular": { "mm": 0.254, "source": "capabilities", "anchor": "Minimum weld ring (outer layer)", "quote": "≥10mil", "note": "Component hole, 35 µm (1 oz) copper, Normal process column." },
-        "copperEdge": { "mm": 0.25, "source": "capabilities", "anchor": "Line to board edge distance", "quote": "0.25mm", "note": "CNC milling, Normal process column." },
-        "silkWidth": { "mm": 0.15, "source": "capabilities", "anchor": "Minimum Character Width(Legend)", "quote": "Characters of less than 0.15mm wide will be too narrow to be identifiable." },
-        "silkTextHeight": { "mm": 0.8, "source": "capabilities", "anchor": "Minimum Character Height (Legend)", "quote": "Characters of less than 0.8mm high will be too small to be recognizable." }
+        "trackWidth": { "mm": 0.127, "source": "kicad-drc", "anchor": "Minimum Trace Width and Spacing (outer layer)", "quote": "(rule \"Minimum Trace Width and Spacing (outer layer)\" (constraint track_width (min 0.127mm)) (constraint clearance (min 0.127mm)) (layer outer) (condition \"A.Type == 'track'\"))", "note": "The active 2-layer, 1 oz rule. Their inner-layer rule is 0.1 mm; PCBJam applies the outer value to every layer (a per-layer clearance rule would override the net classes).", "minimum": { "mm": 0.1, "source": "capabilities", "anchor": "Min Trace", "quote": "Min manufacturable trace is 4mil(0.1mm), Please view the below \"Advanced PCB\" or contact us if your board exceeds these."  } },
+        "clearance": { "mm": 0.127, "source": "kicad-drc", "anchor": "Minimum Trace Width and Spacing (outer layer)", "quote": "(rule \"Minimum Trace Width and Spacing (outer layer)\" (constraint track_width (min 0.127mm)) (constraint clearance (min 0.127mm)) (layer outer) (condition \"A.Type == 'track'\"))", "note": "The active 2-layer, 1 oz rule; applied to every layer (see track width).", "minimum": { "mm": 0.1, "source": "capabilities", "anchor": "Min Spacing", "quote": "Min manufacturable spacing is 4mil(0.1mm), Please view the below \"Advanced PCB\" or contact us if your board exceeds these."  } },
+        "viaDrill": { "mm": 0.3, "source": "kicad-drc", "anchor": "Minimum Via Diameter and Hole Size", "quote": "(rule \"Minimum Via Diameter and Hole Size\" (constraint hole_size (min 0.3mm)) (constraint via_diameter (min 0.5mm)) (condition \"A.Type == 'via'\"))", "minimum": { "mm": 0.15, "source": "capabilities", "anchor": "Drill Sizes (CNC)", "quote": "Min drill size is 0.15mm, max drill is 6.0mm. Any holes greater than 6mm or smaller than 0.2mm will be subject to extra charges.", "note": "Holes under 0.2 mm cost extra."  } },
+        "viaDiameter": { "mm": 0.5, "source": "kicad-drc", "anchor": "Minimum Via Diameter and Hole Size", "quote": "(rule \"Minimum Via Diameter and Hole Size\" (constraint hole_size (min 0.3mm)) (constraint via_diameter (min 0.5mm)) (condition \"A.Type == 'via'\"))", "minimum": { "mm": 0.45, "source": "capabilities", "anchor": "Min Width of Annular Ring", "quote": "For pads with vias in the middle, Min width for Annular Ring is 0.15mm(6mil).", "note": "0.15 mm hole + 2 × 0.15 mm ring."  } },
+        "holeMin": { "mm": 0.2, "source": "kicad-drc", "anchor": "PTH Hole Size", "quote": "(rule \"PTH Hole Size\" (constraint hole_size (min 0.2mm) (max 6.35mm)) (condition \"A.Type != 'Via' && A.isPlated()\"))", "note": "The smallest hole any of the file's hole rules allows (vias 0.3, plated holes 0.2, non-plated 0.5).", "minimum": { "mm": 0.15, "source": "capabilities", "anchor": "Drill Sizes (CNC)", "quote": "Min drill size is 0.15mm, max drill is 6.0mm. Any holes greater than 6mm or smaller than 0.2mm will be subject to extra charges.", "note": "Holes under 0.2 mm cost extra."  } },
+        "holeMax": { "mm": 6.3, "source": "kicad-drc", "anchor": "drill hole size (mechanical)", "quote": "(rule \"drill hole size (mechanical)\" (constraint hole_size (min 0.15mm) (max 6.3mm)))" },
+        "padHoleMin": { "mm": 0.5, "source": "kicad-drc", "anchor": "Pad Size", "quote": "(rule \"Pad Size\" (constraint hole_size (min 0.5mm)) (constraint annular_width (min 0.25mm)) (condition \"A.Type == 'Pad' && A.isPlated()\"))", "minimum": { "mm": 0.2, "anchor": "PTH Hole Size", "quote": "(rule \"PTH Hole Size\" (constraint hole_size (min 0.2mm) (max 6.35mm)) (condition \"A.Type != 'Via' && A.isPlated()\"))", "note": "The file's general plated-hole minimum."  } },
+        "npthHoleMin": { "mm": 0.5, "source": "kicad-drc", "anchor": "Minimum Non-plated Hole Size", "quote": "(rule \"Minimum Non-plated Hole Size\" (constraint hole_size (min 0.5mm)) (condition \"A.Type == 'pad' && !A.isPlated()\"))" },
+        "castellatedHoleMin": { "mm": 0.6, "source": "kicad-drc", "anchor": "Minimum Castellated Hole Size", "quote": "(rule \"Minimum Castellated Hole Size\" (constraint hole_size (min 0.6mm)) (condition \"A.Type == 'pad' && A.Fabrication_Property == 'Castellated pad'\"))", "minimum": { "mm": 0.5, "source": "capabilities", "anchor": "Castellated Holes diameter", "quote": "≥0.5mm", "note": "Advanced PCB table, Normal process column."  } },
+        "platedSlotMin": { "mm": 0.5, "source": "kicad-drc", "anchor": "Min. Plated Slot Width", "quote": "(rule \"Min. Plated Slot Width\" (constraint hole_size (min 0.5mm)) (condition \"(A.Hole_Size_X != A.Hole_Size_Y) && A.isPlated()\"))" },
+        "npthSlotMin": { "mm": 0.8, "source": "kicad-drc", "anchor": "Min. Non-Plated Slot Width", "quote": "(rule \"Min. Non-Plated Slot Width\" (constraint hole_size (min 0.8mm)) (condition \"(A.Hole_Size_X != A.Hole_Size_Y) && !A.isPlated()\"))" },
+        "holeToHole": { "mm": 0.254, "source": "kicad-drc", "anchor": "via to via clearance (same nets)", "quote": "(rule \"via to via clearance (same nets)\" (constraint hole_to_hole (min 0.254mm)) (condition \"A.Type == 'via' && B.Type == A.Type && A.Net == B.Net\"))", "note": "Board-wide hole-to-hole floor; holes on different nets get 0.5 mm (next rule)." },
+        "holeToHoleOtherNet": { "mm": 0.5, "source": "kicad-drc", "anchor": "hole to hole clearance (different nets)", "quote": "(rule \"hole to hole clearance (different nets)\" (constraint hole_to_hole (min 0.5mm)) (condition \"A.Net != B.Net\"))", "minimum": { "mm": 0.41, "source": "capabilities", "anchor": "Hole to hole spacing", "quote": "≥16MIL", "note": "16 mil = 0.406 mm, the component hole row of the Advanced PCB table, Normal process column."  } },
+        "holeClearance": { "mm": 0.2, "source": "kicad-drc", "anchor": "NPTH with copper around", "quote": "(rule \"NPTH with copper around\" (constraint hole_clearance (min 0.20mm)) (condition \"A.Pad_Type == 'NPTH, mechanical' && B.Type != 'track'\"))", "note": "Board-wide hole-to-copper floor; the file's other hole clearances are larger." },
+        "viaToTrack": { "mm": 0.254, "source": "kicad-drc", "anchor": "via to track clearance", "quote": "(rule \"via to track clearance\" (constraint hole_clearance (min 0.254mm)) (condition \"A.Type == 'via' && B.Type == 'track'\"))" },
+        "npthToTrack": { "mm": 0.254, "source": "kicad-drc", "anchor": "NPTH to Track clearance", "quote": "(rule \"NPTH to Track clearance\" (constraint hole_clearance (min 0.254mm)) (condition \"A.Pad_Type == 'NPTH, mechanical' && B.Type == 'track'\"))" },
+        "pthToTrack": { "mm": 0.33, "source": "kicad-drc", "anchor": "PTH to Track clearance", "quote": "(rule \"PTH to Track clearance\" (constraint hole_clearance (min 0.33mm)) (condition \"A.isPlated() && A.Type != 'Via' && B.Type == 'track'\"))" },
+        "padToTrack": { "mm": 0.2, "source": "kicad-drc", "anchor": "Pad to Track clearance", "quote": "(rule \"Pad to Track clearance\" (constraint clearance (min 0.2mm)) (condition \"A.isPlated() && A.Type != 'Via' && B.Type == 'track'\"))", "note": "Applied to the Default net class only, so a wider class keeps its own clearance." },
+        "pthAnnular": { "mm": 0.25, "source": "kicad-drc", "anchor": "Pad Size", "quote": "(rule \"Pad Size\" (constraint hole_size (min 0.5mm)) (constraint annular_width (min 0.25mm)) (condition \"A.Type == 'Pad' && A.isPlated()\"))" },
+        "copperEdge": { "mm": 0.3, "source": "kicad-drc", "anchor": "Trace to Outline", "quote": "(rule \"Trace to Outline\" (constraint edge_clearance (min 0.3mm)) (condition \"A.Type == 'track'\"))", "note": "PCBJam applies it to all copper, not only tracks.", "minimum": { "mm": 0.2, "source": "capabilities", "anchor": "Line to board edge distance", "quote": "0.20mm", "note": "CNC milling, Medium difficulty column of the Advanced PCB table."  } },
+        "silkWidth": { "mm": 0.15, "source": "kicad-drc", "anchor": "Minimum Text", "quote": "(rule \"Minimum Text\" (constraint text_thickness (min 0.15mm)) (constraint text_height (min 0.8mm)) (layer \"?.Silkscreen\"))" },
+        "silkTextHeight": { "mm": 0.8, "source": "kicad-drc", "anchor": "Minimum Text", "quote": "(rule \"Minimum Text\" (constraint text_thickness (min 0.15mm)) (constraint text_height (min 0.8mm)) (layer \"?.Silkscreen\"))" },
+        "silkClearance": { "mm": 0.15, "source": "kicad-drc", "anchor": "Pad to Silkscreen", "quote": "(rule \"Pad to Silkscreen\" (constraint silk_clearance (min 0.15mm)) (layer outer) (condition \"A.Type == 'pad' && (B.Type == 'text' || B.Type == 'graphic')\"))" }
       },
       "byCopper": {
         "2": {
           "rules": {
-            "trackWidth": { "mm": 0.178, "source": "capabilities", "anchor": "The min width/spacing of outer layer (before compensation)", "quote": "≥7/8mil", "note": "7 mil width, 70 µm (2 oz) copper, Normal process column." },
-            "clearance": { "mm": 0.203, "source": "capabilities", "anchor": "The min width/spacing of outer layer (before compensation)", "quote": "≥7/8mil", "note": "8 mil spacing, 70 µm (2 oz) copper, Normal process column." },
+            "trackWidth": { "mm": 0.178, "source": "capabilities", "anchor": "The min width/spacing of outer layer (before compensation)", "quote": "≥7/8mil", "note": "7 mil width, 70 µm (2 oz) copper, Normal process column.", "minimum": { "mm": 0.1524, "source": "kicad-drc", "anchor": "Minimum Trace Width and Spacing (outer layer)", "quote": "(rule \"Minimum Trace Width and Spacing (outer layer)\" (constraint track_width (min 0.1524mm)) (constraint clearance (min 0.1778mm)) (layer outer) (condition \"A.Type == 'track'\"))", "note": "The file's commented-out 2 oz alternative."  } },
+            "clearance": { "mm": 0.203, "source": "capabilities", "anchor": "The min width/spacing of outer layer (before compensation)", "quote": "≥7/8mil", "note": "8 mil spacing, 70 µm (2 oz) copper, Normal process column.", "minimum": { "mm": 0.1778, "source": "kicad-drc", "anchor": "Minimum Trace Width and Spacing (outer layer)", "quote": "(rule \"Minimum Trace Width and Spacing (outer layer)\" (constraint track_width (min 0.1524mm)) (constraint clearance (min 0.1778mm)) (layer outer) (condition \"A.Type == 'track'\"))", "note": "The file's commented-out 2 oz alternative."  } },
             "pthAnnular": { "mm": 0.305, "source": "capabilities", "anchor": "Minimum weld ring (outer layer)", "quote": "≥12mil", "note": "Component hole, 70 µm (2 oz) copper, Normal process column." }
           }
         }
-      }
-    },
-    "advanced": {
-      "label": "Advanced",
-      "description": "PCBWay's smallest drills (0.15 mm) and edge clearance. Holes under 0.2 mm cost extra.",
-      "extends": "standard",
-      "rules": {
-        "viaDrill": { "mm": 0.15, "source": "capabilities", "anchor": "Drill Sizes (CNC)", "quote": "Min drill size is 0.15mm, max drill is 6.0mm. Any holes greater than 6mm or smaller than 0.2mm will be subject to extra charges." },
-        "viaDiameter": {
-          "mm": 0.45,
-          "source": "capabilities",
-          "anchor": "Min Width of Annular Ring",
-          "quote": "For pads with vias in the middle, Min width for Annular Ring is 0.15mm(6mil).",
-          "note": "0.15 mm hole + 2 × 0.15 mm ring."
-        },
-        "holeMin": { "mm": 0.15, "source": "capabilities", "anchor": "Drill Sizes (CNC)", "quote": "Min drill size is 0.15mm, max drill is 6.0mm. Any holes greater than 6mm or smaller than 0.2mm will be subject to extra charges." },
-        "copperEdge": { "mm": 0.2, "source": "capabilities", "anchor": "Line to board edge distance", "quote": "0.20mm", "note": "CNC milling, Medium difficulty column." }
       }
     }
   },

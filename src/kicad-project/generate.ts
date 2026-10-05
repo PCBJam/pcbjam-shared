@@ -350,7 +350,28 @@ function kicadDru(profile: FabProfile, rules: ResolvedFabRules): string | null {
   };
   const v = (k: keyof ResolvedFabRules) => rules[k]?.mm;
   const mm = (x: number) => `${n(x)}mm`;
-  if (v("holeMin") !== undefined) rule("smallest hole", `hole_size (min ${mm(v("holeMin")!)})`);
+  // hole_size: one general rule, then narrower ones. KiCad lets the last
+  // matching rule of a constraint type win, so a min and a max must share a
+  // rule and the specific holes come after the general one.
+  if (v("holeMin") !== undefined || v("holeMax") !== undefined) {
+    const lo = v("holeMin") !== undefined ? ` (min ${mm(v("holeMin")!)})` : "";
+    const hi = v("holeMax") !== undefined ? ` (max ${mm(v("holeMax")!)})` : "";
+    rule(v("holeMin") !== undefined ? "smallest hole" : "largest hole", `hole_size${lo}${hi}`);
+  }
+  if (v("viaDrill") !== undefined && v("viaDrill")! > (v("holeMin") ?? 0)) {
+    rule("via drill", `hole_size (min ${mm(v("viaDrill")!)})`, "A.Type == 'Via'");
+  }
+  if (v("padHoleMin") !== undefined) rule("plated pad hole", `hole_size (min ${mm(v("padHoleMin")!)})`, "A.Type == 'Pad' && A.isPlated()");
+  if (v("npthHoleMin") !== undefined) rule("non-plated hole", `hole_size (min ${mm(v("npthHoleMin")!)})`, "A.Type == 'Pad' && !A.isPlated()");
+  if (v("castellatedHoleMin") !== undefined) {
+    rule("castellated hole", `hole_size (min ${mm(v("castellatedHoleMin")!)})`, "A.Type == 'Pad' && A.Fabrication_Property == 'Castellated pad'");
+  }
+  if (v("platedSlotMin") !== undefined) {
+    rule("plated slot", `hole_size (min ${mm(v("platedSlotMin")!)})`, "A.Hole_Size_X != A.Hole_Size_Y && A.isPlated()");
+  }
+  if (v("npthSlotMin") !== undefined) {
+    rule("non-plated slot", `hole_size (min ${mm(v("npthSlotMin")!)})`, "A.Hole_Size_X != A.Hole_Size_Y && !A.isPlated()");
+  }
   if (v("viaDiameter") !== undefined) rule("via diameter", `via_diameter (min ${mm(v("viaDiameter")!)})`, "A.Type == 'Via'");
   if (v("viaAnnular") !== undefined) rule("via annular ring", `annular_width (min ${mm(v("viaAnnular")!)})`, "A.Type == 'Via'");
   if (v("pthAnnular") !== undefined) {
@@ -360,8 +381,26 @@ function kicadDru(profile: FabProfile, rules: ResolvedFabRules): string | null {
   if (v("padHoleToHole") !== undefined) {
     rule("pad hole to pad hole", `hole_to_hole (min ${mm(v("padHoleToHole")!)})`, "A.Type == 'Pad' && B.Type == 'Pad'");
   }
+  if (v("holeToHoleOtherNet") !== undefined) {
+    rule("hole to hole, different nets", `hole_to_hole (min ${mm(v("holeToHoleOtherNet")!)})`, "A.Net != B.Net");
+  }
+  if (v("viaToTrack") !== undefined) {
+    rule("via hole to track", `hole_clearance (min ${mm(v("viaToTrack")!)})`, "A.Type == 'Via' && B.Type == 'Track'");
+  }
+  if (v("npthToTrack") !== undefined) {
+    rule("non-plated hole to track", `hole_clearance (min ${mm(v("npthToTrack")!)})`, "A.Pad_Type == 'NPTH, mechanical' && B.Type == 'Track'");
+  }
   if (v("pthToTrack") !== undefined) {
     rule("plated hole to track", `hole_clearance (min ${mm(v("pthToTrack")!)})`, "A.Type == 'Pad' && A.Pad_Type == 'Through-hole' && B.Type == 'Track'");
+  }
+  if (v("padToTrack") !== undefined) {
+    // A clearance rule replaces the net class clearance for what it matches;
+    // limited to the Default class so a wider class the user adds keeps its own.
+    rule(
+      "plated pad to track",
+      `clearance (min ${mm(v("padToTrack")!)})`,
+      "A.isPlated() && A.Type != 'Via' && B.Type == 'Track' && A.NetClass == 'Default' && B.NetClass == 'Default'",
+    );
   }
   if (v("copperEdge") !== undefined) rule("copper to board edge", `edge_clearance (min ${mm(v("copperEdge")!)})`);
   if (v("silkTextHeight") !== undefined) {

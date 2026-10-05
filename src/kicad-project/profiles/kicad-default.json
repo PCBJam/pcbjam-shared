@@ -5,7 +5,7 @@
   "version": 1,
   "createdAt": "2026-10-05",
   "reviewedAt": "2026-10-05",
-  "reviewers": [],
+  "reviewers": ["Gergő Törcsvári"],
   "website": "https://www.kicad.org",
   "sources": [
     {

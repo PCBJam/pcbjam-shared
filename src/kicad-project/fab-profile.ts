@@ -50,10 +50,20 @@ export const FAB_RULE_KEYS = [
   "viaDiameter",
   "viaAnnular",
   "holeMin",
+  "holeMax",
+  "padHoleMin",
+  "npthHoleMin",
+  "castellatedHoleMin",
+  "platedSlotMin",
+  "npthSlotMin",
   "holeToHole",
   "padHoleToHole",
+  "holeToHoleOtherNet",
   "holeClearance",
+  "viaToTrack",
+  "npthToTrack",
   "pthToTrack",
+  "padToTrack",
   "pthAnnular",
   "copperEdge",
   "silkWidth",
@@ -71,10 +81,20 @@ export const FAB_RULE_LABELS: Record<FabRuleKey, string> = {
   viaDiameter: "Via diameter",
   viaAnnular: "Via annular ring",
   holeMin: "Smallest hole",
+  holeMax: "Largest hole",
+  padHoleMin: "Smallest plated pad hole",
+  npthHoleMin: "Smallest non-plated hole",
+  castellatedHoleMin: "Smallest castellated hole",
+  platedSlotMin: "Smallest plated slot",
+  npthSlotMin: "Smallest non-plated slot",
   holeToHole: "Hole to hole",
   padHoleToHole: "Pad hole to pad hole",
+  holeToHoleOtherNet: "Hole to hole, different nets",
   holeClearance: "Hole to copper",
+  viaToTrack: "Via hole to track",
+  npthToTrack: "Non-plated hole to track",
   pthToTrack: "Plated hole to track",
+  padToTrack: "Plated pad to track",
   pthAnnular: "Plated hole annular ring",
   copperEdge: "Copper to board edge",
   silkWidth: "Silkscreen line width",
@@ -83,13 +103,18 @@ export const FAB_RULE_LABELS: Record<FabRuleKey, string> = {
   maskWeb: "Solder mask web",
 };
 
-export const fabRulesSchema = z.object(
-  Object.fromEntries(FAB_RULE_KEYS.map((k) => [k, fabValueSchema.optional()])) as Record<
-    FabRuleKey,
-    z.ZodOptional<typeof fabValueSchema>
-  >,
-).strict();
-export type FabRules = z.infer<typeof fabRulesSchema>;
+/** Every rule optional; unset rules fall back to KiCad's defaults. */
+export type FabRules = Partial<Record<FabRuleKey, FabValue>>;
+// Annotated: the inferred object type of every rule key is too long for the
+// declaration emitter (TS7056) once a profile schema nests it a few times.
+export const fabRulesSchema: z.ZodType<FabRules, z.ZodTypeDef, unknown> = z
+  .object(
+    Object.fromEntries(FAB_RULE_KEYS.map((k) => [k, fabValueSchema.optional()])) as Record<
+      FabRuleKey,
+      z.ZodOptional<typeof fabValueSchema>
+    >,
+  )
+  .strict();
 
 /** Rules plus per-layer-count overrides (keys "2", "4", "6"). */
 const ruleSetSchema = z.object({

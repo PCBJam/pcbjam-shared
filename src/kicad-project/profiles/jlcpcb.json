@@ -2,10 +2,10 @@
   "id": "jlcpcb",
   "name": "JLCPCB",
   "kind": "fab",
-  "version": 2,
+  "version": 3,
   "createdAt": "2026-10-05",
   "reviewedAt": "2026-10-05",
-  "reviewers": [],
+  "reviewers": ["Gergő Törcsvári"],
   "website": "https://jlcpcb.com",
   "sources": [
     {
@@ -65,7 +65,7 @@
         "silkWidth": { "mm": 0.15, "source": "capabilities", "anchor": "Minimum Line Width", "quote": "Characters width less than 0.15mm will be unidentifiable." },
         "silkTextHeight": { "mm": 1.0, "source": "capabilities", "anchor": "Minimum text height", "quote": "Characters height less than 40 mil(1.0mm) will be unidentifiable." },
         "silkClearance": { "mm": 0.15, "source": "capabilities", "anchor": "Pad To Silkscreen", "quote": "The Minimum Distance Between Pad and Silkscreen is 0.15mm." },
-        "maskWeb": { "mm": 0.1, "source": "capabilities", "anchor": "Soldermask bridge", "quote": "Min. pad spacing: 0.10 mm (green, red, yellow, blue, purple)" }
+        "maskWeb": { "mm": 0.13, "source": "capabilities", "anchor": "Soldermask bridge", "quote": "0.13 mm (black, white)", "note": "The black and white mask value; it works for every mask colour.", "minimum": { "mm": 0.1, "quote": "Min. pad spacing: 0.10 mm (green, red, yellow, blue, purple)", "note": "Green, red, yellow, blue and purple mask only." } }
       },
       "byLayers": {
         "4": {
