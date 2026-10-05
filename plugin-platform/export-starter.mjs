@@ -51,14 +51,17 @@ for(const name of providerNames){
   await mkdir(path.dirname(target),{recursive:true});await writeFile(target,bytes);
 }
 await writeFile(path.join(out,'remote-provider-starter.zip'),zipSync(providerFiles,{level:9}));
+// The public docs (app.pcbjam.com/docs/plugins/) from the shared docs folder:
+// frontmatter becomes a plain title line for the offline copies.
 const guides=[
-  ['0008-local-plugin-development.md','DEVELOPER-GUIDE.md'],
-  ['0009-plugin-api-and-permissions.md','API.md'],
-  ['0010-plugin-security-and-testing.md','ARCHITECTURE.md'],
+  ['build-a-plugin.md','DEVELOPER-GUIDE.md'],
+  ['api-and-permissions.md','API.md'],
+  ['architecture.md','ARCHITECTURE.md'],
   ['remote-symbols.md','REMOTE-SYMBOLS.md'],
 ];
 for(const [sourceName,outputName] of guides){
-  let markdown=await readFile(path.join(ROOT,'docs',sourceName),'utf8');
+  let markdown=await readFile(path.join(ROOT,'..','docs','plugins',sourceName),'utf8');
+  markdown=markdown.replace(/^---\n([\s\S]*?)\n---\n+/,(_,front)=>`# ${(/^title:\s*(.+)$/m.exec(front)?.[1]??'').trim()}\n\n`);
   for(const [from,to] of guides) markdown=markdown.replaceAll(from,to);
   markdown=markdown.replaceAll('download/sdk.d.ts','external-symbol-import/sdk.d.ts').replaceAll('download/','');
   await writeFile(path.join(out,outputName),markdown);

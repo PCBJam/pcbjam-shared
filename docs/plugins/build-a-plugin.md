@@ -1,4 +1,9 @@
-# Build a plugin
+---
+title: Build a plugin
+description: "Create, install and share a PCBJam editor plugin: files, manifest, logic and UI, with a working example."
+created: 2026-09-16
+updated: 2026-09-24
+---
 
 **Plugin SDK v1.** Create your plugin in a folder on your computer; using Git is
 optional. Sign into PCBJam to install it. You do not need PCBJam's source code.
@@ -35,7 +40,7 @@ questions and report problems with the SDK.
 | Call your own server | `http.request()` | `network:<name>`, after PCBJam approves the routes |
 | Offer your parts catalog in the schematic editor, KiCad 10 Remote Symbols style | a `remote-provider` package, no code: [Remote Symbols](remote-symbols.md) | `provider:embed`, `provider:download`, `editor:place-items` |
 
-Every call, its arguments and its limits are in [Available APIs](0009-plugin-api-and-permissions.md).
+Every call, its arguments and its limits are in [Available APIs](api-and-permissions.md).
 What is deliberately not possible: network access from logic or UI other than
 your approved backend, reading projects that are not open, editing the design
 other than by confirmed symbol placement, and anything running while no command
@@ -114,7 +119,7 @@ This minimal manifest contains every required field. It only reads basic editor 
 | `version` | `major.minor.patch`, e.g. `0.1.0`. Increase whenever package contents change. |
 | `main`, `ui` | Exactly `main.js` and `ui.html`. |
 | `surfaces` | Schematic: `editor:eeschema`. Board: `editor:pcbnew`. Choose one or both. |
-| `permissions` | Both UI permissions are required. Add only the [API permissions](0009-plugin-api-and-permissions.md) your feature uses. |
+| `permissions` | Both UI permissions are required. Add only the [API permissions](api-and-permissions.md) your feature uses. |
 | `uiSize` (optional) | Preferred floating window size: `{ "width": 640, "height": 480 }`. Integer CSS pixels; width 280–4096, height 240–4096. |
 
 `ui:custom` allows your iframe UI; `ui:project-data` allows passing logic results
@@ -186,7 +191,7 @@ and handle errors. The [SDK declarations](download/sdk.d.ts) provide autocomplet
 Inline `style="…"` attributes pass the upload check but are silently ignored
 when the UI runs, because the page's security policy only allows the styles and
 scripts that were in `ui.html` when it was uploaded. Use classes, or set
-`element.style` from script. See [Debugging and errors](0009-plugin-api-and-permissions.md#debugging-and-errors)
+`element.style` from script. See [Debugging and errors](api-and-permissions.md#debugging-and-errors)
 for what logic can and cannot do (there is no `console`).
 
 ## Example: a parts list that highlights and exports
@@ -287,7 +292,7 @@ For your own backend, download the [backend starter](download/backend-preference
 Declare one HTTPS origin, exact paths and `GET`/`POST` methods in optional
 `endpoints`; request `network:<name>` and, for signed identity,
 `backend:identity:<name>`. PCBJam must approve those routes in addition to the
-user's installation consent. See [the HTTP API](0009-plugin-api-and-permissions.md#backend-requests).
+user's installation consent. See [the HTTP API](api-and-permissions.md#backend-requests).
 
 Upload first, post the plugin UUID shown in the review on the
 [PCBJam Discord](https://discord.gg/ybhqJxjR3E), and publish the DNS TXT
@@ -345,6 +350,6 @@ privately with **Plugins → Add plugin…**; that upload counts against their o
 release limit, and a backend on their copy needs its own approval (ask on
 Discord with their plugin UUID).
 
-Next: [Available APIs](0009-plugin-api-and-permissions.md) ·
-[Architecture](0010-plugin-security-and-testing.md) ·
+Next: [Available APIs](api-and-permissions.md) ·
+[Architecture](architecture.md) ·
 [Remote Symbols](remote-symbols.md).

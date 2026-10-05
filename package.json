@@ -14,7 +14,8 @@
   "files": ["src"],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "node scripts/check-doc-dates.mjs && vitest run",
+    "check:doc-dates": "node scripts/check-doc-dates.mjs",
     "test:watch": "vitest"
   },
   "dependencies": {

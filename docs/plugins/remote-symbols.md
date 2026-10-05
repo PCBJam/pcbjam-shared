@@ -1,4 +1,9 @@
-# Remote Symbols
+---
+title: Remote Symbols
+description: "Show your KiCad 10 Remote Symbols provider in PCBJam's schematic editor."
+created: 2026-09-23
+updated: 2026-09-24
+---
 
 **For parts providers.** If you already serve a **KiCad 10 remote-symbol
 provider** (the panel behind KiCad's *View → Panels → Remote Symbols*), PCBJam
@@ -465,4 +470,4 @@ protocol and your server first:
 | Open panels | 8 plugin panels per user |
 
 Plugins that run code inside PCBJam are a different package kind:
-[Build a plugin](0008-local-plugin-development.md).
+[Build a plugin](build-a-plugin.md).

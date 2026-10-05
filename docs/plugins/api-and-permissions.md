@@ -1,4 +1,9 @@
-# Available APIs
+---
+title: API and permissions
+description: "Every host method a plugin can call, the permission each needs, and the limits."
+created: 2026-09-16
+updated: 2026-09-30
+---
 
 **Plugin SDK v1.** Call `pcbjam` from plugin logic. All host methods return
 promises; failures reject them. Use `(await pcbjam.context.get()).methods` to
@@ -659,8 +664,8 @@ signing. The only current document write is confirmed symbol placement;
 The only UI surface is a floating panel in the schematic or PCB editor, plus the
 guided tours and pointers PCBJam draws for you.
 
-[Build a plugin](0008-local-plugin-development.md) ·
-[Architecture](0010-plugin-security-and-testing.md).
+[Build a plugin](build-a-plugin.md) ·
+[Architecture](architecture.md).
 
 ## Backend requests
 

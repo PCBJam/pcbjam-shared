@@ -1,4 +1,9 @@
-# Plugin architecture
+---
+title: Plugin architecture
+description: "How a plugin's UI, logic and the trusted host fit together, and what keeps them isolated."
+created: 2026-09-16
+updated: 2026-09-24
+---
 
 A plugin has **logic**, **UI** and a **manifest**. PCBJam runs the two code parts
 separately and controls their access to the editor.
@@ -189,5 +194,5 @@ project and plugin. They stay in that browser. Disable preserves them; reset
 and uninstall revoke the namespace. Selected file handles and UI state disappear
 when the instance stops.
 
-[Build a plugin](0008-local-plugin-development.md) ·
-[Available APIs](0009-plugin-api-and-permissions.md).
+[Build a plugin](build-a-plugin.md) ·
+[Available APIs](api-and-permissions.md).
