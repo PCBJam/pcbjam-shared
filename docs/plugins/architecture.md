@@ -1,12 +1,16 @@
 ---
 title: Plugin architecture
-description: "How a plugin's UI, logic and the trusted host fit together, and what keeps them isolated."
+description: "How a plugin's UI, logic and PCBJam's trusted host fit together, what keeps them isolated, and why the limits are what they are."
 created: 2026-09-16
-updated: 2026-09-24
+updated: 2026-10-05
 ---
 
-A plugin has **logic**, **UI** and a **manifest**. PCBJam runs the two code parts
-separately and controls their access to the editor.
+This page is for plugin authors who want to know why a call behaves the way it
+does, and for anyone reviewing what a plugin can and can't reach. You don't
+need it to [build your first plugin](build-a-plugin.md).
+
+A plugin has **logic**, **UI** and a **manifest**. PCBJam runs the logic and
+the UI separately and decides what each may do in the editor.
 
 ## The four parts
 
@@ -19,71 +23,78 @@ separately and controls their access to the editor.
 
 PCBJam starts the Worker **directly**, separately from the UI iframe. Inside the
 Worker, PCBJam's wrapper creates QuickJS and exposes the limited `pcbjam` API.
-Uploaded logic runs inside QuickJS, not as unrestricted Worker JavaScript.
+Your logic runs inside QuickJS, not as unrestricted Worker JavaScript.
 
-The wrapper is the connection and permission boundary: without it, your isolated
-code could calculate things but could not ask PCBJam to read a document or place
-a symbol. The trusted host handles those requests through specific adapters.
+The wrapper is the connection and permission boundary. Without it your code
+could calculate things but couldn't ask PCBJam to read a document or place a
+symbol. The trusted host handles those requests through specific adapters.
 
 ## One API call
 
-```mermaid
-flowchart LR
-  UI["Plugin UI"] -->|"registered command"| Q["QuickJS in Worker"]
-  Q -->|"SDK request"| H["Trusted host: validate and authorize"]
-  H -->|"approved operation"| E["Editor and document"]
-```
+A request travels through four steps, and the result comes back the same way:
 
-For example, a button calls `pcbjamUI.call('inspect')`. PCBJam forwards that to
-the plugin's `inspect` handler in QuickJS. The handler calls `pcbjam.items.list()`;
-the trusted host checks the request and reads the current document.
-The result returns along the same path to the UI.
+1. **Plugin UI:** a button calls `pcbjamUI.call('inspect')`.
+2. **QuickJS in the Worker:** PCBJam runs the plugin's `inspect` handler,
+   which calls `pcbjam.items.list()`.
+3. **Trusted host:** checks and authorizes the request.
+4. **Editor and document:** reads the current document. The result returns
+   along the same path to the UI.
 
-Communication uses validated messages and copied data. Plugins never receive
+Everything crosses as validated messages and copied data. A plugin never gets
 the editor's `Module`, a `Y.Doc`, a WASM pointer or shared editor memory.
-Reading a large design therefore has a copying cost, and that copy happens on
-the thread that draws the editor.
+Reading a large design therefore costs a copy, and that copy happens on the
+thread that draws the editor.
 
 ## Large reads never hold the editor
 
 Copying a whole board in one go blocked the editor for up to a second on a slow
-laptop (measured in Chromium, Firefox and WebKit on real boards), and a fixed
-chunk size did not help: one filled zone can be several megabytes by itself.
-`documents.export()` and `board.geometry()` are therefore **time-sliced**. The
-editor works for about 8 ms, hands over at most 256 KiB of text, rests for as
-long as it worked, and continues; it can stop in the middle of a single item.
-Data crosses as newline-delimited JSON text because a string passes to the
-Worker almost for free, while a tree of objects is copied node by node.
-A read is pinned to one document revision and stops with `Document changed…`
-if the design moves on, so a plugin never sees a mix of old and new. One such
-read runs at a time per plugin, up to 32 MiB.
+laptop (measured in Chromium, Firefox and WebKit on real boards). A fixed chunk
+size didn't help either: one filled zone can be several megabytes by itself.
+
+So `documents.export()` and `board.geometry()` are **time-sliced**:
+- The editor works for about 8 ms, hands over at most 256 KiB of text, rests
+  for as long as it worked, and continues. It can stop in the middle of a
+  single item.
+- Data crosses as newline-delimited JSON text, because a string passes to the
+  Worker almost for free while a tree of objects is copied node by node.
+- A read is pinned to one document revision and stops with
+  `Document changed…` if the design moves on, so you never see a mix of old and
+  new.
+- One such read runs at a time per plugin, up to 32 MiB.
+
 PCBJam's own benchmark re-measures this on every change and fails if any slice
-holds the thread longer than 50 ms; the worst recorded slice was 13.4 ms with
+holds the thread longer than 50 ms. The worst recorded slice was 13.4 ms with
 the CPU slowed six times.
 
 ## Permissions and isolation
 
-The manifest requests permissions; the user approves them at installation.
-Account access is controlled by a database flag, checked on every request.
-Opening a plugin creates a temporary server-authorized activation tied to the
-signed-in user, session, installed release, project and document. Each host call
-checks those grants and current access, before the work and again before the
-result is delivered, so a call that waited on a prompt cannot complete after
-access ended. Plain reads of the document that is already open in the tab may
-reuse a server check made within the last two seconds (the same interval at
-which every running plugin is re-checked anyway); anything with an effect
-outside the plugin — files, placement, selection, backend requests, storage
-writes — is checked on every call. Authentication stays in trusted PCBJam code;
-plugins need no API key and receive no session credentials.
+The manifest requests permissions, and the user approves them at
+installation. Authentication stays in trusted PCBJam code: plugins need no API
+key and never receive session credentials.
 
-QuickJS logic has no DOM, Node.js, browser storage or direct network API.
-It has a 64 MiB heap and a one-second CPU budget per execution turn. Its timers
-exist only while a command is being handled and are cancelled when it settles.
-At most four host calls may be in flight; calls beyond 40 in ten seconds are
-delayed by the host rather than refused, so a plain read loop needs no pacing.
-The iframe has an opaque origin, `sandbox="allow-scripts"` and a restrictive
-Content Security Policy. It can manipulate its own DOM and call registered
-commands, but cannot access PCBJam's DOM or invoke host APIs directly.
+Opening a plugin creates a temporary activation, authorized by the server and
+tied to the signed-in user, session, installed release, project and document.
+Each host call checks those grants and the user's current access twice:
+before the work, and again before the result is delivered. A call that waited
+on a prompt therefore can't complete after access ended.
+
+- Plain reads of the document already open in the tab may reuse a server
+  check made within the last two seconds. That is also how often every running
+  plugin is re-checked.
+- Anything with an effect outside the plugin (files, placement, selection,
+  backend requests, storage writes) is checked on every call.
+- Developer access for an account is checked on every request.
+
+**Logic** (QuickJS) has no DOM, Node.js, browser storage or direct network
+API. It has a 64 MiB heap and a one-second CPU budget per execution turn. Its
+timers exist only while a command is being handled and are cancelled when it
+settles. At most four host calls may be in flight. Calls beyond 40 in ten
+seconds are delayed by the host rather than refused, so a plain read loop needs
+no pacing.
+
+**UI** (the iframe) has an opaque origin, `sandbox="allow-scripts"` and a
+restrictive Content Security Policy. It can change its own DOM and call
+registered commands, but can't reach PCBJam's DOM or call host APIs directly.
 File pickers and placement confirmations live outside plugin HTML.
 
 The host also owns the draggable, resizable window. Optional manifest `uiSize`
@@ -104,29 +115,33 @@ Every file goes through a confirmation PCBJam draws, and PCBJam performs the
 download. The UI iframe has **no download permission**, by design: a download
 from `https://elsewhere.example/?data=…` is a network request that does not
 navigate the frame, so nothing would show it and the navigation watchdog would
-not see it — a silent way out for design data.
+not see it. That would be a silent way out for design data.
 
 Text, JSON, CSV and KiCad files are inert. An HTML page is not: it is plugin
 code, with design data inside it, that runs outside PCBJam when the user opens
-the file. `files.saveHtml()` therefore has its own permission, the confirmation
-says the file contains code, and PCBJam — not the plugin — writes the first
-bytes of the page: a Content-Security-Policy that allows inline script, inline
-style and embedded images, fonts and media, and nothing over the network. A
-policy the page declares itself can only tighten ours, because browsers enforce
-all policies at once. PCBJam's tests open hostile saved pages as real local
-files in three browser engines and assert that their own code runs and that
-no request leaves (fetch, XHR, beacon, WebSocket, form post, image, script,
-stylesheet, frame). What it cannot stop is the page sending the user to another
-address, for instance from a link they click. Files are only ever downloaded,
-never opened by PCBJam: a plugin's page must not run on PCBJam's origin.
-`files.saveImage()` accepts PNG only and checks the bytes; SVG can carry script
-and is not accepted.
+the file. So for `files.saveHtml()`:
+- it has its own permission, and the confirmation says the file contains code;
+- PCBJam, not the plugin, writes the first bytes of the page: a
+  Content-Security-Policy that allows inline script, inline style and embedded
+  images, fonts and media, and nothing over the network. A policy the page
+  declares itself can only tighten ours, because browsers enforce all policies
+  at once.
+
+PCBJam's tests open hostile saved pages as real local files in three browser
+engines and check that their own code runs and that no request leaves (fetch,
+XHR, beacon, WebSocket, form post, image, script, stylesheet, frame). What the
+policy can't stop is the page sending the user to another address, for
+instance from a link they click.
+
+Files are only ever downloaded, never opened by PCBJam: a plugin's page must
+not run on PCBJam's origin. `files.saveImage()` accepts PNG only and checks the
+bytes; SVG can carry script and is refused.
 
 ## Changing the selection
 
 `editor.select()` replaces the user's selection. In a shared session a selection
 is also a claim on the item, and when two people hold the same item the winner
-is decided by user ID, not by who was first — acceptable between people, who
+is decided by user ID, not by who was first. That is fine between people, who
 rarely grab the same part in the same second, but a plugin selects in bulk
 without looking and could pull a part out of a collaborator's hands mid-move.
 The engine therefore never takes an item another client holds: it is reported
@@ -194,5 +209,7 @@ project and plugin. They stay in that browser. Disable preserves them; reset
 and uninstall revoke the namespace. Selected file handles and UI state disappear
 when the instance stops.
 
-[Build a plugin](build-a-plugin.md) ·
-[Available APIs](api-and-permissions.md).
+## Next
+
+- [Build a plugin](build-a-plugin.md): your first plugin, step by step.
+- [API and permissions](api-and-permissions.md): every call and its limits.
