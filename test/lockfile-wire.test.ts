@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { bundledLibDir, parseLockfile, serializeLockfile, type Lockfile } from "../src/index.js";
+import { describe, expect, it, test } from "vitest";
+import { bundledLibDir, carriedKicadProjects, parseLockfile, serializeLockfile, type Lockfile } from "../src/index.js";
 
 describe("lockfile wire", () => {
   it("round-trips a v1 lockfile and rejects other shapes", () => {
@@ -19,5 +19,29 @@ describe("lockfile wire", () => {
     expect(parseLockfile(JSON.stringify({ version: 2, generatedAt: "", libs: [] }))).toBeNull();
     expect(parseLockfile("not json")).toBeNull();
     expect(bundledLibDir("Device")).toBe("libs/Device");
+  });
+});
+
+describe("lockfile kicadProjects section (new-kicad-project 0001)", () => {
+  const entry = {
+    profile: "jlcpcb",
+    profileVersion: 1,
+    choices: { layers: 4, tier: "standard", thicknessMm: 1.6, copperOuter: 1, copperInner: 0.5, stackup: "JLC04161H-7628" },
+    generatedAt: "2026-10-05T10:00:00.000Z",
+  };
+
+  test("a v1 lockfile with and without the section round-trips", () => {
+    const without = { version: 1 as const, generatedAt: "2026-10-05T10:00:00.000Z", libs: [] };
+    expect(parseLockfile(serializeLockfile(without))).toEqual(without);
+    const withSection = { ...without, kicadProjects: { "blinky/blinky.kicad_pro": entry } };
+    expect(parseLockfile(serializeLockfile(withSection))).toEqual(withSection);
+  });
+
+  test("carriedKicadProjects reads the section on its own", () => {
+    const text = JSON.stringify({ version: 1, generatedAt: "x", libs: "broken", kicadProjects: { "a.kicad_pro": entry } });
+    expect(carriedKicadProjects(text)).toEqual({ "a.kicad_pro": entry });
+    expect(carriedKicadProjects(null)).toBeUndefined();
+    expect(carriedKicadProjects("not json")).toBeUndefined();
+    expect(carriedKicadProjects(JSON.stringify({ kicadProjects: {} }))).toBeUndefined();
   });
 });

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { kicadProjectChoicesSchema } from "./kicad-project/fab-profile.js";
 
 /**
  * `pcbjam.lock.json` (git-integration 0003, design-libraries §6, L-D4): a
@@ -62,6 +63,21 @@ export const lockfileLibSchema = z.object({
 });
 export type LockfileLib = z.infer<typeof lockfileLibSchema>;
 
+/**
+ * What generated a KiCad project (new-kicad-project 0001): the fab profile,
+ * its version and the dialog choices, so a later "re-apply / switch fab" knows
+ * where the rules came from. Unlike `libs` this can't be rebuilt from the
+ * registry, so every lockfile writer carries the section over.
+ */
+export const lockfileKicadProjectSchema = z.object({
+  profile: z.string().min(1),
+  profileVersion: z.number().int().positive(),
+  choices: kicadProjectChoicesSchema,
+  /** ISO timestamp of the generation. */
+  generatedAt: z.string(),
+});
+export type LockfileKicadProject = z.infer<typeof lockfileKicadProjectSchema>;
+
 export const lockfileSchema = z.object({
   version: z.literal(LOCKFILE_VERSION),
   /** ISO timestamp of the export. */
@@ -69,6 +85,8 @@ export const lockfileSchema = z.object({
   /** The exporting project (uuid), informational. */
   projectId: z.string().optional(),
   libs: z.array(lockfileLibSchema),
+  /** Keyed by the `.kicad_pro` path relative to the lockfile. Optional, so v1 readers still parse. */
+  kicadProjects: z.record(z.string(), lockfileKicadProjectSchema).optional(),
 });
 export type Lockfile = z.infer<typeof lockfileSchema>;
 
@@ -79,6 +97,22 @@ export function parseLockfile(text: string): Lockfile | null {
     return parsed.success ? parsed.data : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * The `kicadProjects` section of an existing lockfile's text, for writers that
+ * regenerate `libs` (export, Git snapshot). Tolerates a lockfile whose `libs`
+ * no longer parse: the section is read on its own.
+ */
+export function carriedKicadProjects(text: string | null | undefined): Lockfile["kicadProjects"] {
+  if (!text) return undefined;
+  try {
+    const raw = JSON.parse(text) as { kicadProjects?: unknown };
+    const parsed = z.record(z.string(), lockfileKicadProjectSchema).safeParse(raw?.kicadProjects);
+    return parsed.success && Object.keys(parsed.data).length > 0 ? parsed.data : undefined;
+  } catch {
+    return undefined;
   }
 }
 
