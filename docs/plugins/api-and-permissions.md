@@ -2,12 +2,16 @@
 title: API and permissions
 description: "Every host method a plugin can call, the permission each needs, and the limits."
 created: 2026-09-16
-updated: 2026-09-30
+updated: 2026-10-05
 ---
 
-**Plugin SDK v1.** Call `pcbjam` from plugin logic. All host methods return
-promises; failures reject them. Use `(await pcbjam.context.get()).methods` to
-check which operations the current editor, account and permissions allow.
+This is the reference for plugin authors: every call your plugin's logic can
+make (Plugin SDK v1), the permission each one needs, and the limits. If you
+haven't built a plugin yet, start with [Build a plugin](build-a-plugin.md).
+
+Call `pcbjam` from plugin logic. All host methods return promises; failures
+reject them. Use `(await pcbjam.context.get()).methods` to check which
+operations the current editor, account and permissions allow.
 
 Download [sdk.d.ts](download/sdk.d.ts) for full argument and response types.
 Below, `ref` means `{document, revision}` from `documents.getCurrent()`;
@@ -283,8 +287,9 @@ await pcbjam.board.geometry({ ...ref, include: ['tracks'] }, records => {
     else if (record.$ === 'tracks') for (const track of record.items) drawTrack(track);
   }
 });
-``` It needs only
-`documents:read`: it is the same board, in a different form. It is absent from
+```
+
+It needs only `documents:read`: it is the same board, in a different form. It is absent from
 `context.get().methods` in the schematic editor and on editor builds that
 predate it.
 
@@ -342,7 +347,7 @@ File selection, downloads and placement approval use **PCBJam-owned controls**.
   items of the current document; an empty list clears it. It returns
   `{selected, held, missing}`. In a shared session a selection also claims the
   item, so anything a collaborator has selected right now is left alone and
-  listed in `held` — show that to the user rather than treating it as an
+  listed in `held`. Show that to the user rather than treating it as an
   error. `missing` ids are not in the document. The call rejects while the
   user has an editor tool running (a move, a route), and the selection changes
   just after the call returns: read it back with `selection.get()` if you need
@@ -539,8 +544,8 @@ await pcbjam.ui.openExternal(answer.body.redirect);   // user confirms, new tab
 
 ## Guided tours and pointers
 
-Needs `editor:overlay`. PCBJam draws everything — the card, the highlight and a
-"from *your plugin's name*" label; you supply plain text and targets. Your
+Needs `editor:overlay`. PCBJam draws everything (the card, the highlight and a
+"from *your plugin's name*" label); you supply plain text and targets. Your
 plugin's code does not run between commands, so a tour is **data** that
 PCBJam runs for you: it watches the editor, moves to the right step, survives
 the page switch between editors (with `resume`), and stops when your plugin
@@ -566,27 +571,39 @@ pcbjam.handle('start-tour', () => pcbjam.tour.start({
 ```
 
 The shown step is the first whose `when` holds (default: always) and whose
-`until` is not met. **State** conditions are re-checked live, so undoing the
-work brings its step back: `dialogOpen`, `symbols` (`new: true` counts only
-symbols placed since the tour started), `footprint` (every placed symbol of
-a `libId`, or one `ref`, has a footprint — or exactly the given one),
-`value` (every placed symbol of a `libId`, or one `ref`, has that value —
-compared as a component value: `39`, `39R`, `39Ω` and `0.039k` are equal, as
-are `4k7` and `4.7k`; `m` is milli, `M` mega; other text case-insensitively),
-`net` (one net contains a pin matching every selector) and `noConnect`. In the
-PCB editor: `boardFootprints` (`{ref}`, `{fpid}` or all footprints, `min`
-count, `inside: true` = every pad lies inside the closed board outline),
-`boardOutline: {closed: true}` (Edge.Cuts forms a closed outline),
-`unrouted: {max}` (connections still missing), `tracks: {min}` and
-`activeLayer` (e.g. `"Edge.Cuts"`). **Event**
-conditions fire once: `next` (the card's Next button), `action` (an editor
-action ran, e.g. `eeschema.InteractiveDrawing.placeSymbol`), `dialogOpened`,
-`dialogClosed`; a step whose `until` uses one stays done once it is met while
-that step is on screen. Combine with `all`, `any`, `not`. The last step must
-end on `{ next: true }`; its Next finishes the tour.
+`until` is not met. Combine conditions with `all`, `any` and `not`. The last
+step must end on `{ next: true }`; its Next finishes the tour.
 
-Pin selectors: `{ libId, pin }` or `{ ref, pin }` — add `all: true` to require
-**every** placed symbol of that `libId` (three LEDs in parallel) — and
+**State conditions** are re-checked live, so undoing the work brings its step
+back.
+
+In the schematic editor:
+- `dialogOpen`
+- `symbols`: `new: true` counts only symbols placed since the tour started.
+- `footprint`: every placed symbol of a `libId`, or one `ref`, has a
+  footprint, or exactly the given one.
+- `value`: every placed symbol of a `libId`, or one `ref`, has that value.
+  Values compare as component values: `39`, `39R`, `39Ω` and `0.039k` are
+  equal, as are `4k7` and `4.7k`; `m` is milli, `M` mega; other text compares
+  case-insensitively.
+- `net`: one net contains a pin matching every selector (below).
+- `noConnect`
+
+In the PCB editor:
+- `boardFootprints`: `{ref}`, `{fpid}` or all footprints, with a `min` count;
+  `inside: true` means every pad lies inside the closed board outline.
+- `boardOutline: {closed: true}`: Edge.Cuts forms a closed outline.
+- `unrouted: {max}`: connections still missing.
+- `tracks: {min}`
+- `activeLayer`, e.g. `"Edge.Cuts"`.
+
+**Event conditions** fire once: `next` (the card's Next button), `action` (an
+editor action ran, e.g. `eeschema.InteractiveDrawing.placeSymbol`),
+`dialogOpened`, `dialogClosed`. A step whose `until` uses one stays done once
+it is met while that step is on screen.
+
+Pin selectors: `{ libId, pin }` or `{ ref, pin }` (add `all: true` to require
+**every** placed symbol of that `libId`, e.g. three LEDs in parallel), and
 `{ power: '+5V' }` for the net a power symbol names:
 
 ```js
@@ -599,15 +616,15 @@ until: { all: [
 
 Targets: `tool:<action name>`, `menu:<Title>` / `menu:<Title>/<Item>`,
 `dialog:<CLASS>` and `dialog:<CLASS>/control:<type>[:<label>]` (type: the wx
-class without `wx` — `button`, `textctrl`, `searchctrl` — or an owner-drawn
-item such as `dataviewitem`), `item:<uuid>`, `footprint:<REF>` (a footprint on
+class without `wx`, such as `button`, `textctrl` or `searchctrl`, or an
+owner-drawn item such as `dataviewitem`), `item:<uuid>`, `footprint:<REF>` (a footprint on
 the board, PCB editor), `area:x,y,w,h` and `point:x,y` in
 internal units, and in tours `new:<libId>` (the newest symbol of that library
 placed during the tour). A target that is not on screen shows the step's
 `lostText`.
 
 `tour.start(tour, {resume: true})` continues a tour of that `id` that is still
-active in this tab and answers `not-active` otherwise — call it when your
+active in this tab and answers `not-active` otherwise. Call it when your
 panel opens. `busy` means another guide is on screen. `tour.status()` reports
 the shown step. A one-off pointer without a tour:
 `pcbjam.ui.overlay.show({target, text})` → `shown` or `not-found`;
@@ -616,13 +633,13 @@ title 80 and text 600 characters; one tour or pointer per plugin.
 
 ## Ship a part
 
-Needs `library:write-parts`. A part your plugin brings — a KiCad symbol and/or
-footprint as text — is saved into your plugin's own team library
+Needs `library:write-parts`. A part your plugin brings (a KiCad symbol and/or
+footprint as text) is saved into your plugin's own team library
 (`plugin_<your id>`; you cannot choose another) after the user confirms, with
 the same validation remote providers get. The symbol's Footprint field is set
 to the saved footprint. With `place: true` (schematic editor) the symbol then
 follows the cursor; the call resolves once the part is stored, not when it is
-placed — a tour can wait for it with `{ symbols: { libId, min: 1 } }`.
+placed. A tour can wait for it with `{ symbols: { libId, min: 1 } }`.
 
 ```js
 pcbjam.handle('add-connector', () => pcbjam.parts.save({
@@ -654,18 +671,6 @@ const nets = await pcbjam.schematic.connectivity();
 Both describe the shown sheet as the engine sees it. Power symbols name their
 net but their own `#PWR` pins are not listed; an unconnected pin sits alone in
 a net named like `unconnected-(R2-Pad2)`; `noConnect` means an X marks it.
-
-## Not available
-
-There is no raw WASM/pointer access, direct Yjs mutation, sibling-document loading,
-change subscription, schematic geometry, user-profile API, OAuth delegation
-signing. The only current document write is confirmed symbol placement;
-`editor.select()` changes the selection, not the design.
-The only UI surface is a floating panel in the schematic or PCB editor, plus the
-guided tours and pointers PCBJam draws for you.
-
-[Build a plugin](build-a-plugin.md) ·
-[Architecture](architecture.md).
 
 ## Backend requests
 
@@ -716,3 +721,17 @@ PCBJam account ID. Keep the raw request bytes until verification. JWT decoding
 alone is not verification. Never accept a fallback user ID from plugin input.
 
 [Download backend source and verifier](download/backend-preferences-source.zip).
+
+## Not available
+
+There is no raw WASM/pointer access, direct Yjs mutation, sibling-document loading,
+change subscription, schematic geometry, user-profile API or OAuth delegation
+signing. The only current document write is confirmed symbol placement;
+`editor.select()` changes the selection, not the design.
+The only UI surface is a floating panel in the schematic or PCB editor, plus the
+guided tours and pointers PCBJam draws for you.
+
+## Next
+
+- [Build a plugin](build-a-plugin.md): your first plugin, step by step.
+- [Plugin architecture](architecture.md): why the limits are what they are.
