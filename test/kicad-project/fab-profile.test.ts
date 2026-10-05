@@ -84,8 +84,15 @@ describe("resolveFabRules", () => {
 
   test("only profiles with published minimums offer the option", () => {
     expect(profileHasMinimums(jlc)).toBe(true);
-    expect(profileHasMinimums(builtinFabProfile("pcbway")!)).toBe(false);
+    expect(profileHasMinimums(builtinFabProfile("pcbway")!)).toBe(true);
     expect(profileHasMinimums(builtinFabProfile("kicad-default")!)).toBe(false);
+  });
+
+  test("a minimum from another page keeps its own citation", () => {
+    const pcbway = builtinFabProfile("pcbway")!;
+    const base = { layers: 2, tier: "standard", thicknessMm: 1.6, copperOuter: 1, copperInner: 0.5 } as const;
+    expect(resolveFabRules(pcbway, base).trackWidth).toMatchObject({ mm: 0.127, source: "kicad-drc" });
+    expect(resolveFabRules(pcbway, { ...base, smallest: true }).trackWidth).toMatchObject({ mm: 0.1, source: "capabilities", anchor: "Min Trace" });
   });
 
   test("a minimum is never larger than its recommended value", () => {

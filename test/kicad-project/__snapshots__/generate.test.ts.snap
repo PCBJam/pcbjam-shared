@@ -1966,8 +1966,8 @@ exports[`generateKicadProject > pcbway advanced 2-layer matches its snapshot 1`]
         "version": 2
       },
       "rules": {
-        "min_clearance": 0.1,
-        "min_track_width": 0.1,
+        "min_clearance": 0.127,
+        "min_track_width": 0.127,
         "min_via_annular_width": 0.15,
         "min_via_diameter": 0.45,
         "min_through_hole_diameter": 0.15,
@@ -2016,7 +2016,7 @@ exports[`generateKicadProject > pcbway advanced 2-layer matches its snapshot 1`]
   },
   "text_variables": {
     "FAB": "PCBWay",
-    "FAB_PROFILE": "pcbway v1 (advanced)"
+    "FAB_PROFILE": "pcbway v2 (advanced)"
   }
 }
 ",
@@ -2180,8 +2180,8 @@ exports[`generateKicadProject > pcbway advanced 4-layer matches its snapshot 1`]
         "version": 2
       },
       "rules": {
-        "min_clearance": 0.1,
-        "min_track_width": 0.1,
+        "min_clearance": 0.127,
+        "min_track_width": 0.127,
         "min_via_annular_width": 0.15,
         "min_via_diameter": 0.45,
         "min_through_hole_diameter": 0.15,
@@ -2230,7 +2230,7 @@ exports[`generateKicadProject > pcbway advanced 4-layer matches its snapshot 1`]
   },
   "text_variables": {
     "FAB": "PCBWay",
-    "FAB_PROFILE": "pcbway v1 (advanced)"
+    "FAB_PROFILE": "pcbway v2 (advanced)"
   }
 }
 ",
@@ -2418,8 +2418,8 @@ exports[`generateKicadProject > pcbway advanced 6-layer matches its snapshot 1`]
         "version": 2
       },
       "rules": {
-        "min_clearance": 0.1,
-        "min_track_width": 0.1,
+        "min_clearance": 0.127,
+        "min_track_width": 0.127,
         "min_via_annular_width": 0.15,
         "min_via_diameter": 0.45,
         "min_through_hole_diameter": 0.15,
@@ -2468,7 +2468,7 @@ exports[`generateKicadProject > pcbway advanced 6-layer matches its snapshot 1`]
   },
   "text_variables": {
     "FAB": "PCBWay",
-    "FAB_PROFILE": "pcbway v1 (advanced)"
+    "FAB_PROFILE": "pcbway v2 (advanced)"
   }
 }
 ",
@@ -2608,8 +2608,8 @@ exports[`generateKicadProject > pcbway standard 2-layer matches its snapshot 1`]
         "version": 2
       },
       "rules": {
-        "min_clearance": 0.1,
-        "min_track_width": 0.1,
+        "min_clearance": 0.127,
+        "min_track_width": 0.127,
         "min_via_annular_width": 0.15,
         "min_via_diameter": 0.5,
         "min_through_hole_diameter": 0.2,
@@ -2658,7 +2658,7 @@ exports[`generateKicadProject > pcbway standard 2-layer matches its snapshot 1`]
   },
   "text_variables": {
     "FAB": "PCBWay",
-    "FAB_PROFILE": "pcbway v1 (standard)"
+    "FAB_PROFILE": "pcbway v2 (standard)"
   }
 }
 ",
@@ -2822,8 +2822,8 @@ exports[`generateKicadProject > pcbway standard 4-layer matches its snapshot 1`]
         "version": 2
       },
       "rules": {
-        "min_clearance": 0.1,
-        "min_track_width": 0.1,
+        "min_clearance": 0.127,
+        "min_track_width": 0.127,
         "min_via_annular_width": 0.15,
         "min_via_diameter": 0.5,
         "min_through_hole_diameter": 0.2,
@@ -2872,7 +2872,7 @@ exports[`generateKicadProject > pcbway standard 4-layer matches its snapshot 1`]
   },
   "text_variables": {
     "FAB": "PCBWay",
-    "FAB_PROFILE": "pcbway v1 (standard)"
+    "FAB_PROFILE": "pcbway v2 (standard)"
   }
 }
 ",
@@ -3060,8 +3060,8 @@ exports[`generateKicadProject > pcbway standard 6-layer matches its snapshot 1`]
         "version": 2
       },
       "rules": {
-        "min_clearance": 0.1,
-        "min_track_width": 0.1,
+        "min_clearance": 0.127,
+        "min_track_width": 0.127,
         "min_via_annular_width": 0.15,
         "min_via_diameter": 0.5,
         "min_through_hole_diameter": 0.2,
@@ -3110,7 +3110,7 @@ exports[`generateKicadProject > pcbway standard 6-layer matches its snapshot 1`]
   },
   "text_variables": {
     "FAB": "PCBWay",
-    "FAB_PROFILE": "pcbway v1 (standard)"
+    "FAB_PROFILE": "pcbway v2 (standard)"
   }
 }
 ",

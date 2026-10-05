@@ -2,7 +2,7 @@
   "id": "pcbway",
   "name": "PCBWay",
   "kind": "fab",
-  "version": 1,
+  "version": 2,
   "createdAt": "2026-10-05",
   "reviewedAt": "2026-10-05",
   "reviewers": [],
@@ -13,6 +13,12 @@
       "url": "https://www.pcbway.com/capabilities.html",
       "title": "PCBWay PCB Capabilities",
       "retrievedAt": "2026-10-05"
+    },
+    {
+      "id": "kicad-drc",
+      "url": "https://github.com/pcbway/PCBWay-Design-Rules/blob/main/KiCad/KiCAD_Custom_DRC_Rules_for_PCBWay.zip",
+      "title": "PCBWay's KiCad custom DRC rules (KiCAD_Custom_DRC_Rules_for_PCBWay.kicad_dru)",
+      "retrievedAt": "2026-10-05"
     }
   ],
   "tiers": {
@@ -20,8 +26,8 @@
       "label": "Standard",
       "description": "Rules that keep the order at PCBWay's base price: holes of 0.2 mm or more avoid the small-drill charge.",
       "rules": {
-        "trackWidth": { "mm": 0.1, "source": "capabilities", "anchor": "Min Trace", "quote": "Min manufacturable trace is 4mil(0.1mm), Please view the below \"Advanced PCB\" or contact us if your board exceeds these." },
-        "clearance": { "mm": 0.1, "source": "capabilities", "anchor": "Min Spacing", "quote": "Min manufacturable spacing is 4mil(0.1mm), Please view the below \"Advanced PCB\" or contact us if your board exceeds these." },
+        "trackWidth": { "mm": 0.127, "source": "kicad-drc", "anchor": "# 2-layer, 1oz copper", "quote": "(rule \"Minimum Trace Width and Spacing (outer layer)\" (constraint track_width (min 0.127mm)) (constraint clearance (min 0.127mm)) (layer outer)", "note": "PCBWay's own KiCad rules for 2-layer 1 oz (outer layers; their inner-layer rule is 0.1 mm). The smallest value is the capabilities page's 4 mil.", "minimum": { "mm": 0.1, "source": "capabilities", "anchor": "Min Trace", "quote": "Min manufacturable trace is 4mil(0.1mm), Please view the below \"Advanced PCB\" or contact us if your board exceeds these."  } },
+        "clearance": { "mm": 0.127, "source": "kicad-drc", "anchor": "# 2-layer, 1oz copper", "quote": "(rule \"Minimum Trace Width and Spacing (outer layer)\" (constraint track_width (min 0.127mm)) (constraint clearance (min 0.127mm)) (layer outer)", "note": "PCBWay's own KiCad rules for 2-layer 1 oz (outer layers; their inner-layer rule is 0.1 mm). The smallest value is the capabilities page's 4 mil.", "minimum": { "mm": 0.1, "source": "capabilities", "anchor": "Min Spacing", "quote": "Min manufacturable spacing is 4mil(0.1mm), Please view the below \"Advanced PCB\" or contact us if your board exceeds these."  } },
         "viaDrill": {
           "mm": 0.2,
           "source": "capabilities",

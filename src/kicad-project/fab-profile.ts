@@ -30,6 +30,10 @@ export const fabValueSchema = z.object({
   minimum: z
     .object({
       mm: z.number().nonnegative(),
+      /** Defaults to the parent's source when the same page gives both. */
+      source: z.string().min(1).optional(),
+      /** Defaults to the parent's anchor. */
+      anchor: z.string().min(1).optional(),
       /** Defaults to the parent's quote when the same sentence gives both. */
       quote: z.string().min(1).optional(),
       note: z.string().optional(),
@@ -256,7 +260,14 @@ export function resolveFabRules(
   if (choices.smallest) {
     for (const k of FAB_RULE_KEYS) {
       const v = out[k];
-      if (v?.minimum) out[k] = { ...v, mm: v.minimum.mm, quote: v.minimum.quote ?? v.quote, note: v.minimum.note ?? v.note };
+      if (v?.minimum) out[k] = {
+          ...v,
+          mm: v.minimum.mm,
+          source: v.minimum.source ?? v.source,
+          anchor: v.minimum.anchor ?? v.anchor,
+          quote: v.minimum.quote ?? v.quote,
+          note: v.minimum.note ?? v.note,
+        };
     }
   }
   return out;
