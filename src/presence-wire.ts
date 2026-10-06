@@ -81,9 +81,36 @@ export const presenceStateSchema = z.object({
    * and render in their own style. Absent = editor (old builds validate).
    */
   role: z.enum(["commenter"]).optional(),
+  /**
+   * AI agent presence (mcp 0004 §6), SERVER-VERIFIED like `role`: a
+   * connection opened with a machine credential (an MCP client / API key)
+   * must publish exactly its `client` here — the sync worker drops its frames
+   * otherwise — and a person's connection must never carry it. `user` stays
+   * the person the agent works for; rosters show the agent with an AI badge
+   * and never as the person. `editing`: an agent's selection is a pointer for
+   * humans ("look here"), and becomes a soft-lock only while the agent is
+   * writing those items.
+   */
+  agent: z
+    .object({
+      client: z.string().min(1),
+      name: z.string().min(1),
+      editing: z.boolean().optional(),
+    })
+    .optional(),
 });
 
 export type PresenceUser = z.infer<typeof presenceUserSchema>;
+
+/**
+ * The identity a roster dedups by (mcp 0004 §6): an AI agent shares its
+ * person's `user.id`, but is NOT that person's other tab — it gets its own
+ * key, so it is listed (and followable) next to its person, never merged
+ * into them or hidden as "you".
+ */
+export function presenceKey(state: { user: { id: string }; agent?: { client: string } }): string {
+  return state.agent ? `${state.user.id}#${state.agent.client}` : state.user.id;
+}
 export type PresenceState = z.infer<typeof presenceStateSchema>;
 /** The follow-user (0008) world rect: NonNullable of the wire's viewport. */
 export type PresenceViewport = NonNullable<PresenceState["viewport"]>;
