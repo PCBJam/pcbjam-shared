@@ -2,7 +2,7 @@
 title: Build a plugin
 description: "Build, install and share a plugin for PCBJam's schematic and PCB editors, starting from a working example."
 created: 2026-09-16
-updated: 2026-10-05
+updated: 2026-10-06
 slug: plugins
 ---
 

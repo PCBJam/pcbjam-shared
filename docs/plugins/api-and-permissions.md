@@ -2,7 +2,7 @@
 title: API and permissions
 description: "Every host method a plugin can call, the permission each needs, and the limits."
 created: 2026-09-16
-updated: 2026-10-05
+updated: 2026-10-06
 ---
 
 This is the reference for plugin authors: every call your plugin's logic can
