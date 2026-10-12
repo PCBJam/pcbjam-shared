@@ -5,6 +5,7 @@ export const LIMITS = { archive: 8 * 1024 * 1024, total: 12 * 1024 * 1024, file:
 export { default as PERMISSIONS } from './api-permissions.json' with { type: 'json' };
 import PERMISSIONS from './api-permissions.json' with { type: 'json' };
 import {validateEndpoints,backendPermissions} from './backend-contract.mjs';
+import { validateNetwork, directPermissions } from './network-contract.mjs';
 import { providerOrigin, providerPermissions } from './remote-provider-contract.mjs';
 const fail = message => { throw new Error(message); };
 export const PACKAGE_KINDS = ['plugin', 'remote-provider'];
@@ -113,7 +114,7 @@ export function validatePackage(input, { legacyDigest = false } = {}) {
   if (Buffer.byteLength(get('manifest.json') ?? '') > 16384) fail('Manifest exceeds 16 KiB');
   const manifest = JSON.parse(get('manifest.json') ?? fail('Missing manifest.json'));
   if (manifest && typeof manifest === 'object' && manifest.kind === 'remote-provider') return validateProviderPackage(files, manifest, legacyDigest);
-  exact(manifest, ['apiVersion', 'kind', 'id', 'name', 'version', 'description', 'main', 'ui', 'uiSize', 'surfaces', 'permissions', 'endpoints']);
+  exact(manifest, ['apiVersion', 'kind', 'id', 'name', 'version', 'description', 'main', 'ui', 'uiSize', 'surfaces', 'permissions', 'endpoints', 'network']);
   if (manifest.kind !== undefined && manifest.kind !== 'plugin') fail('Unsupported package kind');
   if (Object.hasOwn(manifest, 'uiSize')) {
     exact(manifest.uiSize, ['width', 'height']);
@@ -123,18 +124,22 @@ export function validatePackage(input, { legacyDigest = false } = {}) {
   }
   const endpoints = validateEndpoints(manifest.endpoints);
   const requestedBackendPermissions=backendPermissions(endpoints);
+  // Sites the Worker may call directly (plugins 0022 M3), each with its own consent.
+  const network = validateNetwork(manifest.network);
+  const requestedDirectPermissions = directPermissions(network);
   identity(manifest);
   if (manifest.main !== 'main.js' || manifest.ui !== 'ui.html' || !get('main.js') || !get('ui.html')) fail('main.js and ui.html are required');
   if (Buffer.byteLength(get('main.js')) > 1024 * 1024 || Buffer.byteLength(get('ui.html')) > 512 * 1024) fail('Logic/UI entry exceeds its limit');
-  for (const [key, allowed] of [['surfaces', ['editor:eeschema', 'editor:pcbnew']], ['permissions', [...Object.keys(PERMISSIONS), ...Object.keys(requestedBackendPermissions)]]]) {
+  for (const [key, allowed] of [['surfaces', ['editor:eeschema', 'editor:pcbnew']], ['permissions', [...Object.keys(PERMISSIONS), ...Object.keys(requestedBackendPermissions), ...Object.keys(requestedDirectPermissions)]]]) {
     const values = manifest[key];
     if (!Array.isArray(values) || !values.length || values.length > allowed.length || new Set(values).size !== values.length || values.some(v => !allowed.includes(v))) fail(`Unsupported ${key}`);
   }
   if(Object.keys(requestedBackendPermissions).some(p=>!manifest.permissions.includes(p))) fail('Backend declarations require their network and identity permissions');
+  if (Object.keys(requestedDirectPermissions).some(p => !manifest.permissions.includes(p))) fail('Each network site requires its direct:<hostname> permission');
   if (!manifest.permissions.includes('ui:custom') || !manifest.permissions.includes('ui:project-data')) fail('Custom UI and data disclosure permissions are required');
   if (/<script\b[^>]*\bsrc\s*=|<link\b[^>]*\bhref\s*=/i.test(get('ui.html'))) fail('Bundle scripts and styles inline in ui.html; remote/module imports are not supported');
-  const policyDigest = createHash('sha256').update(JSON.stringify({ apiVersion: 1, permissions: [...manifest.permissions].sort(), ...(endpoints?{backendPolicyVersion:1,endpoints}: {}) })).digest('hex');
-  return { ...release(files, legacyDigest), manifest, policyDigest, validationVersion: endpoints ? 3 : 2 };
+  const policyDigest = createHash('sha256').update(JSON.stringify({ apiVersion: 1, permissions: [...manifest.permissions].sort(), ...(endpoints?{backendPolicyVersion:1,endpoints}: {}), ...(network ? { networkPolicyVersion: 1, network } : {}) })).digest('hex');
+  return { ...release(files, legacyDigest), manifest, policyDigest, validationVersion: network ? 5 : endpoints ? 3 : 2 };
 }
 
 function identity(manifest) {

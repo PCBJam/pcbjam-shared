@@ -2,6 +2,8 @@ import type {BackendEndpoint} from './backend-contract.mjs';
 export interface PluginManifest {
   apiVersion: 1; kind?: 'plugin'; id: string; name: string; version: string; description: string;
   main: 'main.js'; ui: 'ui.html'; surfaces: string[]; permissions: string[]; endpoints?:Record<string,BackendEndpoint>;
+  /** HTTPS sites the Worker may call directly (plugins 0022 M3); each needs its `direct:<hostname>` permission. */
+  network?: string[];
   uiSize?: {width: number; height: number};
 }
 /** Manifest-only package whose UI is the provider's own KiCad 10 remote-symbol panel page. */

@@ -28,6 +28,7 @@ permissions. `context.get()` needs no additional permission.
 |---|---|---|
 | `http.request(endpointId, {method, path, json?})` | `network:<id>`; plus `backend:identity:<id>` for identity | Send bounded JSON to an operator-approved endpoint; optionally carries a signed user identity. |
 | `http.upload(endpointId, {path, bundleId, fields?})` | `network:<id>` (endpoint with `upload`) | POST a bundle (`exports.bundle`) as multipart/form-data to an approved endpoint path that declares `upload`; the answer must be JSON. |
+| `net.fetch(url, {method?, headers?, body?})` | `direct:<hostname>` per declared site | An HTTPS request straight from the plugin to a site declared in `network`: no cookies, referrer, cache or redirects; GET/POST, up to 1 MiB back. The site must answer CORS. |
 | `ui.openExternal(url)` | `ui:open-external` | Open an https page of one of the plugin’s approved endpoint sites in a new tab after the user confirms; opened or cancelled. |
 | `context.get()` | None extra | Editor name, read-only state, supported host methods and limits. |
 | `project.getInfo()` | `project:read-info` | Current project ID, scope, name and editor read-only state. |
@@ -757,6 +758,52 @@ PCBJam account ID. Keep the raw request bytes until verification. JWT decoding
 alone is not verification. Never accept a fallback user ID from plugin input.
 
 [Download backend source and verifier](download/backend-preferences-source.zip).
+
+## Direct requests
+
+*Preview: available once PCBJam turns direct requests on for your account.*
+
+If your API answers CORS and needs no PCBJam identity, your logic can call it
+straight from the browser, without PCBJam's server in between. Declare each
+site in `network` and request its `direct:<hostname>` permission:
+
+```json
+{
+  "network": ["https://api.your-domain.example"],
+  "permissions": ["ui:custom", "ui:project-data", "direct:api.your-domain.example"]
+}
+```
+
+```ts
+const response = await pcbjam.net.fetch('https://api.your-domain.example/v1/parts?q=R1', {
+  headers: { accept: 'application/json' },
+});
+// { status, ok, contentType, text }
+const parts = JSON.parse(response.text);
+```
+
+- **Sites:** 1-8 exact `https://` origins with a public hostname: no port,
+  path, IP address or local name, and no PCBJam or Cloudflare (`workers.dev`,
+  `pages.dev`) host. The user sees each site at install, as "Send data from
+  your browser to api.your-domain.example", and an update that adds a site
+  asks again.
+- **CORS:** your API must allow the editor's origin (the request's `Origin`
+  header) with `Access-Control-Allow-Origin`, and the `authorization` and
+  `content-type` headers if you send them.
+- **Fixed by PCBJam:** no cookies, no referrer, no cache and no redirects (a
+  redirect fails the request). The browser itself refuses any site you didn't
+  declare.
+- **Limits:** `GET` or `POST`; headers `accept`, `content-type` and
+  `authorization`; a string body up to 128 KiB; a response up to 1 MiB; 30
+  seconds; 4 at once and 30 a minute. Requests run only while a command is
+  handled, and the command must await them before it returns.
+- **Errors** reject with an `Error` carrying `code`: `ORIGIN_NOT_DECLARED`,
+  `INVALID_REQUEST`, `NETWORK_ERROR` (network, CORS or a redirect), `TIMEOUT`,
+  `RESPONSE_TOO_LARGE` or `RATE_LIMITED`. An HTTP error status is a normal
+  response with `ok: false`.
+
+Use [backend requests](#backend-requests) instead when your server sends no
+CORS headers, needs to know who the user is, or holds a secret.
 
 ## Not available
 

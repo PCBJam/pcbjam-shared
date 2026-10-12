@@ -1,4 +1,26 @@
 import { newQuickJSWASMModule, newVariant, RELEASE_SYNC, type QuickJSContext, type QuickJSRuntime } from 'quickjs-emscripten';
+import { sitesFromSegment, NET_LIMITS, NET_METHODS, NET_HEADERS } from '../network-contract.mjs';
+
+// Direct sites (plugins 0022 M3): this Worker's own URL names them and its CSP allows exactly
+// those, so the check in __netFetch and the browser's always agree. Any other URL: none.
+const sites = sitesFromSegment(/\/net\/([^/]+)\/package-worker\.js$/.exec(self.location.pathname)?.[1]) ?? [];
+const TOO_LARGE = new Error('RESPONSE_TOO_LARGE');
+async function readBounded(response: Response, limit: number) {
+  const reader = response.body?.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const part = reader ? await reader.read() : { done: true as const, value: undefined };
+    if (part.done) break;
+    size += part.value.byteLength;
+    if (size > limit) { await reader!.cancel(); throw TOO_LARGE; }
+    chunks.push(part.value);
+  }
+  const bytes = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) { bytes.set(chunk, at); at += chunk.byteLength; }
+  return bytes;
+}
 
 let booted = false;
 addEventListener('message', async (event: MessageEvent) => {
@@ -8,11 +30,14 @@ addEventListener('message', async (event: MessageEvent) => {
   let vm: QuickJSContext | undefined, runtime: QuickJSRuntime | undefined, closed = false;
   let deadline = Infinity, activeId = 0, lastCommand = 0, lastHost = 0;
   const pendingHost = new Set<number>();
+  // Direct requests in flight, and when the last minute's ones started (plugins 0022 M3).
+  const pendingNet = new Map<number, AbortController>(); let lastNet = 0; const netTimes: number[] = [];
   // Timers live only inside the command that set them, so logic can wait but never runs in the background.
   const timers = new Map<number, ReturnType<typeof setTimeout>>(); let lastTimer = 0;
   const clearTimers = () => { for (const timer of timers.values()) clearTimeout(timer); timers.clear(); };
   const fatal = (error: unknown) => {
     if (closed) return; closed = true; clearTimers();
+    for (const request of pendingNet.values()) request.abort();
     port.postMessage({ type: 'fatal', error: String(error instanceof Error ? error.message : error).slice(0, 400) });
     // Host always terminates the worker; never dispose a VM inside its callback.
   };
@@ -47,7 +72,56 @@ addEventListener('message', async (event: MessageEvent) => {
     runtime = module.newRuntime(); runtime.setMemoryLimit(64 * 1024 * 1024); runtime.setMaxStackSize(512 * 1024);
     runtime.setInterruptHandler(() => closed || performance.now() >= deadline);
     vm = runtime.newContext();
+    // Hands a direct request's outcome to the guest, unless the plugin stopped meanwhile.
+    const netSettle = (id: number, outcome: { ok: true; result: unknown } | { ok: false; code: string; error: string }) => {
+      if (closed || !pendingNet.delete(id)) return;
+      try { turn(() => invoke('__netResult', JSON.stringify({ id, ...outcome }))); } catch (error) { fatal(error); }
+    };
+    const netCall = (text: string) => {
+      const message = JSON.parse(text);
+      exact(message, ['id', 'url', 'method', 'headers', 'body']);
+      if (!activeId || !Number.isSafeInteger(message.id) || message.id <= lastNet) throw new Error('Invalid network call');
+      const id = lastNet = message.id, controller = new AbortController();
+      pendingNet.set(id, controller);
+      // Refusals reach the guest after this call returns, like any result.
+      const refuse = (code: string, error: string) => { queueMicrotask(() => netSettle(id, { ok: false, code, error })); };
+      let url: URL;
+      try { url = new URL(message.url); } catch { return refuse('INVALID_REQUEST', 'Invalid URL'); }
+      if (typeof message.url !== 'string' || message.url.length > 2048 || url.username || url.password) return refuse('INVALID_REQUEST', 'Invalid URL');
+      if (!sites.includes(url.origin)) return refuse('ORIGIN_NOT_DECLARED', 'The plugin did not declare ' + url.origin);
+      if (!NET_METHODS.includes(message.method)) return refuse('INVALID_REQUEST', 'Only GET and POST are supported');
+      const headers: Record<string, string> = {};
+      if (!message.headers || typeof message.headers !== 'object' || Array.isArray(message.headers)) return refuse('INVALID_REQUEST', 'Headers must be an object');
+      for (const [key, value] of Object.entries(message.headers)) {
+        const name = key.toLowerCase();
+        if (!NET_HEADERS.includes(name as typeof NET_HEADERS[number]) || Object.hasOwn(headers, name) || typeof value !== 'string' || value.length > 8192 || /[\r\n]/.test(value))
+          return refuse('INVALID_REQUEST', 'Only accept, content-type and authorization headers are allowed');
+        headers[name] = value;
+      }
+      if (message.body !== null && (typeof message.body !== 'string' || message.method === 'GET' || new TextEncoder().encode(message.body).byteLength > NET_LIMITS.requestBytes))
+        return refuse('INVALID_REQUEST', 'A body is a string of at most 128 KiB, and only for POST');
+      const now = performance.now();
+      while (netTimes.length && now - netTimes[0]! > 60000) netTimes.shift();
+      if (pendingNet.size > NET_LIMITS.inFlight || netTimes.length >= NET_LIMITS.perMinute) return refuse('RATE_LIMITED', 'Too many network requests');
+      netTimes.push(now);
+      const timeout = AbortSignal.timeout(NET_LIMITS.timeoutMs);
+      void (async () => {
+        try {
+          // Fixed, whatever the plugin asks: no cookies, no referrer, no cache, no redirects.
+          const response = await fetch(url.href, { method: message.method, headers, body: message.body ?? undefined,
+            credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store', redirect: 'error', mode: 'cors',
+            signal: AbortSignal.any([controller.signal, timeout]) });
+          const bytes = await readBounded(response, NET_LIMITS.responseBytes);
+          netSettle(id, { ok: true, result: { status: response.status, ok: response.ok, contentType: response.headers.get('content-type'), text: new TextDecoder().decode(bytes) } });
+        } catch (error) {
+          netSettle(id, timeout.aborted ? { ok: false, code: 'TIMEOUT', error: 'The site did not answer within 30 s' }
+            : error === TOO_LARGE ? { ok: false, code: 'RESPONSE_TOO_LARGE', error: 'The response exceeds 1 MiB' }
+            : { ok: false, code: 'NETWORK_ERROR', error: 'The request failed (network, CORS or a redirect)' });
+        }
+      })();
+    };
     for (const [name, callback] of Object.entries({
+      ...(sites.length ? { __netFetch: netCall } : {}),
       __sendHost(text: string) {
         const message = JSON.parse(text);
         exact(message, ['id', 'method', 'params']);
@@ -58,7 +132,7 @@ addEventListener('message', async (event: MessageEvent) => {
       __sendResult(text: string) {
         const message = JSON.parse(text);
         exact(message, message?.ok === true ? ['id', 'ok', 'result'] : ['id', 'ok', 'error']);
-        if (!activeId || message.id !== activeId || pendingHost.size || typeof message.ok !== 'boolean' || (!message.ok && (typeof message.error !== 'string' || message.error.length > 400))) throw new Error('Invalid plugin result');
+        if (!activeId || message.id !== activeId || pendingHost.size || pendingNet.size || typeof message.ok !== 'boolean' || (!message.ok && (typeof message.error !== 'string' || message.error.length > 400))) throw new Error('Invalid plugin result');
         activeId = 0; clearTimers();
         port.postMessage(message.ok ? { type: 'result', id: message.id, ok: true, result: message.result } : { type: 'result', id: message.id, ok: false, error: message.error });
       },

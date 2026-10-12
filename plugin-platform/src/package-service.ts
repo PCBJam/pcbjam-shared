@@ -77,7 +77,8 @@ export async function runtimeAssets(base:string, signal:AbortSignal) {
   const manifest=JSON.parse(text);
   if(manifest.apiVersion!==1||manifest.protocolVersion!==1)throw new Error('Unsupported plugin runtime');
   const load=async(name:string)=>{
-    const meta=manifest.files[name];
+    // A plugin with direct sites runs package-worker.js from net/<sites>/ (plugins 0022 M3): the same bytes.
+    const meta=manifest.files[/^net\/[a-z0-9.,-]+\/(package-worker\.js)$/.exec(name)?.[1]??name];
     if(!meta||!Number.isSafeInteger(meta.bytes)||meta.bytes<=0||meta.bytes>4*1024*1024)throw new Error('Invalid runtime artifact');
     const response=await fetch(new URL(name,base),{signal,redirect:'error',credentials:'omit'});
     if(!response.ok)throw new Error('Missing runtime artifact');

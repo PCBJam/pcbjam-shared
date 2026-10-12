@@ -59,13 +59,21 @@ type PCBJamTourCond =
 type PCBJamTour = {id:string;title?:string;editor:'eeschema'|'pcbnew';closable?:boolean;
   steps:(Omit<PCBJamPointer,'target'> & {id:string;target?:PCBJamTarget;celebrate?:'rainbow';when?:PCBJamTourCond;until:PCBJamTourCond})[]};
 // BEGIN GENERATED HOST METHODS
-type PCBJamHostMethod = "http.request" | "http.upload" | "ui.openExternal" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "board.geometryStart" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "exports.run" | "exports.readJson" | "exports.bundle" | "files.saveBundle" | "editor.requestPlacement" | "tour.start" | "tour.stop" | "tour.status" | "ui.overlay.show" | "ui.overlay.clear" | "parts.save" | "schematic.symbols" | "schematic.connectivity";
+type PCBJamHostMethod = "http.request" | "http.upload" | "net.fetch" | "ui.openExternal" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "board.geometryStart" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "exports.run" | "exports.readJson" | "exports.bundle" | "files.saveBundle" | "editor.requestPlacement" | "tour.start" | "tour.stop" | "tour.status" | "ui.overlay.show" | "ui.overlay.clear" | "parts.save" | "schematic.symbols" | "schematic.connectivity";
 // END GENERATED HOST METHODS
 /** Plugin logic only, and only while a command is being handled: at most 32 pending, 60 s each,
  *  all cancelled when the command settles. An exception thrown from a callback stops the plugin. */
 declare function setTimeout(callback:(...args:any[])=>unknown,ms?:number,...args:any[]):number;
 declare function clearTimeout(id:number):void;
 declare const pcbjam: {
+  /** An HTTPS request straight from your plugin to a site its manifest declares in `network` (with its
+   *  `direct:<hostname>` permission, which the user accepts at install). The site must answer CORS for the
+   *  editor's origin. PCBJam fixes the rest: no cookies, no referrer, no cache, no redirects. GET or POST;
+   *  headers `accept`, `content-type`, `authorization`; a string body up to 128 KiB; at most 1 MiB back,
+   *  30 s, 4 at once and 30 a minute; only while a command runs, and awaited before it returns.
+   *  Errors carry `code`: ORIGIN_NOT_DECLARED, INVALID_REQUEST, NETWORK_ERROR, TIMEOUT,
+   *  RESPONSE_TOO_LARGE or RATE_LIMITED. */
+  net:{fetch(url:string,init?:{method?:'GET'|'POST';headers?:Record<string,string>;body?:string}):Promise<{status:number;ok:boolean;contentType:string|null;text:string}>};
   /** Approved HTTPS backend; no arbitrary URLs, headers or API keys. */
   http:{request(endpointId:string,request:{method:'GET';path:string}|{method:'POST';path:string;json:PCBJamJSON}):Promise<{status:number;headers:Record<string,string>;body:PCBJamJSON}>;
     /** POST a bundle (`exports.bundle`) as multipart/form-data to an endpoint path that declares `upload` in the

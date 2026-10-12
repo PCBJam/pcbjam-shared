@@ -185,6 +185,17 @@ backend has already processed. Revocation blocks new requests but does not revok
 an already issued signature before its short expiry. Uninstall/reset in PCBJam
 does not delete data saved on the third-party backend.
 
+## Requests to a site, directly
+
+`pcbjam.net.fetch()` (preview) never reaches PCBJam's server. A plugin that
+declares sites in `network` runs in a Worker whose Content Security Policy
+allows exactly those sites, so the browser refuses everything else, including
+PCBJam's own origins. Inside that Worker, the host function checks the site
+again and fixes the request: no credentials, no referrer, no cache and no
+redirects, with size, time and rate limits the plugin cannot change. Without
+the user's consent to a site, or with direct requests off for the account,
+the plugin gets the Worker that can reach nothing.
+
 ## Installation and lifecycle
 
 Uploads become immutable, hashed releases in **private R2 storage**. The database

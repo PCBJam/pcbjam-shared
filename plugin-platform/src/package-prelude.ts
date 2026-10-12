@@ -8,6 +8,8 @@ declare const __clearTimer: (message: string) => void;
 // All these objects/functions live INSIDE QuickJS. Only strings cross native callbacks.
 (() => {
     const send = __sendHost, result = __sendResult, uuid = __uuid, setTimer = __setTimer, clearTimer = __clearTimer;
+    // Present only in a Worker allowed to reach the plugin's declared sites (plugins 0022 M3).
+    const netFetch: ((message: string) => void) | undefined = (globalThis as any).__netFetch;
     const parse = JSON.parse.bind(JSON), stringify = JSON.stringify.bind(JSON);
     const pending = new Map<number, {
         resolve(value: unknown): void;
@@ -27,6 +29,29 @@ declare const __clearTimer: (message: string) => void;
         }
         catch (error) {
             pending.delete(id);
+            reject(error);
+        }
+    });
+    // pcbjam.net.fetch: one HTTPS request to a declared site, straight from the Worker. The
+    // Worker fixes credentials, referrer, cache and redirects; it answers {status, ok, contentType, text}.
+    const netPending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
+    let nextNet = 0;
+    const fetchSite = (url: unknown, init: { method?: unknown; headers?: unknown; body?: unknown } = {}) => new Promise((resolve, reject) => {
+        if (!netFetch) {
+            reject(new Error('API unavailable in this context'));
+            return;
+        }
+        if (!handling) {
+            reject(new Error('Network requests are only available while handling a command'));
+            return;
+        }
+        const id = ++nextNet;
+        netPending.set(id, { resolve, reject });
+        try {
+            netFetch(stringify({ id, url: String(url), method: init?.method ?? 'GET', headers: init?.headers ?? {}, body: init?.body ?? null }));
+        }
+        catch (error) {
+            netPending.delete(id);
             reject(error);
         }
     });
@@ -50,6 +75,7 @@ declare const __clearTimer: (message: string) => void;
                 throw new Error('Invalid or duplicate plugin command');
             handlers.set(command, handler);
         },
+        net: Object.freeze({ fetch: fetchSite }),
         http: Object.freeze({request:(endpointId:string,options:object)=>call('http.request',{...options,endpointId}),upload:(endpointId:string,options:object)=>call('http.upload',{...options,endpointId})}),
         ui: Object.freeze({
             openExternal: (url: unknown) => call('ui.openExternal', { url }),
@@ -201,6 +227,17 @@ declare const __clearTimer: (message: string) => void;
             else
                 entry.reject(Object.assign(new Error(message.error),typeof message.code==='string'&&/^[A-Z_]{1,40}$/.test(message.code)?{code:message.code}:{}));
         } });
+    Object.defineProperty(globalThis, '__netResult', { value: (text: string) => {
+            const message = parse(text), entry = netPending.get(message.id);
+            if (!entry)
+                return;
+            netPending.delete(message.id);
+            if (message.ok)
+                entry.resolve(message.result);
+            else
+                entry.reject(Object.assign(new Error(message.error), { code: message.code }));
+        } });
+    delete (globalThis as any).__netFetch;
     delete (globalThis as any).__sendHost;
     delete (globalThis as any).__sendResult;
     delete (globalThis as any).__uuid;

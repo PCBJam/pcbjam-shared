@@ -1,4 +1,5 @@
 import {backendPermissions, validateBackendRequest, validateUploadRequest, BACKEND_LIMITS, type BackendEndpoint} from '../backend-contract.mjs';
+import { sitePermission, sitesSegment } from '../network-contract.mjs';
 const runtimeAsset = (name: string) => new URL(name, import.meta.url).href;
 import { METHODS, LIMITS, LEASED_READS, SAVED_HTML_PREFIX, EXPORT_KINDS, EXPORT_LIMITS, externalUrlAllowed, pngBytes, boundedJSON, type Method, type DocumentAdapter, type PointerStep, type PartSaveRequest } from './package-api';
 import { storageCall } from './package-storage';
@@ -26,6 +27,8 @@ export interface PluginDescriptor {
         surfaces: string[];
         permissions: string[];
         endpoints?: Record<string,BackendEndpoint>;
+        /** HTTPS sites the Worker may call directly (plugins 0022 M3). */
+        network?: string[];
         uiSize?: {width: number; height: number};
     };
 }
@@ -104,6 +107,9 @@ export interface PackageHostOptions {
      *  URLs, and an activation only once a call needs the server. From the editor's installed list,
      *  never from a plugin. */
     hashServing?: { userId: string; uiOrigin: string; placementEnabled: boolean };
+    /** Direct sites (plugins 0022 M3), from the session's `pluginNetwork`: the plugin's granted
+     *  `network` sites become reachable from its Worker, and only those. */
+    network?: boolean;
 }
 /** With localChecks, these still ask the server on every call: they write to the project or a team library. */
 const SERVER_CHECKED: ReadonlySet<string> = new Set(['editor.requestPlacement', 'parts.save']);
@@ -168,6 +174,8 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
     const binding = options.storageBinding?.() ?? null;
     let activation: {id:string;grants:string[];userId:string;pluginId:string;storageEpoch:number;uiOrigin:string;placementEnabled:boolean;digest:string;manifest:unknown;startup?:{main:string;uiUrl:string}} | undefined;
     let grants=options.plugin.manifest.permissions;
+    // The sites this plugin's Worker may reach (plugins 0022 M3), fixed when the Worker starts.
+    let sites: string[] = [];
     // Loaded by hash: a published release, installed with its grants and storage epoch.
     const served = !!platformConfiguration() && !!options.hashServing && options.plugin.published === true && !!options.plugin.pluginId
         && Array.isArray(options.plugin.grants) && Number.isSafeInteger(options.plugin.storageEpoch) && Number.isSafeInteger(options.plugin.generation);
@@ -227,6 +235,8 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
     };
     const SAVES = new Set(['files.save', 'files.saveHtml', 'files.saveImage']);
     const available = (method: string) => {
+        if (method === 'net.fetch')
+            return sites.length > 0;
         if(method==='http.request')return hosted() && Object.entries(options.plugin.manifest.endpoints??{}).some(([name,p])=>Object.keys(backendPermissions({[name]:p})).every(grant=>grants.includes(grant)));
         if(method==='http.upload')return hosted() && Object.entries(options.plugin.manifest.endpoints??{}).some(([name,p])=>!!(p as BackendEndpoint).upload && Object.keys(backendPermissions({[name]:p})).every(grant=>grants.includes(grant)));
         if(method==='ui.openExternal')return hosted() && !!options.openExternal && Object.keys(options.plugin.manifest.endpoints??{}).length>0;
@@ -555,6 +565,8 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
                 // The editor adapter validates clipboard structure and owns confirmation.
                 return options.requestPlacement(params, signal);
             }
+            // Runs inside the plugin's Worker, under that Worker's CSP; never on this thread.
+            case 'net.fetch': throw new Error('API unavailable in this context');
             default: throw new Error('Unknown PCBJam API method');
         }
     }
@@ -662,9 +674,13 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
                 throw new Error('Missing SDK'); return r.text(); }),
             main,
         ]);
-        if(verified)await verified.load('package-worker.js');
+        // Direct sites (plugins 0022 M3): the granted ones get a Worker whose CSP allows exactly
+        // them; every other plugin keeps the Worker that can reach nothing.
+        sites = options.network ? (options.plugin.manifest.network ?? []).filter(site => grants.includes(sitePermission(site))) : [];
+        const workerFile = sites.length ? 'net/' + sitesSegment(sites) + '/package-worker.js' : 'package-worker.js';
+        if(verified)await verified.load(workerFile);
         signal.throwIfAborted();
-        worker = new Worker(runtimeAsset('package-worker.js'), { name: 'pcbjam-plugin-' + pkg.manifest.id });
+        worker = new Worker(runtimeAsset(workerFile), { name: 'pcbjam-plugin-' + pkg.manifest.id });
         const bootTimer = setTimeout(() => readyReject(new Error('Plugin runtime timed out')), 10000);
         channel.port1.onmessage = event => {
             if (closed)

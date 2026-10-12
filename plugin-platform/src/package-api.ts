@@ -63,6 +63,9 @@ export const METHODS = {
     'http.request': request(null, z.unknown().transform((value,ctx)=>{try{return validateBackendRequest(value);}catch{ctx.addIssue({code:z.ZodIssueCode.custom,message:'Invalid backend request'});return z.NEVER;}})),
     // Upload a bundle to an approved endpoint path that declares `upload`; same dynamic grants as http.request.
     'http.upload': request(null, z.unknown().transform((value,ctx)=>{try{return validateUploadRequest(value);}catch{ctx.addIssue({code:z.ZodIssueCode.custom,message:'Invalid upload request'});return z.NEVER;}})),
+    // An HTTPS request from the plugin's Worker to a site its manifest declares and the user
+    // granted (plugins 0022 M3). It runs in the Worker, under its CSP; the editor never receives it.
+    'net.fetch': request(null, z.object({ url: z.string().max(2048), method: z.enum(['GET', 'POST']), headers: z.record(z.string()), body: z.string().nullable() }).strict()),
     // A new browser tab on one of the plugin's approved endpoint sites, after the user confirms.
     'ui.openExternal': request('ui:open-external', z.object({ url: z.string().url().max(2048) }).strict()),
     'context.get': request(null, empty),

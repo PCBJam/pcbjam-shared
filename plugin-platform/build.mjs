@@ -4,12 +4,14 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { workerCsp } from './network-contract.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const quickRequire = createRequire(require.resolve('quickjs-emscripten'));
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
-export const WORKER_CSP = "default-src 'none'; script-src 'wasm-unsafe-eval'; connect-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'";
+// The runtime Worker's policy without direct sites; network-contract.mjs owns the one definition.
+export const WORKER_CSP = workerCsp();
 
 /** No private-repository inputs, timestamps, machine paths or mutable URLs. */
 export async function buildPluginRuntime(outputDirectory) {

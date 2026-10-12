@@ -139,6 +139,7 @@ context:
 | `main`, `ui` | Exactly `main.js` and `ui.html`. |
 | `surfaces` | Schematic: `editor:eeschema`. Board: `editor:pcbnew`. Choose one or both. |
 | `permissions` | Both UI permissions are required. Add only the [API permissions](api-and-permissions.md) your feature uses. |
+| `network` (optional) | HTTPS sites your logic calls directly with `pcbjam.net.fetch` (preview). Each needs `direct:<hostname>` in `permissions`. See [Direct requests](api-and-permissions.md#direct-requests). |
 | `uiSize` (optional) | Preferred floating window size: `{ "width": 640, "height": 480 }`. Integer CSS pixels; width 280–4096, height 240–4096. |
 
 `ui:custom` allows your iframe UI and `ui:project-data` allows passing logic
@@ -363,6 +364,17 @@ on your backend.
 For local development, use an HTTPS tunnel on a hostname you control: private
 IPs, localhost and PCBJam's own infrastructure are blocked. There is no OAuth
 delegation or public publisher registration yet.
+
+## Call a site directly
+
+*Preview: available once PCBJam turns direct requests on for your account.*
+
+If your API sends CORS headers and needs no PCBJam identity, skip the backend
+setup above: list the site in `network`, request `direct:<hostname>`, and call
+it with `pcbjam.net.fetch()` from your logic. There is no route approval or
+domain verification; the user agrees to each site at install, and PCBJam's
+review sees the sites of every published release. Details and limits:
+[Direct requests](api-and-permissions.md#direct-requests).
 
 ## Share a plugin
 
