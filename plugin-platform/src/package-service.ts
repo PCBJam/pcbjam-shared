@@ -52,6 +52,19 @@ export async function verifyText(text:string, expected?:{sha256:string;bytes:num
   const bytes=new TextEncoder().encode(text);
   if(!expected||bytes.length!==expected.bytes||await sha256(bytes)!==expected.sha256)throw new Error('Plugin artifact integrity check failed');
 }
+/** A published release's logic from its immutable URL (plugins 0022 M2): cacheable, no cookies, and
+ *  run only if it matches the installed release's `main.js` hash. */
+export async function publishedMain(digest:string, expected:{sha256:string;bytes:number}|undefined, signal:AbortSignal) {
+  if(!configuration)throw new Error('Plugin platform is not configured');
+  if(!/^[a-f0-9]{64}$/.test(digest)||!expected)throw new Error('Plugin artifact integrity check failed');
+  const response=await fetch(configuration.apiBase+'/api/plugin-releases/'+digest+'/main.js',{
+    credentials:'omit',redirect:'error',referrerPolicy:'no-referrer',signal:AbortSignal.any([signal,AbortSignal.timeout(10000)]),
+  });
+  if(!response.ok)throw new Error('Plugin unavailable');
+  const text=new TextDecoder('utf-8',{fatal:true}).decode(await boundedResponse(response,expected.bytes));
+  await verifyText(text,expected);
+  return text;
+}
 /** Version is the hash of the exact manifest; artifacts cannot be mixed. */
 export async function runtimeAssets(base:string, signal:AbortSignal) {
   if(!configuration)return null; // Explicit legacy POC adapter only.

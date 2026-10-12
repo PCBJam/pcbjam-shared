@@ -2,7 +2,7 @@ import {backendPermissions, validateBackendRequest, validateUploadRequest, BACKE
 const runtimeAsset = (name: string) => new URL(name, import.meta.url).href;
 import { METHODS, LIMITS, LEASED_READS, SAVED_HTML_PREFIX, EXPORT_KINDS, EXPORT_LIMITS, externalUrlAllowed, pngBytes, boundedJSON, type Method, type DocumentAdapter, type PointerStep, type PartSaveRequest } from './package-api';
 import { storageCall } from './package-storage';
-import { platformConfiguration, platformRequest, platformBytes, verifyText, runtimeAssets } from './package-service';
+import { platformConfiguration, platformRequest, platformBytes, verifyText, runtimeAssets, publishedMain } from './package-service';
 export { configurePlatform } from './package-service';
 export { cleanupPluginStorage } from './package-storage';
 export interface PluginDescriptor {
@@ -13,6 +13,8 @@ export interface PluginDescriptor {
     grants?: string[];
     installed?: boolean;
     enabled?: boolean;
+    /** Published in the marketplace: may load by hash (plugins 0022 M2). */
+    published?: boolean;
     fileMetadata?: Record<string, {sha256:string;bytes:number}>;
     backends?: Array<BackendEndpoint & {endpoint:string;registrationId?:string;policyDigest:string;status:string;ready:boolean;audience?:string;issuer?:string}>;
     digest: string;
@@ -98,9 +100,15 @@ export interface PackageHostOptions {
      *  is asked by the revocation check, by server-side methods' own routes, and per call only
      *  for writes outside this tab (SERVER_CHECKED). */
     localChecks?: boolean;
+    /** Published releases load by hash (plugins 0022 M2): `main.js` and the UI page from immutable
+     *  URLs, and an activation only once a call needs the server. From the editor's installed list,
+     *  never from a plugin. */
+    hashServing?: { userId: string; uiOrigin: string; placementEnabled: boolean };
 }
 /** With localChecks, these still ask the server on every call: they write to the project or a team library. */
 const SERVER_CHECKED: ReadonlySet<string> = new Set(['editor.requestPlacement', 'parts.save']);
+/** Methods whose server route names the activation. */
+const needsActivation = (method: string) => method.startsWith('http.') || method.startsWith('exports.') || method === 'files.saveBundle';
 /** With localChecks, how often the account and activation are re-checked (also when the tab is shown again). */
 const REVOCATION_CHECK_MS = 30000;
 async function api(path: string, method = 'GET', data?: unknown) {
@@ -160,6 +168,29 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
     const binding = options.storageBinding?.() ?? null;
     let activation: {id:string;grants:string[];userId:string;pluginId:string;storageEpoch:number;uiOrigin:string;placementEnabled:boolean;digest:string;manifest:unknown;startup?:{main:string;uiUrl:string}} | undefined;
     let grants=options.plugin.manifest.permissions;
+    // Loaded by hash: a published release, installed with its grants and storage epoch.
+    const served = !!platformConfiguration() && !!options.hashServing && options.plugin.published === true && !!options.plugin.pluginId
+        && Array.isArray(options.plugin.grants) && Number.isSafeInteger(options.plugin.storageEpoch) && Number.isSafeInteger(options.plugin.generation);
+    // Whose hosted storage this is: the installed list's when loaded by hash, else the activation's.
+    let owner: {userId:string;pluginId:string;storageEpoch:number} | undefined = served
+        ? { userId: options.hashServing!.userId, pluginId: options.plugin.pluginId!, storageEpoch: options.plugin.storageEpoch! } : undefined;
+    const activate = async (startup: boolean) => {
+        const result = await platformRequest('activations','POST',{
+            pluginId:options.plugin.pluginId,digest:options.plugin.digest,generation:options.plugin.generation,
+            projectId:options.documents!.projectInfo().id,document:options.context().fileName,surface:'editor:'+options.context().tool,
+            runtimeVersion:platformConfiguration()!.runtimeVersion,protocolVersion:1,...(startup?{}:{startup:false}),
+        },signal);
+        if(closed){void platformRequest('activations/'+result.id,'DELETE').catch(()=>{});throw new Error('Plugin stopped');}
+        if(owner&&(result.userId!==owner.userId||result.pluginId!==owner.pluginId||result.storageEpoch!==owner.storageEpoch||result.digest!==options.plugin.digest)){
+            fail('Plugin was removed or updated');throw new Error('Plugin was removed or updated');
+        }
+        activation=result;grants=result.grants;
+        owner??={userId:result.userId,pluginId:result.pluginId,storageEpoch:result.storageEpoch};
+    };
+    // Loaded by hash, the activation is created by the first call that needs the server.
+    let activating: Promise<void> | undefined;
+    const activated = () => activation ? Promise.resolve() : activating ??= activate(false).finally(() => { activating = undefined; });
+    const hosted = () => !!activation || served;
     // Keyed by permission: a lease only ever vouches for the grant the server actually checked.
     const leases=new Map<string,number>();
     const authorize=async(method='context.get',fresh=false)=>{
@@ -167,13 +198,15 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
         if(options.localChecks&&!fresh&&!SERVER_CHECKED.has(method)){check();return;}
         check();await options.authorize?.(signal);check();
         if(platformConfiguration()) {
-            if(!activation)throw new Error('Plugin activation is missing');
+            if(!activation&&!served)throw new Error('Plugin activation is missing');
+            await activated();check();
+            const id=activation!.id;
             const permission=(Object.hasOwn(METHODS,method)?METHODS[method as Method].permission:null)??'';
             if(!fresh&&LEASED_READS.has(method)&&performance.now()-(leases.get(permission)??-Infinity)<LIMITS.readLeaseMs)return;
             // A throttled check is not a denial: wait out the server's one-minute window
             // instead of ending the plugin. Nothing is delivered while unauthorized.
             for(let attempt=0;;attempt++) {
-                try {await platformRequest('activations/'+activation.id+'/check','POST',{method},signal);break;}
+                try {await platformRequest('activations/'+id+'/check','POST',{method},signal);break;}
                 catch(error){
                     // One wait fits inside the command timeout; after that the guest sees RATE_LIMITED.
                     if((error as {code?:string}).code==='RATE_LIMITED'&&!attempt){await sleep(60000-Date.now()%60000+500);check();continue;}
@@ -194,16 +227,16 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
     };
     const SAVES = new Set(['files.save', 'files.saveHtml', 'files.saveImage']);
     const available = (method: string) => {
-        if(method==='http.request')return !!activation && Object.entries(options.plugin.manifest.endpoints??{}).some(([name,p])=>Object.keys(backendPermissions({[name]:p})).every(grant=>grants.includes(grant)));
-        if(method==='http.upload')return !!activation && Object.entries(options.plugin.manifest.endpoints??{}).some(([name,p])=>!!(p as BackendEndpoint).upload && Object.keys(backendPermissions({[name]:p})).every(grant=>grants.includes(grant)));
-        if(method==='ui.openExternal')return !!activation && !!options.openExternal && Object.keys(options.plugin.manifest.endpoints??{}).length>0;
+        if(method==='http.request')return hosted() && Object.entries(options.plugin.manifest.endpoints??{}).some(([name,p])=>Object.keys(backendPermissions({[name]:p})).every(grant=>grants.includes(grant)));
+        if(method==='http.upload')return hosted() && Object.entries(options.plugin.manifest.endpoints??{}).some(([name,p])=>!!(p as BackendEndpoint).upload && Object.keys(backendPermissions({[name]:p})).every(grant=>grants.includes(grant)));
+        if(method==='ui.openExternal')return hosted() && !!options.openExternal && Object.keys(options.plugin.manifest.endpoints??{}).length>0;
         if (SAVES.has(method))
             return !!options.saveFile;
         // Server-side exports exist only on the hosted platform, for the editors their kinds support.
         if (method.startsWith('exports.'))
-            return !!activation && Object.values(EXPORT_KINDS).some(kind => kind.surface === 'editor:' + options.context().tool);
+            return hosted() && Object.values(EXPORT_KINDS).some(kind => kind.surface === 'editor:' + options.context().tool);
         if (method === 'files.saveBundle')
-            return !!activation && !!options.saveFile;
+            return hosted() && !!options.saveFile;
         if (method === 'board.geometryStart')
             // The editor sets the flag for the PCB editor with a capable engine; the engine itself refuses anything else.
             return !!options.documents?.openGeometry && options.context().canReadGeometry === true;
@@ -218,7 +251,7 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
         if (method === 'context.get' || method.startsWith('files.'))
             return true;
         if (method === 'editor.requestPlacement')
-            return !options.context().readOnly && options.context().canPlaceItems && (!platformConfiguration()||activation?.placementEnabled===true);
+            return !options.context().readOnly && options.context().canPlaceItems && (!platformConfiguration()||(activation?.placementEnabled ?? (served && options.hashServing!.placementEnabled))===true);
         if (method.startsWith('storage.'))
             return binding !== null;
         return !!options.documents;
@@ -296,6 +329,7 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             throw new Error('Invalid API arguments');
         await authorize(method);
         check();
+        if (needsActivation(method)) { await activated(); check(); }
         const context = options.context();
         switch (method) {
             case 'http.request': {
@@ -409,7 +443,7 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             case 'storage.set':
             case 'storage.delete':
             case 'storage.list':
-                return storageCall(activation ? JSON.stringify(['hosted',platformConfiguration()!.apiBase,activation.userId,activation.pluginId,activation.storageEpoch,options.documents!.projectInfo().id]) : JSON.stringify([options.plugin.manifest.id, binding]), method, params, signal, check);
+                return storageCall(owner ? JSON.stringify(['hosted',platformConfiguration()!.apiBase,owner.userId,owner.pluginId,owner.storageEpoch,options.documents!.projectInfo().id]) : JSON.stringify([options.plugin.manifest.id, binding]), method, params, signal, check);
             case 'files.save':
             case 'files.saveHtml':
             case 'files.saveImage': {
@@ -524,27 +558,53 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             default: throw new Error('Unknown PCBJam API method');
         }
     }
+    // Revoke other tabs after uninstall/update; local registry failure fails closed.
+    let checking = false, lastCheck = performance.now();
+    // Loaded by hash and not yet activated, the installed list is the check: it must still name this
+    // account and this release, published, installed and enabled, at the same generation.
+    const installed = async () => {
+        const list: { plugins: PluginDescriptor[]; userId?: string; runtimeVersion?: string } = await listPlugins();
+        // A deploy under this tab: the page URL names the old runtime, so say what the activation would.
+        if (list.runtimeVersion !== platformConfiguration()!.runtimeVersion) { fail('Plugin runtime changed. Reload PCBJam.'); return { plugins: [options.plugin] }; }
+        const p = list.plugins.find(p => p.pluginId === options.plugin.pluginId);
+        const current = list.userId === owner!.userId && !!p && p.digest === options.plugin.digest && p.published === true
+            && p.installed !== false && p.enabled !== false && p.generation === options.plugin.generation;
+        return { plugins: current ? [options.plugin] : [] };
+    };
+    const revocationCheck = () => {
+        if (checking || closed)
+            return;
+        checking = true;
+        lastCheck = performance.now();
+        void (activation ? authorize('context.get',true).then(()=>({plugins:[options.plugin]})) : served ? installed() : listPlugins()).then(({ plugins }) => {
+            if (!closed && !plugins.some(p => p.digest === options.plugin.digest))
+                fail('Plugin was removed or updated');
+        }).catch(error => { if (!closed && error?.code !== 'RATE_LIMITED') // throttled: host calls are blocked on the same check
+            fail('Plugin registry unavailable'); }).finally(() => { checking = false; });
+    };
     const methodLimit = (method: string) => method === 'http.request' || method === 'http.upload' ? BACKEND_LIMITS.resultBytes : method === 'files.readText' ? 5 * 1024 * 1024 : method === 'exports.readJson' ? EXPORT_LIMITS.jsonBytes + 1024 : LIMITS.snapshotBytes;
     options.signal.addEventListener('abort', dispose, { once: true });
     try {
         options.signal.throwIfAborted();
         if(platformConfiguration()) {
             if(!options.documents||!options.plugin.pluginId)throw new Error('Open a saved project to use this plugin');
-            activation=await platformRequest('activations','POST',{
-                pluginId:options.plugin.pluginId,digest:options.plugin.digest,generation:options.plugin.generation,
-                projectId:options.documents.projectInfo().id,document:options.context().fileName,surface:'editor:'+options.context().tool,
-                runtimeVersion:platformConfiguration()!.runtimeVersion,protocolVersion:1,
-            },signal);
-            grants=activation!.grants;
+            if(served)grants=options.plugin.grants!;
+            else await activate(true);
             options.onAuthorizationReady?.(authorize);
+            // Loaded by hash, nothing asked the server yet: check the installed list now, alongside the start.
+            if(served)revocationCheck();
         }
-        // Current servers start the plugin in one round trip: the activation carries its logic and a UI ticket.
-        const pkg = activation?.startup ? {digest:activation.digest,manifest:activation.manifest,main:activation.startup.main}
+        // Loaded by hash, the logic downloads alongside the UI page and the runtime below. Otherwise current
+        // servers start the plugin in one round trip: the activation carries its logic and a UI ticket.
+        const pkg = served ? {digest:options.plugin.digest,manifest:options.plugin.manifest,main:null as string | null}
+            : activation?.startup ? {digest:activation.digest,manifest:activation.manifest,main:activation.startup.main}
             : activation ? await platformRequest('activations/'+activation.id+'/logic','GET',undefined,signal) : await api('releases/' + options.plugin.digest);
         signal.throwIfAborted();
         if (pkg.digest !== options.plugin.digest || JSON.stringify(pkg.manifest) !== JSON.stringify(options.plugin.manifest))
             throw new Error('Plugin release changed');
         if(activation)await verifyText(pkg.main,options.plugin.fileMetadata?.['main.js']);
+        const main: Promise<string> = served ? publishedMain(pkg.digest,options.plugin.fileMetadata?.['main.js'],signal) : Promise.resolve(pkg.main);
+        void main.catch(() => { });
         // The UI page loads in parallel with the runtime below.
         frame = document.createElement('iframe');
         frame.title = pkg.manifest.name + ' plugin';
@@ -582,7 +642,12 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
                 fail((error as Error).message);
             }
         };
-        if(activation) {
+        if(served) {
+            // The published page for this runtime and digest, checked like a ticket's.
+            const origin=options.hashServing!.uiOrigin, url=new URL(origin+'/release/'+platformConfiguration()!.runtimeVersion+'/'+pkg.digest);
+            if(url.origin!==origin||url.origin===location.origin||!/^\/release\/[a-f0-9]{64}\/[a-f0-9]{64}$/.test(url.pathname))throw new Error('Invalid plugin UI origin');
+            frame.src=url.href+'#'+nonce;
+        } else if(activation) {
             const url=new URL(activation.startup?.uiUrl ?? (await platformRequest('activations/'+activation.id+'/ui-ticket','POST',undefined,signal)).url);
             if(url.origin!==activation.uiOrigin||url.origin===location.origin||!/^\/render\/[A-Za-z0-9_-]{43}$/.test(url.pathname)||url.search||url.hash)throw new Error('Invalid plugin UI ticket');
             frame.src=url.href+'#'+nonce;
@@ -590,11 +655,12 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
         signal.throwIfAborted();
         container.append(frame);
         const verified=await runtimeAssets(new URL('.',import.meta.url).href,signal);
-        const [wasm, prelude] = await Promise.all([
+        const [wasm, prelude, mainText] = await Promise.all([
             verified ? verified.load('quickjs.wasm').then(b=>b.buffer) : fetch(runtimeAsset('quickjs.wasm'), { signal }).then(r => { if (!r.ok)
                 throw new Error('Missing runtime'); return r.arrayBuffer(); }),
             verified ? verified.load('package-prelude.js').then(b=>new TextDecoder().decode(b)) : fetch(runtimeAsset('package-prelude.js'), { signal }).then(r => { if (!r.ok)
                 throw new Error('Missing SDK'); return r.text(); }),
+            main,
         ]);
         if(verified)await verified.load('package-worker.js');
         signal.throwIfAborted();
@@ -645,7 +711,7 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             }).finally(() => { pendingHost--; });
         };
         worker.onerror = () => fail('Plugin Worker failed');
-        worker.postMessage({ type: 'init', wasm, prelude, main: pkg.main }, [channel.port2, wasm]);
+        worker.postMessage({ type: 'init', wasm, prelude, main: mainText }, [channel.port2, wasm]);
         try {
             await ready;
         }
@@ -653,19 +719,6 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             clearTimeout(bootTimer);
         }
         signal.throwIfAborted();
-        // Revoke other tabs after uninstall/update; local registry failure fails closed.
-        let checking = false, lastCheck = performance.now();
-        const revocationCheck = () => {
-            if (checking || closed)
-                return;
-            checking = true;
-            lastCheck = performance.now();
-            void (activation ? authorize('context.get',true).then(()=>({plugins:[pkg]})) : listPlugins()).then(({ plugins }) => {
-                if (!closed && !plugins.some(p => p.digest === pkg.digest))
-                    fail('Plugin was removed or updated');
-            }).catch(error => { if (!closed && error?.code !== 'RATE_LIMITED') // throttled: host calls are blocked on the same check
-                fail('Plugin registry unavailable'); }).finally(() => { checking = false; });
-        };
         poll = setInterval(revocationCheck, options.localChecks ? REVOCATION_CHECK_MS : 2000);
         if (options.localChecks) {
             // A tab that was hidden may have missed a revocation: check as soon as it is shown again.
