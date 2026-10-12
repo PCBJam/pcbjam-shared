@@ -47,6 +47,7 @@ export * from "./kicad-project/profiles.js";
 export * from "./kicad-project/generate.js";
 export * from "./kicad-project/disclaimer.js";
 export * from "./comments-lift-update.js";
+export * from "./lib-paths.js";
 
 const c = initContract();
 

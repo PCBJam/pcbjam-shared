@@ -51,7 +51,12 @@ export function isYdocResponse(res: {
 
 /** One resolved stack: the library it belongs to plus its ordered layers. */
 export interface SyncStackDescriptor {
-  lib: { id: string; name: string };
+  /** `paths`: the team library's path variable + folders (libs 0020), when it has them. */
+  lib: {
+    id: string;
+    name: string;
+    paths?: { pathVar: string; modelsDir: string; docsDir: string | null };
+  };
   layers: LayerDescriptor[];
 }
 

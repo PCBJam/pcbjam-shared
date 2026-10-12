@@ -350,6 +350,16 @@ export const libSchema = z.object({
       conflicts: z.array(z.object({ item: z.string(), reason: z.string() })),
     })
     .optional(),
+  // Team-library path variable (libs 0020): `${pathVar}` names the library's
+  // root folder; 3D models live under `modelsDir` and datasheets under
+  // `docsDir`, both relative to that root. Backends without it omit it.
+  paths: z
+    .object({
+      pathVar: z.string(),
+      modelsDir: z.string(),
+      docsDir: z.string().nullable(),
+    })
+    .optional(),
   // The lib's r2-idb-sync cache identity (standalone-load-ux 0002): `namespace`
   // is the primary sync layer's namespace — the key of the client-side
   // IndexedDB cache a cold open hydrates — so the editor's download-consent
