@@ -94,7 +94,15 @@ export interface PackageHostOptions {
     uiOrigin?: string;
     /** Trusted confirmation UI must call this immediately before native effects. */
     onAuthorizationReady?(check:(method:string)=>Promise<void>):void;
+    /** Editor-side checks (plugins 0022): calls are checked here, not by the server. The server
+     *  is asked by the revocation check, by server-side methods' own routes, and per call only
+     *  for writes outside this tab (SERVER_CHECKED). */
+    localChecks?: boolean;
 }
+/** With localChecks, these still ask the server on every call: they write to the project or a team library. */
+const SERVER_CHECKED: ReadonlySet<string> = new Set(['editor.requestPlacement', 'parts.save']);
+/** With localChecks, how often the account and activation are re-checked (also when the tab is shown again). */
+const REVOCATION_CHECK_MS = 30000;
 async function api(path: string, method = 'GET', data?: unknown) {
     const response = await fetch('/plugin-dev/' + path, {
         method, credentials: 'omit', headers: method === 'GET' ? undefined : { 'Content-Type': 'application/json', 'X-PCBJam-Plugin-Dev': '1' },
@@ -155,6 +163,8 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
     // Keyed by permission: a lease only ever vouches for the grant the server actually checked.
     const leases=new Map<string,number>();
     const authorize=async(method='context.get',fresh=false)=>{
+        // Grants, surface and the account/project binding are checked locally on every call.
+        if(options.localChecks&&!fresh&&!SERVER_CHECKED.has(method)){check();return;}
         check();await options.authorize?.(signal);check();
         if(platformConfiguration()) {
             if(!activation)throw new Error('Plugin activation is missing');
@@ -644,17 +654,25 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
         }
         signal.throwIfAborted();
         // Revoke other tabs after uninstall/update; local registry failure fails closed.
-        let checking = false;
-        poll = setInterval(() => {
+        let checking = false, lastCheck = performance.now();
+        const revocationCheck = () => {
             if (checking || closed)
                 return;
             checking = true;
+            lastCheck = performance.now();
             void (activation ? authorize('context.get',true).then(()=>({plugins:[pkg]})) : listPlugins()).then(({ plugins }) => {
                 if (!closed && !plugins.some(p => p.digest === pkg.digest))
                     fail('Plugin was removed or updated');
             }).catch(error => { if (!closed && error?.code !== 'RATE_LIMITED') // throttled: host calls are blocked on the same check
                 fail('Plugin registry unavailable'); }).finally(() => { checking = false; });
-        }, 2000);
+        };
+        poll = setInterval(revocationCheck, options.localChecks ? REVOCATION_CHECK_MS : 2000);
+        if (options.localChecks) {
+            // A tab that was hidden may have missed a revocation: check as soon as it is shown again.
+            const shown = () => { if (document.visibilityState === 'visible' && performance.now() - lastCheck > 2000) revocationCheck(); };
+            document.addEventListener('visibilitychange', shown);
+            signal.addEventListener('abort', () => document.removeEventListener('visibilitychange', shown), { once: true });
+        }
         return { dispose };
     }
     catch (error) {
