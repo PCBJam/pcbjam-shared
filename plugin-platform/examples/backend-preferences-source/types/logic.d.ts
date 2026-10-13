@@ -59,12 +59,14 @@ type PCBJamTourCond =
 type PCBJamTour = {id:string;title?:string;editor:'eeschema'|'pcbnew';closable?:boolean;
   steps:(Omit<PCBJamPointer,'target'> & {id:string;target?:PCBJamTarget;celebrate?:'rainbow';when?:PCBJamTourCond;until:PCBJamTourCond})[]};
 // BEGIN GENERATED HOST METHODS
-type PCBJamHostMethod = "http.request" | "http.upload" | "net.fetch" | "ui.openExternal" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "board.geometryStart" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "exports.run" | "exports.readJson" | "exports.bundle" | "files.saveBundle" | "editor.requestPlacement" | "tour.start" | "tour.stop" | "tour.status" | "ui.overlay.show" | "ui.overlay.clear" | "parts.save" | "schematic.symbols" | "schematic.connectivity";
+type PCBJamHostMethod = "http.request" | "http.upload" | "net.fetch" | "ui.openExternal" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "board.geometryStart" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "exports.run" | "exports.readJson" | "exports.bundle" | "files.saveBundle" | "editor.requestPlacement" | "board.edit" | "schematic.edit" | "tour.start" | "tour.stop" | "tour.status" | "ui.overlay.show" | "ui.overlay.clear" | "parts.save" | "schematic.symbols" | "schematic.connectivity";
 // END GENERATED HOST METHODS
 /** Plugin logic only, and only while a command is being handled: at most 32 pending, 60 s each,
  *  all cancelled when the command settles. An exception thrown from a callback stops the plugin. */
 declare function setTimeout(callback:(...args:any[])=>unknown,ms?:number,...args:any[]):number;
 declare function clearTimeout(id:number):void;
+/** A plugin edit's outcome (plugins 0023): the item ids it added, changed and removed, or the user said no. */
+type PCBJamEditResult={status:'applied';added:string[];changed:string[];removed:string[]}|{status:'cancelled'};
 declare const pcbjam: {
   /** An HTTPS request straight from your plugin to a site its manifest declares in `network` (with its
    *  `direct:<hostname>` permission, which the user accepts at install). The site must answer CORS for the
@@ -100,7 +102,11 @@ declare const pcbjam: {
   parts:{save(part:{displayName:string;symbol?:{name:string;text:string};footprint?:{name:string;text:string};place:boolean}):
     Promise<{status:'saved';library:string;symbolLibId?:string;footprintLibId?:string}|{status:'cancelled'}>};
   /** Schematic editor only (needs `documents:read`): the shown sheet as the engine sees it. */
-  schematic:{symbols():Promise<PCBJamSheetSymbol[]>;connectivity():Promise<PCBJamSheetNet[]>};
+  schematic:{symbols():Promise<PCBJamSheetSymbol[]>;connectivity():Promise<PCBJamSheetNet[]>;
+    /** Schematic editor, shown sheet, needs `schematic:write`. Like `board.edit` for `(symbol …)`, `(wire …)`,
+     *  `(junction …)`, `(no_connect …)`, labels, `(text …)` and shapes; `libSymbols` carries `(symbol "Lib:Name" …)`
+     *  definitions for symbols the sheet doesn't have yet. */
+    edit(edit:{label:string;upsert?:{sexpr:string}[];remove?:string[];libSymbols?:string[]}):Promise<PCBJamEditResult>};
   handle(command:string,handler:(params:any)=>unknown|Promise<unknown>):void;
   context:{get():Promise<{
     tool:string;fileName:string;readOnly:boolean;canPlaceItems:boolean;
@@ -174,6 +180,13 @@ declare const pcbjam: {
     bundle(proposal:{parts:{exportId:string;rename?:Record<string,string>}[];extraFiles?:{name:string;text:string}[];zipName:string}):Promise<{bundleId:string;name:string;size:number;files:{name:string;size:number}[]}>;
   };
   board:{
+    /** PCB editor only, needs `board:write`. Create, change and delete board items as ONE native commit: one
+     *  undo step, sent to collaborators like any edit. `upsert` items are KiCad item text (`(segment …)`,
+     *  `(via …)`, `(zone …)`, `(footprint …)`, `(gr_line …)`, …): an existing uuid replaces that item, a new one
+     *  adds it; nets must already exist. `remove` takes top-level item ids. All or nothing: errors carry `code`
+     *  (HELD: a collaborator holds an item, MISSING, INVALID, UNKNOWN_NET, BUSY, READ_ONLY). More than 50
+     *  items ask the user first (`cancelled`). */
+    edit(edit:{label:string;upsert?:{sexpr:string}[];remove?:string[]}):Promise<PCBJamEditResult>;
     /** PCB editor only. The open board as shapes the editor computed, so you draw polygons instead of re-deriving
      *  pads, arcs and text: `board` (bbox, outline polygons, net names when tracks/zones are included), one record per
      *  footprint (ref, value, side, pos, angle, bbox, attrs, fields, pads with per-side polygons and hole polygons,

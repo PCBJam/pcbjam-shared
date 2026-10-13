@@ -9,6 +9,17 @@ const key = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/);
 const request = (permission: string | null, input: z.ZodTypeAny) => ({ permission, input });
 /** Serialized size of a JSON value; Infinity when it cannot be serialized. */
 const jsonSize = (value: unknown) => { try { return JSON.stringify(value ?? null).length; } catch { return Infinity; } };
+/** Plugin edits (plugins 0023): what one edit may carry, and above how many items the user confirms it. */
+export const EDIT_LIMITS = Object.freeze({ items: 2000, itemBytes: 512 * 1024, totalBytes: 4 * 1024 * 1024, libSymbols: 64, confirmAbove: 50 });
+const itemText = z.string().min(1).max(EDIT_LIMITS.itemBytes);
+const editInput = (libSymbols: boolean) => z.object({
+    label: z.string().min(1).max(100),
+    upsert: z.array(z.object({ sexpr: itemText }).strict()).max(EDIT_LIMITS.items),
+    remove: z.array(z.string().uuid()).max(EDIT_LIMITS.items),
+    ...(libSymbols ? { libSymbols: z.array(itemText).max(EDIT_LIMITS.libSymbols).optional() } : {}),
+}).strict()
+    .refine(v => v.upsert.length + v.remove.length >= 1 && v.upsert.length + v.remove.length <= EDIT_LIMITS.items, 'An edit changes 1 to 2000 items')
+    .refine(v => jsonSize(v) <= EDIT_LIMITS.totalBytes + 64 * 1024, 'Edit exceeds 4 MiB');
 /** A one-off overlay pointer (overlay-system 0003). Plain text only; the host draws it and names the plugin. */
 const pointer = z.object({
     target: z.string().min(1).max(512),
@@ -104,6 +115,10 @@ export const METHODS = {
     }).strict()),
     'files.saveBundle': request('files:save', z.object({ bundleId: exportId }).strict()),
     'editor.requestPlacement': request('editor:place-items', z.object({ label: z.string().min(1).max(100), sexpr: z.string().max(512 * 1024) }).strict()),
+    // Create, change and delete items of the open board or the shown sheet as one native commit:
+    // one undo step, sent to collaborators like any edit (plugins 0023).
+    'board.edit': request('board:write', editInput(false)),
+    'schematic.edit': request('schematic:write', editInput(true)),
     // Guided tours over the editor (overlay-system 0003): a plugin hands the host a declarative
     // tour and the host runs it — plugin logic has no background life to watch the editor. The
     // editor adapter validates the definition itself; here only its size is bounded.

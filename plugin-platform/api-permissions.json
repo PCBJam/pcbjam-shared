@@ -13,5 +13,7 @@
   "project:export": "Generate export files such as Gerbers, drill files and netlists from the current document on PCBJam's servers",
   "ui:open-external": "Open pages of this plugin's approved sites in a new browser tab, after you confirm",
   "editor:overlay": "Show guided tours and pointers over the editor, labelled with this plugin's name",
-  "library:write-parts": "Save parts this plugin ships into its own team library and place them, confirmed by you"
+  "library:write-parts": "Save parts this plugin ships into its own team library and place them, confirmed by you",
+  "board:write": "Change and delete items on your boards; each change is one undo step",
+  "schematic:write": "Change and delete items on your schematics; each change is one undo step"
 }

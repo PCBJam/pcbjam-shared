@@ -196,6 +196,16 @@ redirects, with size, time and rate limits the plugin cannot change. Without
 the user's consent to a site, or with direct requests off for the account,
 the plugin gets the Worker that can reach nothing.
 
+## Edits go through KiCad
+
+`pcbjam.board.edit()` and `pcbjam.schematic.edit()` (preview) hand KiCad item text to the
+editor, which parses every item with KiCad's own parser and applies them in one native
+commit. That is the same path a user's edit takes: KiCad validates the items, the change is
+one undo step, and the collaboration layer sends it to everyone in the project. The editor
+refuses the whole edit if a collaborator is working on one of the items, and the server
+checks the editor role and the plugin's permission on every call. Plugin code never writes
+the shared document directly.
+
 ## Installation and lifecycle
 
 Uploads become immutable, hashed releases in **private R2 storage**. The database

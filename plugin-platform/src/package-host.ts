@@ -37,10 +37,20 @@ export interface EditorContext {
     fileName: string;
     readOnly: boolean;
     canPlaceItems: boolean;
+    /** The engine applies plugin edits (plugins 0023). Read on every call, like the flags below. */
+    canEditItems?: boolean;
     /** Read on every call: the engine module can finish loading after the plugin mounts. */
     canSelectItems?: boolean;
     canReadGeometry?: boolean;
 }
+export interface PluginEditProposal {
+    method: 'board.edit' | 'schematic.edit';
+    label: string;
+    upsert: { sexpr: string }[];
+    remove: string[];
+    libSymbols?: string[];
+}
+export type PluginEditResult = { status: 'applied'; added: string[]; changed: string[]; removed: string[] } | { status: 'cancelled' };
 export interface PackageHostOptions {
     plugin: PluginDescriptor;
     signal: AbortSignal;
@@ -52,6 +62,9 @@ export interface PackageHostOptions {
     }, signal: AbortSignal): Promise<{
         status: string;
     }>;
+    /** A plugin edit (plugins 0023) as one native commit. The editor confirms large edits, calls the
+     *  authorization hook right before the native step, and resolves once the commit landed. */
+    editItems?(proposal: PluginEditProposal, signal: AbortSignal): Promise<PluginEditResult>;
     onDisconnected(message: string): void;
     documents?: DocumentAdapter;
     /** Stable trusted account/project binding, never supplied by a plugin. */
@@ -106,13 +119,13 @@ export interface PackageHostOptions {
     /** Published releases load by hash (plugins 0022 M2): `main.js` and the UI page from immutable
      *  URLs, and an activation only once a call needs the server. From the editor's installed list,
      *  never from a plugin. */
-    hashServing?: { userId: string; uiOrigin: string; placementEnabled: boolean };
+    hashServing?: { userId: string; uiOrigin: string; placementEnabled: boolean; editsEnabled?: boolean };
     /** Direct sites (plugins 0022 M3), from the session's `pluginNetwork`: the plugin's granted
      *  `network` sites become reachable from its Worker, and only those. */
     network?: boolean;
 }
 /** With localChecks, these still ask the server on every call: they write to the project or a team library. */
-const SERVER_CHECKED: ReadonlySet<string> = new Set(['editor.requestPlacement', 'parts.save']);
+const SERVER_CHECKED: ReadonlySet<string> = new Set(['editor.requestPlacement', 'parts.save', 'board.edit', 'schematic.edit']);
 /** Methods whose server route names the activation. */
 const needsActivation = (method: string) => method.startsWith('http.') || method.startsWith('exports.') || method === 'files.saveBundle';
 /** With localChecks, how often the account and activation are re-checked (also when the tab is shown again). */
@@ -172,7 +185,7 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
     let poll: ReturnType<typeof setInterval> | undefined;
     const nonce = crypto.randomUUID(), documentHandle = crypto.randomUUID();
     const binding = options.storageBinding?.() ?? null;
-    let activation: {id:string;grants:string[];userId:string;pluginId:string;storageEpoch:number;uiOrigin:string;placementEnabled:boolean;digest:string;manifest:unknown;startup?:{main:string;uiUrl:string}} | undefined;
+    let activation: {id:string;grants:string[];userId:string;pluginId:string;storageEpoch:number;uiOrigin:string;placementEnabled:boolean;editsEnabled?:boolean;digest:string;manifest:unknown;startup?:{main:string;uiUrl:string}} | undefined;
     let grants=options.plugin.manifest.permissions;
     // The sites this plugin's Worker may reach (plugins 0022 M3), fixed when the Worker starts.
     let sites: string[] = [];
@@ -237,6 +250,11 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
     const available = (method: string) => {
         if (method === 'net.fetch')
             return sites.length > 0;
+        // Before the prefix rules below: `schematic.*` reads would otherwise claim schematic.edit.
+        if (method === 'board.edit' || method === 'schematic.edit')
+            return !!options.editItems && !options.context().readOnly && options.context().canEditItems === true
+                && options.context().tool === (method === 'board.edit' ? 'pcbnew' : 'eeschema')
+                && (!platformConfiguration() || (activation?.editsEnabled ?? (served && options.hashServing!.editsEnabled)) === true);
         if(method==='http.request')return hosted() && Object.entries(options.plugin.manifest.endpoints??{}).some(([name,p])=>Object.keys(backendPermissions({[name]:p})).every(grant=>grants.includes(grant)));
         if(method==='http.upload')return hosted() && Object.entries(options.plugin.manifest.endpoints??{}).some(([name,p])=>!!(p as BackendEndpoint).upload && Object.keys(backendPermissions({[name]:p})).every(grant=>grants.includes(grant)));
         if(method==='ui.openExternal')return hosted() && !!options.openExternal && Object.keys(options.plugin.manifest.endpoints??{}).length>0;
@@ -564,6 +582,20 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
                     throw new Error('Invalid placement proposal');
                 // The editor adapter validates clipboard structure and owns confirmation.
                 return options.requestPlacement(params, signal);
+            }
+            case 'board.edit':
+            case 'schematic.edit': {
+                // The editor confirms large edits, authorizes again right before the native commit and
+                // resolves once it landed (or was cancelled).
+                const result = await options.editItems!({ method, ...params }, signal);
+                // History names the plugin (plugins 0023): what it changed, recorded for this account.
+                // Best effort: the commit already landed and Undo still reverts it.
+                if (result.status === 'applied' && activation)
+                    void platformRequest('activations/' + activation.id + '/operations', 'POST', {
+                        method, label: params.label, added: result.added.length, changed: result.changed.length, removed: result.removed.length,
+                        items: [...result.added, ...result.changed, ...result.removed].slice(0, 500),
+                    }).catch(() => { });
+                return result;
             }
             // Runs inside the plugin's Worker, under that Worker's CSP; never on this thread.
             case 'net.fetch': throw new Error('API unavailable in this context');

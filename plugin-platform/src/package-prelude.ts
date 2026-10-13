@@ -94,6 +94,9 @@ declare const __clearTimer: (message: string) => void;
         schematic: Object.freeze({
             symbols: async () => ((await call('schematic.symbols')) as any).symbols,
             connectivity: async () => ((await call('schematic.connectivity')) as any).nets,
+            // Create, change and delete items of the shown sheet as one undoable commit (plugins 0023).
+            edit: ({ label, upsert = [], remove = [], libSymbols }: any = {}) =>
+                call('schematic.edit', libSymbols === undefined ? { label, upsert, remove } : { label, upsert, remove, libSymbols }),
         }),
         exports: Object.freeze({
             run: (kind: unknown) => call('exports.run', { kind }),
@@ -153,6 +156,8 @@ declare const __clearTimer: (message: string) => void;
             close: (handle: string) => call('files.close', { handle }),
         }),
         board: Object.freeze({
+            // Create, change and delete board items as one undoable commit (plugins 0023).
+            edit: ({ label, upsert = [], remove = [] }: any = {}) => call('board.edit', { label, upsert, remove }),
             // The open PCB as shapes the engine computed. Records arrive as they are produced; with
             // onRecords nothing is retained.
             geometry: async (options: any = {}, onRecords?: (records: unknown[]) => unknown) => {

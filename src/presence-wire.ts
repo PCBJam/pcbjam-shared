@@ -82,6 +82,13 @@ export const presenceStateSchema = z.object({
    */
   role: z.enum(["commenter"]).optional(),
   /**
+   * A plugin editing for this person right now (plugins 0023): set by the person's own editor
+   * while a plugin's edit applies and for a few seconds after, so teammates see "via <plugin>".
+   * Display-only and the person's own claim (unlike `agent`, nothing to verify: the edit is
+   * theirs, made through a plugin they installed).
+   */
+  plugin: z.object({ name: z.string().min(1).max(80) }).optional(),
+  /**
    * AI agent presence (mcp 0004 §6), SERVER-VERIFIED like `role`: a
    * connection opened with a machine credential (an MCP client / API key)
    * must publish exactly its `client` here — the sync worker drops its frames

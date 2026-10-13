@@ -58,6 +58,8 @@ permissions. `context.get()` needs no additional permission.
 | `exports.bundle({parts, extraFiles?, zipName})` | `project:export` | Zip exports (optionally renaming files) with text files the plugin made; returns a bundle id, name, size and file list. |
 | `files.saveBundle({bundleId})` | `files:save` | Trusted download confirmation for a bundle ZIP; download-requested or cancelled. |
 | `editor.requestPlacement({label, sexpr})` | `editor:place-items` | Confirmed symbol placement: placed or cancelled. |
+| `board.edit({label, upsert?, remove?})` | `board:write` | PCB editor: create, change and delete board items (KiCad item text) as one native commit, one undo step, sent to collaborators like any edit. All or nothing; more than 50 items ask the user first. |
+| `schematic.edit({label, upsert?, remove?, libSymbols?})` | `schematic:write` | Schematic editor, shown sheet: like `board.edit` for symbols, wires, labels, text and shapes; `libSymbols` carries definitions the sheet lacks. |
 | `tour.start(tour, {resume?})` | `editor:overlay` | Run a declarative guided tour over the editor, drawn by PCBJam with the plugin’s name; it keeps running between commands. started, not-active (resume with no active tour) or busy. |
 | `tour.stop()` | `editor:overlay` | Stop the plugin’s tour; its status is kept. |
 | `tour.status()` | `editor:overlay` | The plugin’s tour: id, shown step, length and state (active, done, dismissed or none). |
@@ -91,6 +93,8 @@ feature uses: every extra line is a reason to decline.
 | `ui:open-external` | Open pages of this plugin's approved sites in a new browser tab, after you confirm | `ui.openExternal` |
 | `editor:overlay` | Show guided tours and pointers over the editor, labelled with this plugin's name | `tour.start`, `tour.stop`, `tour.status`, `ui.overlay.show`, `ui.overlay.clear` |
 | `library:write-parts` | Save parts this plugin ships into its own team library and place them, confirmed by you | `parts.save` |
+| `board:write` | Change and delete items on your boards; each change is one undo step | `board.edit` |
+| `schematic:write` | Change and delete items on your schematics; each change is one undo step | `schematic.edit` |
 <!-- END GENERATED PERMISSIONS -->
 
 `network:<name>` and `backend:identity:<name>` are declared per backend; see
@@ -805,12 +809,48 @@ const parts = JSON.parse(response.text);
 Use [backend requests](#backend-requests) instead when your server sends no
 CORS headers, needs to know who the user is, or holds a secret.
 
+## Edit the design
+
+*Preview: available once PCBJam turns plugin edits on for your account.*
+
+With `board:write` (PCB editor) or `schematic:write` (schematic editor), your logic can create,
+change and delete items. Each call is one native KiCad commit: one undo step for the user,
+sent to collaborators like any edit. Items are KiCad item text, as `items.get` and
+`documents.snapshot` return them: an existing uuid replaces that item, a new uuid adds one.
+
+```ts
+const result = await pcbjam.board.edit({
+  label: 'Widen GND',
+  upsert: [{ sexpr: '(segment (start 50.8 50.8) (end 101.6 50.8) (width 0.5) (layer "F.Cu") (net "GND") (uuid "…"))' }],
+  remove: ['8f6c…'],
+});
+// { status: 'applied', added: [...], changed: [...], removed: [...] } or { status: 'cancelled' }
+```
+
+- **Board items:** `segment`, `arc`, `via`, `zone`, `footprint` (with its pads and fields),
+  `gr_line`, `gr_arc`, `gr_circle`, `gr_rect`, `gr_poly`, `gr_text`, `gr_text_box`,
+  `dimension`. Nets go by name (`(net "GND")`) and must exist on the board.
+- **Schematic items** (the shown sheet): `symbol`, `wire`, `bus`, `bus_entry`, `junction`,
+  `no_connect`, labels, `text`, `text_box` and shapes. `schematic.edit` also takes
+  `libSymbols`: `(symbol "Lib:Name" …)` definitions for symbols the sheet doesn't have yet.
+- **Not editable:** files, the project, board setup, layers, net classes, sheets, groups.
+  `remove` takes top-level items; a pad or pin changes through its footprint or symbol.
+- **All or nothing.** Errors reject with `code`: `HELD` (a collaborator is working on one of
+  the items), `MISSING`, `INVALID`, `UNKNOWN_NET`, `BUSY` (a tool is running), `READ_ONLY`,
+  `TOO_LARGE`.
+- **Limits:** 2,000 items and 4 MiB per call, 512 KiB per item, 60 edits a minute per plugin.
+  An edit that touches more than 50 items asks the user first and resolves `cancelled` if
+  they decline.
+- **Who sees what:** the undo menu names your plugin, collaborators see "via <plugin>" next to
+  the person while it edits, and project history names it ("Alice (with Round Tracks) …").
+  Viewers and commenters can't edit, with or without plugins.
+
 ## Not available
 
 There is no raw WASM/pointer access, direct Yjs mutation, sibling-document loading,
 change subscription, schematic geometry, user-profile API or OAuth delegation
-signing. The only current document write is confirmed symbol placement;
-`editor.select()` changes the selection, not the design.
+signing. Design writes are confirmed symbol placement and, in preview, `board.edit` /
+`schematic.edit`; `editor.select()` changes the selection, not the design.
 The only UI surface is a floating panel in the schematic or PCB editor, plus the
 guided tours and pointers PCBJam draws for you.
 
