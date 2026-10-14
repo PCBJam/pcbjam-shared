@@ -16,6 +16,8 @@ export * from "./schemas.js";
 export * from "./routes.js";
 export * from "./sexpr.js";
 export * from "./symbol-lib.js";
+export * from "./schematic-geometry.js";
+export * from "./schematic-ops.js";
 export * from "./kicad-doc.js";
 export * from "./kicad-format.js";
 export * from "./collab-wire.js";

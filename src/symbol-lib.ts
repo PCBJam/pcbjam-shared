@@ -174,9 +174,16 @@ export function wrapSymbolLib(def: Form): string {
  * Clipboard text for the native placement tool: the definition under its
  * library id plus one instance at the origin. Reference gets a `?` suffix so
  * the editor annotates it; Value defaults to the symbol name; Footprint and
- * Datasheet are copied from the definition.
+ * Datasheet are copied from the definition. `overrides` set the instance's
+ * Value and Footprint (an agent placing "a 10k resistor").
  */
-export function buildSymbolClipboard(def: Form, nickname: string, name: string, uuid: string): { label: string; sexpr: string } {
+export function buildSymbolClipboard(
+  def: Form,
+  nickname: string,
+  name: string,
+  uuid: string,
+  overrides: { value?: string; footprint?: string } = {},
+): { label: string; sexpr: string } {
   const libId = nickname + ":" + name;
   const property = (key: string, fallback = "") =>
     unquote(def.find((node) => isForm(node, "property") && unquote(node[1]) === key)?.[2]) ?? fallback;
@@ -184,8 +191,8 @@ export function buildSymbolClipboard(def: Form, nickname: string, name: string, 
   const effects = "(effects (font (size 1.27 1.27)))";
   const properties = [
     `(property "Reference" ${quote(reference)} (at 2.54 -1.27 0) ${effects})`,
-    `(property "Value" ${quote(property("Value", name))} (at 2.54 1.27 0) ${effects})`,
-    `(property "Footprint" ${quote(property("Footprint"))} (at 0 0 0) (hide yes) ${effects})`,
+    `(property "Value" ${quote(overrides.value ?? property("Value", name))} (at 2.54 1.27 0) ${effects})`,
+    `(property "Footprint" ${quote(overrides.footprint ?? property("Footprint"))} (at 0 0 0) (hide yes) ${effects})`,
     `(property "Datasheet" ${quote(property("Datasheet"))} (at 0 0 0) (hide yes) ${effects})`,
   ];
   const definition: Form = ["symbol", quote(libId), ...def.slice(2)];
