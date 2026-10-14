@@ -35,6 +35,7 @@ export * from "./map-limit.js";
 export * from "./ydoc-rewrite.js";
 export * from "./backend-wire.js";
 export * from "./presence-wire.js";
+export * from "./agent-editor-wire.js";
 export * from "./presence-colors.js";
 export * from "./comments-wire.js";
 export * from "./comments-y.js";
