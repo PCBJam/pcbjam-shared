@@ -1061,16 +1061,112 @@ export function parseNetlist(text: string): NetlistNet[] {
         .slice(1)
         .filter((x): x is Form => isForm(x, "node"))
         .map((node) => {
-          const name = unquote(child(node, "pinfunction")?.[1]);
+          const pin = unquote(child(node, "pin")?.[1]) ?? "";
+          // KiCad 10 writes the pin's name with its number appended
+          // (`(pin "2") (pinfunction "PM_2")`); keep the name the symbol shows.
+          const fn = unquote(child(node, "pinfunction")?.[1]);
+          const name = fn?.endsWith(`_${pin}`) && fn.length > pin.length + 1 ? fn.slice(0, -(pin.length + 1)) : fn;
           const type = unquote(child(node, "pintype")?.[1]);
           return {
             ref: unquote(child(node, "ref")?.[1]) ?? "",
-            pin: unquote(child(node, "pin")?.[1]) ?? "",
+            pin,
             ...(name ? { name } : {}),
             ...(type ? { type } : {}),
           };
         }),
     }));
+}
+
+// ── Joining a net by a pin or by KiCad's automatic name ─────────────────────
+
+/** KiCad's automatic name for a net no label names: `Net-(R1-Pad1)`, `unconnected-(U1-NC-Pad4)`. */
+export function isAutoNetName(net: string): boolean {
+  return /^\/?(Net-\(|unconnected-\()/.test(net.trim());
+}
+
+/** A net as KiCad's netlist names it → the label name that joins it (`/SDA` → `SDA`; top sheet only). */
+const joinName = (net: string): string => (/^\/[^/]+$/.test(net) ? net.slice(1) : net);
+
+/** `"P3.1"` when P3 is a part on the sheet (a pin whose net to join), else null. */
+function pinTarget(sheet: Sheet, s: string): { ref: string; pin: string } | null {
+  const m = /^([^.\s]+)\.([^.\s]+)$/.exec(s.trim());
+  return m && sheet.symbols.some((x) => !x.power && x.ref === m[1]) ? { ref: m[1]!, pin: m[2]! } : null;
+}
+
+/**
+ * The asked nets that are not label names: a pin (`"P3.1"`, join whatever it
+ * is on) or KiCad's automatic name of an unnamed net (`"Net-(P3-P1)"`, as
+ * list_nets shows it). Resolving them needs KiCad's netlist
+ * ({@link resolveNetJoins}); none → no netlist needed.
+ */
+export function netJoinTargets(doc: KicadDoc, asked: Array<string | null | undefined>): string[] {
+  const sheet = readSheet(doc);
+  return [...new Set(asked.filter((s): s is string => !!s?.trim()).map((s) => s.trim()))].filter((s) => isAutoNetName(s) || pinTarget(sheet, s));
+}
+
+export interface NetJoins {
+  /** The label or power net an asked net becomes. */
+  name(asked: string): string;
+  /** Labels that pins already on a joined net need (nets that had no name), connected in the same edit. */
+  anchors: ConnectPin[];
+  /** What was joined, for the result: `labelled` names the existing pin that got the label too. */
+  joined: Array<{ asked: string; net: string; labelled?: string }>;
+}
+
+/**
+ * Turn pins and KiCad's automatic net names into label names. A label named
+ * `Net-(P3-P1)` would start a new net beside KiCad's unnamed one (Claude did
+ * exactly that, ai-chat 0003 step 3), so: a named net is joined by its name;
+ * an unnamed one gets a name (`P3_1`, after the pin it is joined at) and a
+ * label on one of its existing pins as well. `nets` is KiCad's netlist
+ * (`parseNetlist`), needed only when {@link netJoinTargets} is not empty.
+ */
+export function resolveNetJoins(doc: KicadDoc, asked: Array<string | null | undefined>, nets: NetlistNet[]): NetJoins {
+  const sheet = readSheet(doc);
+  const byAsked = new Map<string, string>();
+  const anchors: ConnectPin[] = [];
+  const joined: NetJoins["joined"] = [];
+  const taken = new Set([...nets.map((n) => joinName(n.net)), ...sheet.labels.map((l) => l.name)]);
+  const named = new Map<string, string>(); // KiCad's net name → the label name it is joined by
+  for (const s of netJoinTargets(doc, asked)) {
+    const pin = pinTarget(sheet, s);
+    const onPin = (p: NetlistNet["pins"][number]) => !!pin && p.ref === pin.ref && (p.pin === pin.pin || p.name === pin.pin);
+    const net = pin ? nets.find((n) => n.pins.some(onPin)) : nets.find((n) => n.net === s || joinName(n.net) === joinName(s));
+    if (!net) {
+      throw new SchematicOpError(
+        "NOT_FOUND",
+        pin
+          ? `KiCad's netlist has no pin ${s} (it reflects the saved sheet, a few seconds behind live edits).`
+          : `KiCad's netlist has no net ${s}; list_nets shows the names (a few seconds behind live edits).`,
+      );
+    }
+    let name = named.get(net.net);
+    if (name === undefined) {
+      if (!isAutoNetName(net.net)) {
+        name = joinName(net.net);
+        joined.push({ asked: s, net: name });
+      } else {
+        const anchor = net.pins.find(onPin) ?? net.pins.find((p) => sheet.symbols.some((x) => !x.power && x.ref === p.ref)) ?? net.pins[0];
+        if (!anchor) throw new SchematicOpError("NOT_FOUND", `Net ${net.net} has no pins to join.`);
+        const base = `${anchor.ref}_${anchor.pin}`.replace(/[^A-Za-z0-9_+-]/g, "_");
+        name = base;
+        for (let i = 2; taken.has(name); i++) name = `${base}_${i}`;
+        taken.add(name);
+        anchors.push({ ref: anchor.ref, pin: anchor.pin, net: name });
+        joined.push({ asked: s, net: name, labelled: `${anchor.ref}.${anchor.pin}` });
+      }
+      named.set(net.net, name);
+    } else {
+      joined.push({ asked: s, net: name });
+    }
+    byAsked.set(s, name);
+  }
+  return { name: (s) => byAsked.get(s.trim()) ?? joinName(s.trim()), anchors, joined };
+}
+
+/** Two edits as one (one undo step): `b` was computed on the document with `a` applied. */
+export function mergeSchematicEdits(a: SchematicEdit, b: SchematicEdit): SchematicEdit {
+  return { label: a.label, upsert: [...a.upsert, ...b.upsert], remove: [...a.remove, ...b.remove], libSymbols: { ...a.libSymbols, ...b.libSymbols } };
 }
 
 // ── Applying an edit to a document ───────────────────────────────────────────

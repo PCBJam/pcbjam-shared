@@ -9,13 +9,16 @@ import {
   connectEdit,
   listParts,
   movePartEdit,
+  netJoinTargets,
   parseNetlist,
   placementBlob,
   placePartEdit,
   readSheet,
   removePartEdit,
+  resolveNetJoins,
   SchematicOpError,
   setFieldEdit,
+  type NetlistNet,
   type SchematicEdit,
 } from "../src/schematic-ops.js";
 import { isForm, resolveSymbolDefinition, unquote, type Form } from "../src/symbol-lib.js";
@@ -314,6 +317,50 @@ describe("connectEdit", () => {
   });
 });
 
+describe("resolveNetJoins", () => {
+  // KiCad's netlist of fixture(): R3.2 and R4.2 share a wire no label names.
+  const nets: NetlistNet[] = [
+    { net: "+3V3", pins: [{ ref: "R1", pin: "1" }] },
+    { net: "/SDA", pins: [{ ref: "R1", pin: "2" }] },
+    { net: "Net-(R3-Pad2)", pins: [{ ref: "R3", pin: "2" }, { ref: "R4", pin: "2" }] },
+    { net: "unconnected-(Q1-A-Pad1)", pins: [{ ref: "Q1", pin: "1", name: "A" }] },
+  ];
+
+  it("needs the netlist only for pins and KiCad's automatic names", () => {
+    const { doc } = fixture();
+    expect(netJoinTargets(doc, ["SDA", "+3V3", "R3.2", " Net-(R3-Pad2) ", "X9.1", null, undefined])).toEqual(["R3.2", "Net-(R3-Pad2)"]);
+    expect(netJoinTargets(doc, ["SDA", "GND"])).toEqual([]);
+  });
+
+  it("joins a named net by its name and names an unnamed one after a pin, labelling that pin too", () => {
+    const { doc } = fixture();
+    const joins = resolveNetJoins(doc, ["R1.2", "Net-(R3-Pad2)", "R4.2", "Q1.A", "/SDA", "GND"], nets);
+    expect(["R1.2", "Net-(R3-Pad2)", "R4.2", "Q1.A", "/SDA", "GND"].map((s) => joins.name(s))).toEqual(["SDA", "R3_2", "R3_2", "Q1_1", "SDA", "GND"]);
+    expect(joins.anchors).toEqual([
+      { ref: "R3", pin: "2", net: "R3_2" },
+      { ref: "Q1", pin: "1", net: "Q1_1" },
+    ]);
+    expect(joins.joined).toEqual([
+      { asked: "R1.2", net: "SDA" },
+      { asked: "Net-(R3-Pad2)", net: "R3_2", labelled: "R3.2" },
+      { asked: "R4.2", net: "R3_2" },
+      { asked: "Q1.A", net: "Q1_1", labelled: "Q1.1" },
+    ]);
+
+    // Connecting R2.1 there puts one label on each end of the join, in one edit.
+    const { edit } = connectEdit({ doc, pins: [{ ref: "R2", pin: "1", net: joins.name("R4.2") }, ...joins.anchors.slice(0, 1)] });
+    expect(ofType(upserted(edit), "label").map((l) => unquote(l[1]))).toEqual(["R3_2", "R3_2"]);
+  });
+
+  it("never reuses a name the sheet has, and says when the net is not there", () => {
+    const { doc } = fixture();
+    const joins = resolveNetJoins(doc, ["R3.2"], [...nets, { net: "/R3_2", pins: [{ ref: "Q1", pin: "3" }] }]);
+    expect(joins.name("R3.2")).toBe("R3_2_2");
+    expect(errorOf(() => resolveNetJoins(doc, ["Net-(R9-Pad1)"], nets)).code).toBe("NOT_FOUND");
+    expect(errorOf(() => resolveNetJoins(doc, ["Q1.3"], nets)).message).toMatch(/no pin Q1.3/);
+  });
+});
+
 describe("removePartEdit", () => {
   it("removes the part with its wires up to the junction, and what is left on nothing", () => {
     const f = fixture();
@@ -418,6 +465,15 @@ describe("parseNetlist", () => {
         ],
       },
     ]);
+  });
+
+  it("drops the pin number KiCad 10 appends to a pin's name", () => {
+    const text = `(export (version "E") (nets
+      (net (code "1") (name "Net-(P1-PM)") (class "Default")
+        (node (ref "P1") (pin "2") (pinfunction "PM_2") (pintype "passive"))
+        (node (ref "U1") (pin "12") (pinfunction "A_1") (pintype "input"))
+        (node (ref "D1") (pin "1") (pinfunction "_1") (pintype "passive")))))`;
+    expect(parseNetlist(text)[0]!.pins.map((p) => p.name)).toEqual(["PM", "A_1", "_1"]);
   });
 
   it("refuses something else", () => {
