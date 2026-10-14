@@ -18,6 +18,7 @@ import {
   resolveNetJoins,
   SchematicOpError,
   setFieldEdit,
+  withDefinitions,
   type NetlistNet,
   type SchematicEdit,
 } from "../src/schematic-ops.js";
@@ -358,6 +359,21 @@ describe("resolveNetJoins", () => {
     expect(joins.name("R3.2")).toBe("R3_2_2");
     expect(errorOf(() => resolveNetJoins(doc, ["Net-(R9-Pad1)"], nets)).code).toBe("NOT_FOUND");
     expect(errorOf(() => resolveNetJoins(doc, ["Q1.3"], nets)).message).toMatch(/no pin Q1.3/);
+  });
+});
+
+describe("withDefinitions", () => {
+  it("carries the definition of every symbol an edit places, even one the sheet embeds", () => {
+    const { doc } = fixture();
+    // +3V3 is embedded in the fixture, so connectEdit leaves its definition out.
+    const { edit } = connectEdit({ doc, pins: [{ ref: "R3", pin: "1", net: "+3V3" }, { ref: "R3", pin: "2", net: "NODE" }] });
+    expect(edit.libSymbols).toEqual({});
+    const full = withDefinitions(doc, edit);
+    expect(Object.keys(full.libSymbols)).toEqual(["power:+3V3"]);
+    expect(full.libSymbols["power:+3V3"]).toMatch(/^\(symbol "power:\+3V3"/);
+    expect(full.upsert).toBe(edit.upsert);
+    // One the edit already carries stays as it is.
+    expect(withDefinitions(doc, { ...edit, libSymbols: { "power:+3V3": "(symbol \"power:+3V3\")" } }).libSymbols).toEqual({ "power:+3V3": "(symbol \"power:+3V3\")" });
   });
 });
 

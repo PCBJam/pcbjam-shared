@@ -1164,6 +1164,27 @@ export function resolveNetJoins(doc: KicadDoc, asked: Array<string | null | unde
   return { name: (s) => byAsked.get(s.trim()) ?? joinName(s.trim()), anchors, joined };
 }
 
+/**
+ * `edit` carrying the definition of every library symbol its upserts place,
+ * the ones `doc` already embeds included. An editor's own document can lack a
+ * definition the shared document still has (KiCad drops it when an Undo takes
+ * the last symbol using it), and KiCad refuses a symbol it cannot resolve
+ * (ai-chat 0003 step 6); a definition it already has does no harm.
+ */
+export function withDefinitions(doc: KicadDoc, edit: SchematicEdit): SchematicEdit {
+  const defs = readSheet(doc).defs;
+  const libSymbols = { ...edit.libSymbols };
+  for (const { sexpr } of edit.upsert) {
+    const form = parseSexpr(sexpr)[0];
+    if (!isForm(form, "symbol")) continue;
+    const libId = unquote(child(form, "lib_id")?.[1]);
+    const def = libId ? defs.get(libId) : undefined;
+    if (!libId || !def || libSymbols[libId]) continue;
+    libSymbols[libId] = printSexpr(["symbol", quote(libId), ...def.slice(2)]);
+  }
+  return { ...edit, libSymbols };
+}
+
 /** Two edits as one (one undo step): `b` was computed on the document with `a` applied. */
 export function mergeSchematicEdits(a: SchematicEdit, b: SchematicEdit): SchematicEdit {
   return { label: a.label, upsert: [...a.upsert, ...b.upsert], remove: [...a.remove, ...b.remove], libSymbols: { ...a.libSymbols, ...b.libSymbols } };
