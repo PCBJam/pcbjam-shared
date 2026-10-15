@@ -3,6 +3,7 @@ import {
   agentEditorFrame,
   parseAgentEditorToChat,
   parseAgentEditorToPanel,
+  pcbUpdateNeedsApproval,
   type AgentEditorAttach,
   type AgentEditorExec,
   type AgentEditorResult,
@@ -32,5 +33,57 @@ describe("agent editor wire", () => {
     expect(parseAgentEditorToPanel('{"type":"pcbjam.editor.exec","id":"e1","file":"a","op":"delete_everything"}')).toBeNull();
     expect(parseAgentEditorToPanel('{"type":"pcbjam.editor.exec",')).toBeNull();
     expect(parseAgentEditorToChat(new ArrayBuffer(4))).toBeNull();
+  });
+
+  it("carries Update PCB: the exec and each outcome", () => {
+    const exec: AgentEditorExec = { type: "pcbjam.editor.exec", id: "u1", file: "b.kicad_pcb", op: "update_pcb", dryRun: true, deleteUnused: false };
+    expect(parseAgentEditorToPanel(agentEditorFrame(exec))).toEqual(exec);
+    expect(parseAgentEditorToPanel('{"type":"pcbjam.editor.exec","id":"u1","file":"b.kicad_pcb","op":"update_pcb","dryRun":"no","deleteUnused":false}')).toBeNull();
+    const report = [{ severity: "action" as const, text: "Add D1 (footprint 'LED_SMD:LED_0603_1608Metric')." }];
+    for (const result of [
+      { status: "previewed" as const, report, needsApproval: [] },
+      { status: "applied" as const, report, added: ["D1"], approved: [] },
+      { status: "declined" as const, needsApproval: ["Remove unused footprint R9."] },
+      { error: "Open the board", code: "NO_EDITOR" },
+    ]) {
+      const frame: AgentEditorResult = { type: "pcbjam.editor.result", id: "u1", result };
+      expect(parseAgentEditorToChat(agentEditorFrame(frame))).toEqual(frame);
+    }
+  });
+});
+
+describe("pcbUpdateNeedsApproval", () => {
+  const action = (text: string) => ({ severity: "action" as const, text });
+
+  it("lets additions, new connections and carried-over fields through", () => {
+    expect(
+      pcbUpdateNeedsApproval([
+        { severity: "info", text: "Processing symbol 'D1:LED_SMD:LED_0603_1608Metric'." },
+        action("Add D1 (footprint 'LED_SMD:LED_0603_1608Metric')."),
+        action("Add net /LED_A."),
+        action("Connect R1 pin 2 to /LED_A."),
+        action("Change R1 value from 10k to 330."),
+        action("Change R7 reference designator to R2."),
+        action("Update R1 fields."),
+        action("Update R1 symbol association from /a to /b."),
+        { severity: "error", text: "Cannot add C3 (footprint 'Capacitor_SMD:C_0603' not found)." },
+        { severity: "info", text: "Total warnings: 0, errors: 1." },
+        action(""),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("asks for removals, swapped footprints, moved connections and anything it does not know", () => {
+    expect(
+      pcbUpdateNeedsApproval([
+        action("Remove unused footprint R9."),
+        action("Change R1 footprint from 'Resistor_SMD:R_0603' to 'Resistor_SMD:R_0805'."),
+        action("Reconnect R1 pin 1 from /SDA to /SCL."),
+        action("Disconnect R1 pin 2."),
+        action("Reconnect via from /SDA to /SCL."),
+        action("Reconnect copper zone 'GND' from GND to GNDA."),
+        action("D1 hinzufügen (Footprint 'LED_SMD:LED_0603_1608Metric')."),
+      ]),
+    ).toHaveLength(7);
   });
 });

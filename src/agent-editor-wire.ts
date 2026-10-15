@@ -9,7 +9,7 @@ import { z } from "zod";
  *
  *   attach   panel → chat   this tab shows `file` (of this project and copy) in `tool`
  *   detach   panel → chat   it no longer does (or the socket closes)
- *   exec     chat → panel   carry out an edit, a placement or a read
+ *   exec     chat → panel   carry out an edit, a placement, a read or Update PCB
  *   cancel   chat → panel   the turn was stopped: withdraw that exec
  *   result   panel → chat   the executor's outcome for an exec
  *
@@ -47,6 +47,8 @@ export const agentEditorExecSchema = z.discriminatedUnion("op", [
   z.object({ type: z.literal("pcbjam.editor.exec"), id, file: path, op: z.literal("apply"), edit: agentEditSchema }),
   z.object({ type: z.literal("pcbjam.editor.exec"), id, file: path, op: z.literal("place"), blob: z.object({ sexpr: z.string() }) }),
   z.object({ type: z.literal("pcbjam.editor.exec"), id, file: path, op: z.literal("read") }),
+  // KiCad's Update PCB from Schematic on the open board (step 5b): a dry run, or the real one.
+  z.object({ type: z.literal("pcbjam.editor.exec"), id, file: path, op: z.literal("update_pcb"), dryRun: z.boolean(), deleteUnused: z.boolean() }),
 ]);
 
 export const agentEditorCancelSchema = z.object({ type: z.literal("pcbjam.editor.cancel"), id });
@@ -75,10 +77,22 @@ export const agentReadResultSchema = z.union([
   errorResult,
 ]);
 
+/** One line of KiCad's Update PCB report, as its dialog lists it. */
+export const pcbUpdateLineSchema = z.object({ severity: z.enum(["error", "warning", "action", "info"]), text: z.string() });
+export const agentUpdatePcbResultSchema = z.union([
+  /** A dry run: what KiCad would change, and the lines the person must approve first. */
+  z.object({ status: z.literal("previewed"), report: z.array(pcbUpdateLineSchema), needsApproval: z.array(z.string()) }),
+  /** Applied as one undo step; `approved` lists what the person agreed to (empty when nothing needed it). */
+  z.object({ status: z.literal("applied"), report: z.array(pcbUpdateLineSchema), added: z.array(z.string()), approved: z.array(z.string()) }),
+  /** The person said no: nothing changed. */
+  z.object({ status: z.literal("declined"), needsApproval: z.array(z.string()) }),
+  errorResult,
+]);
+
 export const agentEditorResultSchema = z.object({
   type: z.literal("pcbjam.editor.result"),
   id,
-  result: z.union([agentApplyResultSchema, agentPlaceResultSchema, agentReadResultSchema]),
+  result: z.union([agentApplyResultSchema, agentPlaceResultSchema, agentReadResultSchema, agentUpdatePcbResultSchema]),
 });
 
 export type AgentEdit = z.infer<typeof agentEditSchema>;
@@ -89,6 +103,34 @@ export type AgentEditorResult = z.infer<typeof agentEditorResultSchema>;
 export type AgentApplyResult = z.infer<typeof agentApplyResultSchema>;
 export type AgentPlaceResult = z.infer<typeof agentPlaceResultSchema>;
 export type AgentReadResult = z.infer<typeof agentReadResultSchema>;
+export type PcbUpdateLine = z.infer<typeof pcbUpdateLineSchema>;
+export type AgentUpdatePcbResult = z.infer<typeof agentUpdatePcbResultSchema>;
+
+/**
+ * The changes an Update PCB would make on its own, without asking: footprints and nets
+ * added, new pins connected, a symbol's fields, value, reference or links carried over.
+ * KiCad's English report lines (pcbnew/netlist_reader/board_netlist_updater.cpp, dry run).
+ */
+const SAFE_CHANGES = [
+  /^Add \S+ \(footprint '/,
+  /^Add net /,
+  /^Connect \S+ pin \S+ to /,
+  /^Change \S+ value from /,
+  /^Change \S+ reference designator to /,
+  /^Update \S+ (fields|symbol association|sheetname|sheetfile|footprint filters|unit metadata)\b/,
+];
+
+/**
+ * The report's changes the person must approve before they are applied: everything that
+ * is not on the safe list. Removing footprints, swapping them, and moving pins, vias or
+ * zones to other nets can break what someone laid out; so does a line this list does not
+ * know (a newer KiCad, another language): asked, never assumed safe.
+ */
+export function pcbUpdateNeedsApproval(report: PcbUpdateLine[]): string[] {
+  return report
+    .filter((line) => line.severity === "action" && line.text.trim() && !SAFE_CHANGES.some((safe) => safe.test(line.text)))
+    .map((line) => line.text);
+}
 
 const toChat = z.discriminatedUnion("type", [agentEditorAttachSchema, agentEditorDetachSchema, agentEditorResultSchema]);
 export type AgentEditorToChat = z.infer<typeof toChat>;
