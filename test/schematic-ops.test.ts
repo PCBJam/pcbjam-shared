@@ -18,6 +18,8 @@ import {
   resolveNetJoins,
   SchematicOpError,
   setFieldEdit,
+  layoutIssues,
+  wireEdit,
   withDefinitions,
   type NetlistNet,
   type SchematicEdit,
@@ -362,6 +364,79 @@ describe("resolveNetJoins", () => {
   });
 });
 
+describe("tidier drawing (ai-chat 0003 step 5c)", () => {
+  // Q1 at 101.6,50.8: pin 1 (A) ends at 96.52,50.8 facing left, pin 3 (C) at 106.68,53.34 facing right.
+  const wires = (forms: Form[]) => ofType(forms, "wire").map((w) => (w.find((n) => isForm(n, "pts")) as Form).slice(1).map((xy) => (xy as string[]).slice(1).map(Number)));
+  const powerAt = (forms: Form[], value: string) => ofType(forms, "symbol").find((s) => prop(s, "Value") === value);
+
+  it("puts a power symbol on a sideways pin upright, on a short stub", () => {
+    const { doc } = fixture();
+    const { edit, connected } = connectEdit({ doc, pins: [{ ref: "Q1", pin: "1", net: "+3V3" }, { ref: "Q1", pin: "3", net: "GND" }] });
+    expect(connected.map((c) => c.how)).toEqual(["power", "power"]);
+    const forms = upserted(edit);
+    expect(wires(forms)).toEqual([
+      [[96.52, 50.8], [93.98, 50.8]],
+      [[106.68, 53.34], [109.22, 53.34]],
+    ]);
+    // Natural orientation (angle 0): the supply points up, the ground down, so they never meet.
+    expect(atOfForm(powerAt(forms, "+3V3")!)).toEqual([93.98, 50.8, 0]);
+    expect(atOfForm(powerAt(forms, "GND")!)).toEqual([109.22, 53.34, 0]);
+    // A pin that already points the symbol's way gets no stub: R3's top pin and +3V3.
+    expect(wires(upserted(connectEdit({ doc, pins: [{ ref: "R3", pin: "1", net: "+3V3" }] }).edit))).toEqual([]);
+  });
+
+  it("sees a stubbed power symbol as connected, moves it with the part, and removes it with the pin's wires", () => {
+    const { doc } = fixture();
+    const stubbed = roundTrip(doc, connectEdit({ doc, pins: [{ ref: "Q1", pin: "1", net: "+3V3" }] }).edit);
+    expect(connectEdit({ doc: stubbed, pins: [{ ref: "Q1", pin: "1", net: "+3V3" }] }).connected[0]!.how).toBe("already");
+
+    const moved = roundTrip(stubbed, movePartEdit({ doc: stubbed, moves: [{ ref: "Q1", at: [101.6, 76.2] }] }).edit);
+    const sheet = readSheet(moved);
+    // The old stub (96.52 → 93.98 at y 50.8) is gone, a new one hangs off the moved pin.
+    expect(sheet.wires.filter((w) => [w.a, w.b].some((p) => p[1] === 50.8 && (p[0] === 96.52 || p[0] === 93.98)))).toEqual([]);
+    const supply = sheet.symbols.find((s) => s.value === "+3V3" && s.pins.some((p) => p.at[0] === 93.98 && p.at[1] === 76.2));
+    expect(supply?.angle).toBe(0);
+
+    const gone = upserted(connectEdit({ doc: stubbed, pins: [{ ref: "Q1", pin: "1", net: null }] }).edit);
+    expect(gone).toEqual([]);
+    expect(connectEdit({ doc: stubbed, pins: [{ ref: "Q1", pin: "1", net: null }] }).edit.remove).toHaveLength(2); // the stub and the symbol
+  });
+
+  it("draws wires: straight, one bend away from parts, and a junction on another wire's middle", () => {
+    const { doc } = fixture();
+    // R3.1 (50.8,85.09) to R4.1 (63.5,85.09): in line.
+    expect(wireEdit({ doc, wires: [{ from: "R3.1", to: "R4.1" }] }).wired[0]!.points).toEqual([[50.8, 85.09], [63.5, 85.09]]);
+    // Q1.1 (96.52,50.8, facing left) to R2.2 (80.01,50.8)... in line too; to a point below: one bend, leaving Q1 outward.
+    const bent = wireEdit({ doc, wires: [{ from: "Q1.1", to: [88.9, 40.64] }] }).wired[0]!.points;
+    expect(bent).toEqual([[96.52, 50.8], [88.9, 50.8], [88.9, 40.64]]);
+    // To the middle of the wire w2 (88.9,50.8 → 88.9,60.96): KiCad connects it only with a junction.
+    const { edit } = wireEdit({ doc, wires: [{ from: "Q1.1", to: [88.9, 55.88] }] });
+    expect(ofType(upserted(edit), "junction").map(atOfForm)).toEqual([[88.9, 55.88]]);
+  });
+
+  it("connect `to` wires two pins instead of labelling them", () => {
+    const { doc } = fixture();
+    const { edit, connected } = connectEdit({ doc, pins: [{ ref: "R3", pin: "1", to: "R4.1" }] });
+    expect(connected).toEqual([{ pin: "R3.1", net: "R4.1", how: "wire" }]);
+    expect(ofType(upserted(edit), "label")).toEqual([]);
+    expect(ofType(upserted(edit), "wire")).toHaveLength(1);
+  });
+
+  it("names what an edit made untidy, and nothing that was there before", () => {
+    const { doc } = fixture();
+    // The old way (power symbols turned sideways on neighbouring pins) is gone; this edit is tidy.
+    expect(layoutIssues(doc, connectEdit({ doc, pins: [{ ref: "Q1", pin: "1", net: "+3V3" }, { ref: "Q1", pin: "3", net: "GND" }] }).edit)).toEqual([]);
+    // A part dropped onto R1.
+    const { edit } = placePartEdit({ doc, parts: [{ libId: "Test:R", at: [50.8, 50.8] }] });
+    expect(layoutIssues(doc, edit)).toEqual([expect.objectContaining({ issue: "overlap", items: expect.arrayContaining(["R6", "R1"]) })]);
+    // An item off the grid.
+    const label = `(label "X" (at 10.1 10.1 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "${id()}"))`;
+    expect(layoutIssues(doc, { label: "x", upsert: [{ sexpr: label }], remove: [], libSymbols: {} })).toEqual([
+      { issue: "off_grid", items: ["label X"], at: [10.1, 10.1] },
+    ]);
+  });
+});
+
 describe("withDefinitions", () => {
   it("carries the definition of every symbol an edit places, even one the sheet embeds", () => {
     const { doc } = fixture();
@@ -440,7 +515,7 @@ describe("movePartEdit", () => {
   it("moves and turns a part; its labels and power symbol follow its pins", () => {
     const f = fixture();
     const { edit, moved } = movePartEdit({ doc: f.doc, moves: [{ ref: "R1", at: [127, 76.2], angle: 90 }] });
-    expect(moved[0]).toMatchObject({ ref: "R1", at: [127, 76.2], angle: 90, followed: 2, wiresLeft: 0 });
+    expect(moved[0]).toMatchObject({ ref: "R1", at: [127, 76.2], angle: 90, followed: 2, rerouted: 0 });
     const after = roundTrip(f.doc, edit);
     const sheet = readSheet(after);
     const r1 = sheet.symbols.find((s) => s.ref === "R1")!;
@@ -458,9 +533,16 @@ describe("movePartEdit", () => {
     expect([Number(ref[1]), Number(ref[2])]).toEqual([127, 73.66]);
   });
 
-  it("counts wires it leaves behind", () => {
+  it("re-routes the wires on its pins from their new ends, so the part stays connected", () => {
     const f = fixture();
-    expect(movePartEdit({ doc: f.doc, moves: [{ ref: "R2", at: [76.2, 127] }] }).moved[0]!.wiresLeft).toBe(2);
+    const { edit, moved } = movePartEdit({ doc: f.doc, moves: [{ ref: "R2", at: [76.2, 127] }] });
+    expect(moved[0]!.rerouted).toBe(2);
+    const sheet = readSheet(roundTrip(f.doc, edit));
+    const r2 = sheet.symbols.find((s) => s.ref === "R2")!;
+    // Each pin end of R2 now has a wire, and the old runs' far ends (the MID label, the bend at 88.9) are still reached.
+    for (const pin of r2.pins) expect(sheet.wires.some((w) => [w.a, w.b].some((p) => p[0] === pin.at[0] && p[1] === pin.at[1]))).toBe(true);
+    expect(sheet.wires.some((w) => [w.a, w.b].some((p) => p[0] === 66.04 && p[1] === 50.8))).toBe(true);
+    expect(sheet.wires.some((w) => [w.a, w.b].some((p) => p[0] === 88.9 && p[1] === 50.8))).toBe(true);
   });
 });
 
