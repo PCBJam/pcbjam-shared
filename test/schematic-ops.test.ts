@@ -590,6 +590,10 @@ describe("links and lookalikes, second review (ai-chat 0006 S4, S21)", () => {
     expect(prop(upserted(edit)[0]!, "Datasheet")).toBe("~");
     expect(edit.libSymbols["Evil:R"]).not.toContain("javascript:");
     expect(placementBlob({ def: evil, libId: "Test:R" }).sexpr).not.toContain("javascript:");
+    // A library field KiCad would expand into anything is left empty; a click placement checks its value too.
+    const expanding = parseSexpr(DEF_R.replace('(property "Value" "R"', '(property "Value" "${Datasheet}"'))[0] as Form;
+    expect(prop(upserted(placePartEdit({ doc, parts: [{ libId: "Exp:R", def: expanding }] }).edit)[0]!, "Value")).toBe("");
+    expect(errorOf(() => placementBlob({ def: evil, libId: "Test:R", value: "javascript:alert(1)//https://x" })).code).toBe("INVALID");
     const virtual = parseSexpr(DEF_R.replace('(property "Reference" "R"', '(property "Reference" "#R"'))[0] as Form;
     expect(errorOf(() => placePartEdit({ doc, parts: [{ libId: "Test:Rv", def: virtual }] })).message).toMatch(/power symbol/);
   });

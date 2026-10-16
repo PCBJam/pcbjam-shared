@@ -40,12 +40,13 @@ export function fieldValueProblem(name: string, value: string): string | null {
 
 /**
  * A library field's value as a placed part gets it: a Datasheet KiCad should not open
- * becomes `~`, and another field holding a link that is not a plain web link, or
- * starting with a script scheme, is left empty. Library text comes from whoever wrote
- * the library.
+ * becomes `~`; another field that KiCad would expand or unescape (it could turn into any
+ * link), that holds a link other than a plain web link, or that starts with a script
+ * scheme, is left empty. Library text comes from whoever wrote the library.
  */
 export function safeLibraryField(name: string, value: string): string {
   if (name.toLowerCase() === "datasheet") return datasheetOk(value) && !EXPANDS.test(value) ? value : "~";
+  if (EXPANDS.test(value)) return "";
   if (/^\s*(javascript|data|vbscript|file):/i.test(value)) return "";
   if (/:\/\//.test(value) && !WEB_LINK.test(value)) return "";
   return value;

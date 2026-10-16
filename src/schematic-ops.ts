@@ -1052,10 +1052,14 @@ export function placePartEdit(input: { doc: KicadDoc; parts: PlacePart[]; powerD
  */
 export function placementBlob(input: { def: Form; libId: string; value?: string; footprint?: string; uuid?: string }): { label: string; sexpr: string } {
   const { lib, item } = checkLibId(input.libId);
-  return buildSymbolClipboard(input.def, lib, item, input.uuid ?? newUuid(), {
-    value: input.value === undefined ? undefined : cleanText(input.value, "value"),
-    footprint: input.footprint === undefined ? undefined : cleanText(input.footprint, "footprint", 200, true),
-  });
+  const value = input.value === undefined ? undefined : cleanText(input.value, "value");
+  const footprint = input.footprint === undefined ? undefined : cleanText(input.footprint, "footprint", 200, true);
+  // The same field rules as placePartEdit: a click placement is the other way in (ai-chat 0006 S4).
+  for (const [field, text] of [["Value", value], ["Footprint", footprint]] as const) {
+    const problem = text === undefined ? null : fieldValueProblem(field, text);
+    if (problem) throw new SchematicOpError("INVALID", problem);
+  }
+  return buildSymbolClipboard(input.def, lib, item, input.uuid ?? newUuid(), { value, footprint });
 }
 
 // ── Removing parts ───────────────────────────────────────────────────────────
