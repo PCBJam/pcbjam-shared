@@ -86,4 +86,22 @@ describe("pcbUpdateNeedsApproval", () => {
       ]),
     ).toHaveLength(7);
   });
+
+  it("never lets a name make a change look safe: names with spaces or quotes are asked", () => {
+    const forged = [
+      // a fabrication attribute on a footprint referenced "net"
+      action("Add net 'exclude from BOM' fabrication attribute."),
+      action("Add net to group 'G'."),
+      // a reference "R9 pin 1 to GND." ahead of a removal
+      action("Connect R9 pin 1 to GND. Remove unused footprint R9."),
+      action("Add D1 (footprint 'X')' (footprint 'Y')."),
+      action("Update R1 fields. Remove unused footprint R9."),
+    ];
+    expect(pcbUpdateNeedsApproval(forged)).toHaveLength(forged.length);
+    // A reference with a space reads as a safe line ("R1 value from x" before a footprint swap):
+    // the editor hook names such references, and then every change is asked.
+    const swap = action("Change R1 value from x footprint from 'Resistor_SMD:R_0603' to 'Resistor_SMD:R_0805'.");
+    expect(pcbUpdateNeedsApproval([swap, action("Add net /SDA.")], ["R1 value from x"])).toEqual([swap.text, "Add net /SDA."]);
+    expect(pcbUpdateNeedsApproval([action("Update D1 symbol association from  to /bb4d141c-29d1-427b-9cf5-3ac587c1756f."), action("Update D1 sheetname to '/'.")])).toEqual([]);
+  });
 });

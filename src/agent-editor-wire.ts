@@ -109,27 +109,42 @@ export type AgentUpdatePcbResult = z.infer<typeof agentUpdatePcbResultSchema>;
 /**
  * The changes an Update PCB would make on its own, without asking: footprints and nets
  * added, new pins connected, a symbol's fields, value, reference or links carried over.
- * KiCad's English report lines (pcbnew/netlist_reader/board_netlist_updater.cpp, dry run).
+ * KiCad's English report lines (pcbnew/netlist_reader/board_netlist_updater.cpp, dry run),
+ * matched WHOLE. The names in them (references, pins, nets) come from the schematic, which
+ * the agent edits: a name may not hold a space or a quote here, so it cannot make another
+ * line look like one of these. A line with such a name is asked. A reference is the one
+ * name a line cannot bound (a reference "R1 value from x" turns a footprint swap into
+ * "Change R1 value from x footprint from …"), so the editor hook reports references with a
+ * space or a quote (`oddNames`), and then every change is asked.
  */
+const NAME = String.raw`[^\s'"]+`;
+const QUOTED = String.raw`'[^']*'`;
 const SAFE_CHANGES = [
-  /^Add \S+ \(footprint '/,
-  /^Add net /,
-  /^Connect \S+ pin \S+ to /,
-  /^Change \S+ value from /,
-  /^Change \S+ reference designator to /,
-  /^Update \S+ (fields|symbol association|sheetname|sheetfile|footprint filters|unit metadata)\b/,
-];
+  `Add ${NAME} \\(footprint ${QUOTED}\\)`,
+  `Add net ${NAME}`,
+  `Connect ${NAME} pin ${NAME} to ${NAME}`,
+  `Change ${NAME} value from .* to .*`,
+  `Change ${NAME} reference designator to ${NAME}`,
+  `Update ${NAME} (fields|unit metadata)`,
+  `Update ${NAME} symbol association from (?:${NAME})? to ${NAME}`,
+  `Update ${NAME} (sheetname|sheetfile|footprint filters) to ${QUOTED}`,
+].map((line) => new RegExp(`^${line}\\.$`));
+
+/** The report's change lines (KiCad's `action` lines), as the editor hook compares them. */
+export function pcbUpdateActions(report: PcbUpdateLine[]): string[] {
+  return report.filter((line) => line.severity === "action" && line.text.trim()).map((line) => line.text);
+}
 
 /**
  * The report's changes the person must approve before they are applied: everything that
  * is not on the safe list. Removing footprints, swapping them, and moving pins, vias or
  * zones to other nets can break what someone laid out; so does a line this list does not
- * know (a newer KiCad, another language): asked, never assumed safe.
+ * know (a newer KiCad, another language, a name with a space): asked, never assumed safe.
+ * With `oddNames` (references holding a space or a quote) every change is asked.
  */
-export function pcbUpdateNeedsApproval(report: PcbUpdateLine[]): string[] {
-  return report
-    .filter((line) => line.severity === "action" && line.text.trim() && !SAFE_CHANGES.some((safe) => safe.test(line.text)))
-    .map((line) => line.text);
+export function pcbUpdateNeedsApproval(report: PcbUpdateLine[], oddNames: string[] = []): string[] {
+  const actions = pcbUpdateActions(report);
+  return oddNames.length ? actions : actions.filter((text) => !SAFE_CHANGES.some((safe) => safe.test(text)));
 }
 
 const toChat = z.discriminatedUnion("type", [agentEditorAttachSchema, agentEditorDetachSchema, agentEditorResultSchema]);
