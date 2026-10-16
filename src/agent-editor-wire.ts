@@ -43,12 +43,27 @@ export const agentEditorAttachSchema = z.object({
 
 export const agentEditorDetachSchema = z.object({ type: z.literal("pcbjam.editor.detach") });
 
+/**
+ * Where an exec is meant to run: the tab refuses it unless it shows exactly
+ * this project, working copy (room segment, null = default) and file
+ * (ai-chat 0006 A3). Optional on the wire only so an older host's frames
+ * still parse; the tab refuses a frame without them.
+ */
+const execTarget = {
+  type: z.literal("pcbjam.editor.exec"),
+  id,
+  scope: z.string().min(1).max(200).optional(),
+  project: z.string().min(1).max(200).optional(),
+  copy: z.string().max(100).nullable().optional(),
+  file: path,
+};
+
 export const agentEditorExecSchema = z.discriminatedUnion("op", [
-  z.object({ type: z.literal("pcbjam.editor.exec"), id, file: path, op: z.literal("apply"), edit: agentEditSchema }),
-  z.object({ type: z.literal("pcbjam.editor.exec"), id, file: path, op: z.literal("place"), blob: z.object({ sexpr: z.string() }) }),
-  z.object({ type: z.literal("pcbjam.editor.exec"), id, file: path, op: z.literal("read") }),
+  z.object({ ...execTarget, op: z.literal("apply"), edit: agentEditSchema }),
+  z.object({ ...execTarget, op: z.literal("place"), blob: z.object({ sexpr: z.string() }) }),
+  z.object({ ...execTarget, op: z.literal("read") }),
   // KiCad's Update PCB from Schematic on the open board (step 5b): a dry run, or the real one.
-  z.object({ type: z.literal("pcbjam.editor.exec"), id, file: path, op: z.literal("update_pcb"), dryRun: z.boolean(), deleteUnused: z.boolean() }),
+  z.object({ ...execTarget, op: z.literal("update_pcb"), dryRun: z.boolean(), deleteUnused: z.boolean() }),
 ]);
 
 export const agentEditorCancelSchema = z.object({ type: z.literal("pcbjam.editor.cancel"), id });
@@ -108,7 +123,9 @@ export type AgentUpdatePcbResult = z.infer<typeof agentUpdatePcbResultSchema>;
 
 /**
  * The changes an Update PCB would make on its own, without asking: footprints and nets
- * added, new pins connected, a symbol's fields, value, reference or links carried over.
+ * added, new pins connected, a symbol's fields, value or links carried over. Not a
+ * reference change: renaming a placed footprint is how a later "Remove unused footprint
+ * TP1." hides that TP1 is the MCU (ai-chat 0006 S6), so a rename is asked.
  * KiCad's English report lines (pcbnew/netlist_reader/board_netlist_updater.cpp, dry run),
  * matched WHOLE. The names in them (references, pins, nets) come from the schematic, which
  * the agent edits: a name may not hold a space or a quote here, so it cannot make another
@@ -124,7 +141,6 @@ const SAFE_CHANGES = [
   `Add net ${NAME}`,
   `Connect ${NAME} pin ${NAME} to ${NAME}`,
   `Change ${NAME} value from .* to .*`,
-  `Change ${NAME} reference designator to ${NAME}`,
   `Update ${NAME} (fields|unit metadata)`,
   `Update ${NAME} symbol association from (?:${NAME})? to ${NAME}`,
   `Update ${NAME} (sheetname|sheetfile|footprint filters) to ${QUOTED}`,
@@ -140,11 +156,51 @@ export function pcbUpdateActions(report: PcbUpdateLine[]): string[] {
  * is not on the safe list. Removing footprints, swapping them, and moving pins, vias or
  * zones to other nets can break what someone laid out; so does a line this list does not
  * know (a newer KiCad, another language, a name with a space): asked, never assumed safe.
- * With `oddNames` (references holding a space or a quote) every change is asked.
+ * With `oddNames` (references holding a space or a quote) every change is asked, and so
+ * with `null`: an editor build too old to report them (ai-chat 0006 S9).
  */
-export function pcbUpdateNeedsApproval(report: PcbUpdateLine[], oddNames: string[] = []): string[] {
+export function pcbUpdateNeedsApproval(report: PcbUpdateLine[], oddNames: string[] | null = []): string[] {
   const actions = pcbUpdateActions(report);
-  return oddNames.length ? actions : actions.filter((text) => !SAFE_CHANGES.some((safe) => safe.test(text)));
+  return oddNames === null || oddNames.length ? actions : actions.filter((text) => !SAFE_CHANGES.some((safe) => safe.test(text)));
+}
+
+/**
+ * The same change lines, each the same number of times. Approval is bound to exactly
+ * what the person saw: a set check let a second "Remove unused footprint R9." through
+ * on one approved line (ai-chat 0006 S6).
+ */
+export function sameChanges(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const x = [...a].sort();
+  const y = [...b].sort();
+  return x.every((line, i) => line === y[i]);
+}
+
+/** What can break a layout, most first: how the approval card orders and counts the changes. */
+const RISK_KINDS: ReadonlyArray<{ kind: string; test: RegExp }> = [
+  { kind: "footprints removed", test: /^Remove unused footprint\b/ },
+  // KiCad's "Change %s footprint from '%s' to '%s'.", anchored: a value line can hold the words too.
+  { kind: "footprints swapped", test: /^Change [^\s'"]+ footprint from '/ },
+  { kind: "renamed", test: /^Change [^\s'"]+ reference designator to / },
+  { kind: "reconnected", test: /^Reconnect\b/ },
+  { kind: "disconnected", test: /^Disconnect\b/ },
+  { kind: "other removals", test: /^Remove\b/ },
+];
+
+/**
+ * The changes to approve, riskiest first (KiCad lists removals last), with a count per
+ * kind; the card shows every line (ai-chat 0006 S5).
+ */
+export function approvalOrder(changes: readonly string[]): { lines: string[]; counts: Array<{ kind: string; count: number }> } {
+  const rank = (line: string) => {
+    const i = RISK_KINDS.findIndex((k) => k.test.test(line));
+    return i < 0 ? RISK_KINDS.length : i;
+  };
+  const ranked = changes.map((line, i) => ({ line, i, r: rank(line) })).sort((a, b) => a.r - b.r || a.i - b.i);
+  const counts = [...RISK_KINDS.map((k) => k.kind), "other changes"]
+    .map((kind, r) => ({ kind, count: ranked.filter((x) => x.r === r).length }))
+    .filter((c) => c.count > 0);
+  return { lines: ranked.map((x) => x.line), counts };
 }
 
 const toChat = z.discriminatedUnion("type", [agentEditorAttachSchema, agentEditorDetachSchema, agentEditorResultSchema]);

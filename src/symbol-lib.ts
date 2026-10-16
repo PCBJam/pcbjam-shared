@@ -9,6 +9,7 @@
  * (`plugin-platform/examples/external-symbol-import-source/src/logic/`), which
  * stays a separate download; the editor must not import a shipped example.
  */
+import { safeLibraryField } from "./kicad-text-safety.js";
 import { parseSexpr, printSexpr, type SNode } from "./sexpr.js";
 
 /** A list node whose head is a bare tag. */
@@ -171,6 +172,21 @@ export function wrapSymbolLib(def: Form): string {
 }
 
 /**
+ * A library definition as a sheet may embed it: its properties pass
+ * `safeLibraryField`, so a Datasheet KiCad should not open becomes `~`
+ * (ai-chat 0006 S4). The rest is the library's, untouched.
+ */
+export function safeDefinition(def: Form): Form {
+  return def.map((node) => {
+    if (!isForm(node, "property")) return node;
+    const name = unquote(node[1]) ?? "";
+    const value = unquote(node[2]) ?? "";
+    const safe = safeLibraryField(name, value);
+    return safe === value ? node : [node[0], node[1], quote(safe), ...node.slice(3)];
+  }) as Form;
+}
+
+/**
  * Clipboard text for the native placement tool: the definition under its
  * library id plus one instance at the origin. Reference gets a `?` suffix so
  * the editor annotates it; Value defaults to the symbol name; Footprint and
@@ -193,9 +209,10 @@ export function buildSymbolClipboard(
     `(property "Reference" ${quote(reference)} (at 2.54 -1.27 0) ${effects})`,
     `(property "Value" ${quote(overrides.value ?? property("Value", name))} (at 2.54 1.27 0) ${effects})`,
     `(property "Footprint" ${quote(overrides.footprint ?? property("Footprint"))} (at 0 0 0) (hide yes) ${effects})`,
-    `(property "Datasheet" ${quote(property("Datasheet"))} (at 0 0 0) (hide yes) ${effects})`,
+    // The library's Datasheet, unless it is a link KiCad should not open (ai-chat 0006 S4).
+    `(property "Datasheet" ${quote(safeLibraryField("Datasheet", property("Datasheet")))} (at 0 0 0) (hide yes) ${effects})`,
   ];
-  const definition: Form = ["symbol", quote(libId), ...def.slice(2)];
+  const definition: Form = ["symbol", quote(libId), ...safeDefinition(def).slice(2)];
   const instance = `(symbol (lib_id ${quote(libId)}) (at 0 0 0) (unit 1)
     (exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no)
     (uuid ${quote(uuid)}) ${properties.join("\n")})`;

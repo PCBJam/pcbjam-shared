@@ -23,8 +23,9 @@ import {
   type KicadDoc,
   type Slot,
 } from "./kicad-doc.js";
+import { fieldValueProblem, INVISIBLE, NAME_LOOKALIKE, REFERENCE, safeLibraryField } from "./kicad-text-safety.js";
 import { parseSexpr, printSexpr, type SNode } from "./sexpr.js";
-import { buildSymbolClipboard, isForm, quote, unquote, type Form } from "./symbol-lib.js";
+import { buildSymbolClipboard, isForm, quote, safeDefinition, unquote, type Form } from "./symbol-lib.js";
 import {
   atOf,
   fmt,
@@ -335,13 +336,37 @@ function onSegmentInterior(p: Point, a: Point, b: Point): boolean {
   );
 }
 
-/** Text from outside as a KiCad string: no control characters, trimmed, bounded. */
+/**
+ * Text from outside as a KiCad string: no control characters (C0, DEL, C1),
+ * trimmed, bounded. Invisible characters (zero-width, bidi overrides, blank
+ * fillers; `INVISIBLE`) are refused: they make two references or values look
+ * the same (ai-chat 0006 S21).
+ */
 export function cleanText(text: string, what: string, max = 120, allowEmpty = false): string {
-  // eslint-disable-next-line no-control-regex
-  const clean = String(text ?? "").replace(/[\u0000-\u001f\u007f]/g, "").trim();
+  const clean = String(text ?? "").replace(/\p{Cc}/gu, "").trim();
+  if (INVISIBLE.test(clean)) throw new SchematicOpError("INVALID", `The ${what} has invisible characters.`);
   if (!clean && !allowEmpty) throw new SchematicOpError("INVALID", `The ${what} is empty.`);
   if (clean.length > max) throw new SchematicOpError("INVALID", `The ${what} is longer than ${max} characters.`);
   return clean;
+}
+
+/**
+ * A lib id KiCad's parser accepts (`LIB_ID::Parse`, lib_id.cpp): "Lib:Item",
+ * the library without a backslash or control characters, the item without a
+ * backslash, `<`, `>`, `"`, tabs, line breaks or a second `:`. KiCad refuses
+ * the whole sheet otherwise (ai-chat 0006 S20).
+ */
+export function checkLibId(libId: string): { lib: string; item: string } {
+  const at = libId.indexOf(":");
+  const lib = libId.slice(0, at);
+  const item = libId.slice(at + 1);
+  if (at <= 0 || !item) throw new SchematicOpError("INVALID", `A lib id is "Library:Symbol", e.g. "Device:R" (got "${libId}").`);
+  // KiCad's rules, plus `"` in the library (the sheet would key the definition by the escaped
+  // name and lose its pins) and invisible characters anywhere.
+  if (/[\p{Cc}\\"]/u.test(lib) || /[\p{Cc}:\\<>"]/u.test(item) || INVISIBLE.test(libId)) {
+    throw new SchematicOpError("INVALID", `KiCad does not accept the lib id "${libId}".`);
+  }
+  return { lib, item };
 }
 
 /** Names KiCad's power library covers: `+3V3`, `-12V`, `GND`, `VCC`, … */
@@ -450,7 +475,9 @@ class EditBuilder {
   /** Make sure the sheet will embed `def` as `libId`. */
   embed(libId: string, def: Form): void {
     if (this.sheet.defs.has(libId) || this.libSymbols[libId]) return;
-    this.libSymbols[libId] = printSexpr(["symbol", quote(libId), ...def.slice(2)]);
+    checkLibId(libId);
+    // No library link KiCad should not open goes into the sheet (ai-chat 0006 S4).
+    this.libSymbols[libId] = printSexpr(["symbol", quote(libId), ...safeDefinition(def).slice(2)]);
     this.sheet.defs.set(libId, def);
   }
 
@@ -514,7 +541,8 @@ function symbolForm(spec: InstanceSpec, instance: Sheet["instance"]): SNode {
     if (!isForm(node, "property")) continue;
     const name = unquote(node[1]) ?? "";
     if (name.startsWith("ki_")) continue;
-    let value = unquote(node[2]) ?? "";
+    // The library's text, but no link KiCad should not open (ai-chat 0006 S4).
+    let value = safeLibraryField(name, unquote(node[2]) ?? "");
     if (name === "Reference") value = spec.ref;
     if (name === "Value" && spec.value !== undefined) value = spec.value;
     if (name === "Footprint" && spec.footprint !== undefined) value = spec.footprint;
@@ -659,6 +687,8 @@ function attachPin(
   }
 
   const net = cleanText(target.net, "net name");
+  // "VCC 3V3" with a no-break space is another net that looks the same.
+  if (NAME_LOOKALIKE.test(net)) throw new SchematicOpError("INVALID", `The net name ${JSON.stringify(net)} has a space other than a plain one, or an invisible character.`);
   if (labelsHere.some((l) => l.name === net) || powerHere.some((s) => s.value === net)) return { pin: pinName, net, how: "already" };
 
   const power = ctx.powerDefs[net] ?? embeddedPower(sheet, net);
@@ -960,7 +990,7 @@ export function placePartEdit(input: { doc: KicadDoc; parts: PlacePart[]; powerD
   })();
   const placed = input.parts.map((part): PlacedReport => {
     const libId = cleanText(part.libId, "lib id", 200);
-    if (!libId.includes(":")) throw new SchematicOpError("INVALID", `A lib id is "Library:Symbol", e.g. "Device:R" (got "${libId}").`);
+    checkLibId(libId);
     const def = part.def ?? b.sheet.defs.get(libId);
     if (!def) throw new SchematicOpError("NO_DEFINITION", `The sheet does not embed ${libId}; get it from the library first.`);
     b.embed(libId, def);
@@ -977,6 +1007,14 @@ export function placePartEdit(input: { doc: KicadDoc; parts: PlacePart[]; powerD
     }
     const value = part.value === undefined ? undefined : cleanText(part.value, "value");
     const footprint = part.footprint === undefined ? undefined : cleanText(part.footprint, "footprint", 200, true);
+    for (const [field, text] of [["Value", value], ["Footprint", footprint]] as const) {
+      const problem = text === undefined ? null : fieldValueProblem(field, text);
+      if (problem) throw new SchematicOpError("INVALID", problem);
+    }
+    // A "#" reference is virtual in KiCad (no BOM, no board): only a power symbol may have one.
+    if (refPrefix(def).startsWith("#") && !isPowerDef(def)) {
+      throw new SchematicOpError("INVALID", `${libId} is not a power symbol, but its reference starts with "#": KiCad would leave it off the board.`);
+    }
     const ref = b.nextRef(refPrefix(def));
     const uuid = newUuid();
     b.upsert(uuid, symbolForm({ libId, def, ref, value, footprint, at, angle, mirror, uuid }, b.sheet.instance));
@@ -1013,9 +1051,8 @@ export function placePartEdit(input: { doc: KicadDoc; parts: PlacePart[]; powerD
  * Footprint set when given.
  */
 export function placementBlob(input: { def: Form; libId: string; value?: string; footprint?: string; uuid?: string }): { label: string; sexpr: string } {
-  const at = input.libId.indexOf(":");
-  if (at <= 0 || at === input.libId.length - 1) throw new SchematicOpError("INVALID", `A lib id is "Library:Symbol" (got "${input.libId}").`);
-  return buildSymbolClipboard(input.def, input.libId.slice(0, at), input.libId.slice(at + 1), input.uuid ?? newUuid(), {
+  const { lib, item } = checkLibId(input.libId);
+  return buildSymbolClipboard(input.def, lib, item, input.uuid ?? newUuid(), {
     value: input.value === undefined ? undefined : cleanText(input.value, "value"),
     footprint: input.footprint === undefined ? undefined : cleanText(input.footprint, "footprint", 200, true),
   });
@@ -1084,8 +1121,17 @@ export function setFieldEdit(input: { doc: KicadDoc; changes: FieldChange[] }): 
     const asked = cleanText(change.field, "field name", 60);
     const name = KNOWN_FIELDS.find((f) => f.toLowerCase() === asked.toLowerCase()) ?? asked;
     const value = name === "Reference" ? cleanText(change.value, "reference", 30) : cleanText(change.value, `${name} value`, 500, true);
+    // Links KiCad would open in the editor's origin, and text it would expand first (ai-chat 0006 S4).
+    const problem = name === "Reference" ? null : fieldValueProblem(name, value);
+    if (problem) throw new SchematicOpError("INVALID", problem);
     if (name === "Reference") {
-      if (/\s/.test(value)) throw new SchematicOpError("INVALID", `A reference has no spaces (got "${value}").`);
+      // ASCII letters, digits and `_ + - . ?`: no spaces, quotes or lookalikes (Update PCB's report
+      // quotes names, and an odd reference makes every line of it asked).
+      if (!REFERENCE.test(value)) {
+        throw new SchematicOpError("INVALID", `A reference is letters, digits and _ + - . ? only, no spaces or quotes (got ${JSON.stringify(value)}).`);
+      }
+      // KiCad treats "#" references as virtual: left out of the BOM and the board.
+      if (value.startsWith("#") && !symbol.power) throw new SchematicOpError("INVALID", `Only power symbols have references starting with "#" (got "${value}").`);
       if (sheet.symbols.some((s) => s.uuid !== symbol.uuid && s.ref.toLowerCase() === value.toLowerCase())) {
         throw new SchematicOpError("INVALID", `${value} is already used on this sheet.`);
       }

@@ -509,6 +509,125 @@ describe("setFieldEdit", () => {
     const { doc } = fixture();
     expect(errorOf(() => setFieldEdit({ doc, changes: [{ ref: "R1", field: "Reference", value: "R2" }] })).code).toBe("INVALID");
   });
+
+  // ai-chat 0006 S4, S21: what a stranger's text could steer the model to write.
+  it.each(["javascript:alert(1)", " JavaScript:fetch('/api/me')", "data:text/html,<b>x</b>", "file:///etc/passwd", "${URL}", "vbscript:x"])(
+    "refuses the Datasheet %s",
+    (value) => {
+      const { doc } = fixture();
+      expect(errorOf(() => setFieldEdit({ doc, changes: [{ ref: "R1", field: "Datasheet", value }] })).code).toBe("INVALID");
+    },
+  );
+
+  it.each(["", "~", "https://example.com/r.pdf", "http://example.com/r.pdf", "docs/r1.pdf", "kicad-embed://r1.pdf"])("takes the Datasheet %j", (value) => {
+    const { doc } = fixture();
+    expect(setFieldEdit({ doc, changes: [{ ref: "R1", field: "datasheet", value }] }).changed[0]!.value).toBe(value);
+  });
+
+  it("refuses invisible characters and a virtual reference on a part", () => {
+    const { doc } = fixture();
+    expect(errorOf(() => setFieldEdit({ doc, changes: [{ ref: "R1", field: "Reference", value: "R2​" }] })).message).toMatch(/invisible/);
+    expect(errorOf(() => setFieldEdit({ doc, changes: [{ ref: "R1", field: "Value", value: "10k‮" }] })).message).toMatch(/invisible/);
+    expect(errorOf(() => setFieldEdit({ doc, changes: [{ ref: "R1", field: "Reference", value: "#R9" }] })).message).toMatch(/power symbols/);
+    for (const value of ["R'9", 'R"9', "R\\9"]) {
+      expect(errorOf(() => setFieldEdit({ doc, changes: [{ ref: "R1", field: "Reference", value }] })).message).toMatch(/quotes/);
+    }
+    // A power symbol keeps its "#" reference.
+    expect(setFieldEdit({ doc, changes: [{ ref: "#PWR01", field: "Reference", value: "#PWR09" }] }).changed[0]!.ref).toBe("#PWR09");
+  });
+});
+
+describe("links and lookalikes, second review (ai-chat 0006 S4, S21)", () => {
+  const set = (doc: KicadDoc, field: string, value: string, ref = "R1") => setFieldEdit({ doc, changes: [{ ref, field, value }] });
+
+  it.each([
+    ["Datasheet", "javascript{colon}alert(1)"],
+    ["Datasheet", "{dollar}{Description}"],
+    ["Datasheet", "$(MY_LINK)"],
+    ["Datasheet", "@{lower(X)}"],
+    ["Datasheet", "https://x/{dollar}"],
+    ["Datasheet", "../other/secret.html"],
+    ["Value", "javascript:alert(1)//https://x"],
+    ["Description", "see https://example.com for details"],
+    ["Description", "${Datasheet}"],
+    ["MPN", "{colon}"],
+    ["Sim.Library", "models/x.lib"],
+  ])("refuses %s = %j", (field, value) => {
+    const { doc } = fixture();
+    expect(errorOf(() => set(doc, field, value)).code).toBe("INVALID");
+  });
+
+  it("takes plain links and plain text", () => {
+    const { doc } = fixture();
+    expect(set(doc, "Datasheet", "https://www.ti.com/lit/ds/symlink/lm358.pdf?ts=1#page=3").changed[0]!.value).toContain("ti.com");
+    expect(set(doc, "MPN", "RC0603FR-0710KL").changed[0]!.value).toBe("RC0603FR-0710KL");
+    expect(set(doc, "Description", "خروجی‌ها").changed[0]!.value).toBe("خروجی‌ها"); // ZWNJ is writing, not a trick
+  });
+
+  it("strips C1 controls and refuses blank fillers", () => {
+    const { doc } = fixture();
+    expect(set(doc, "Value", "10k\u0085").changed[0]!.value).toBe("10k");
+    for (const filler of ["ㅤ", "ᅟ", "ﾠ", "͏", "⠀", " "]) {
+      expect(errorOf(() => set(doc, "Value", `10k${filler}x`)).message).toMatch(/invisible/);
+    }
+  });
+
+  it("refuses net names with a space other than a plain one", () => {
+    const { doc } = fixture();
+    expect(errorOf(() => connectEdit({ doc, pins: [{ ref: "R2", pin: "1", net: "VCC 3V3" }] })).code).toBe("INVALID");
+    expect(connectEdit({ doc, pins: [{ ref: "R2", pin: "1", net: "VCC 3V3" }] }).connected[0]!.net).toBe("VCC 3V3");
+  });
+
+  it("refuses references outside ASCII letters, digits and _ + - . ?", () => {
+    const { doc } = fixture();
+    for (const value of ["R2 ", "R 2", "Ｒ2", "R2́"]) expect(errorOf(() => set(doc, "Reference", value)).code).toBe("INVALID");
+  });
+
+  it("places a library part without the library's script link, and refuses a virtual reference on a non-power part", () => {
+    const { doc } = fixture();
+    const evil = parseSexpr(DEF_R.replace('(property "Datasheet" "~"', '(property "Datasheet" "javascript:alert(1)"'))[0] as Form;
+    const { edit } = placePartEdit({ doc, parts: [{ libId: "Evil:R", def: evil }] });
+    expect(prop(upserted(edit)[0]!, "Datasheet")).toBe("~");
+    expect(edit.libSymbols["Evil:R"]).not.toContain("javascript:");
+    expect(placementBlob({ def: evil, libId: "Test:R" }).sexpr).not.toContain("javascript:");
+    const virtual = parseSexpr(DEF_R.replace('(property "Reference" "R"', '(property "Reference" "#R"'))[0] as Form;
+    expect(errorOf(() => placePartEdit({ doc, parts: [{ libId: "Test:Rv", def: virtual }] })).message).toMatch(/power symbol/);
+  });
+
+  it("refuses a NaN angle and a quote in the library name", () => {
+    const { doc } = fixture();
+    expect(() => placePartEdit({ doc, parts: [{ libId: "Test:R", angle: Number.NaN }] })).toThrow(RangeError);
+    const def = parseSexpr(DEF_R)[0] as Form;
+    expect(errorOf(() => placePartEdit({ doc, parts: [{ libId: 'Te"st:R', def }] })).code).toBe("INVALID");
+  });
+});
+
+describe("what KiCad cannot load (ai-chat 0006 S18, S20)", () => {
+  it("refuses a non-finite position", () => {
+    const { doc } = fixture();
+    expect(() => placePartEdit({ doc, parts: [{ libId: "Test:R", at: [Number.POSITIVE_INFINITY, 0] }] })).toThrow(RangeError);
+    expect(() => placePartEdit({ doc, parts: [{ libId: "Test:R", at: [0, JSON.parse("1e400") as number] }] })).toThrow(RangeError);
+    expect(() => movePartEdit({ doc, moves: [{ ref: "R1", at: [Number.NaN, 0] }] })).toThrow(RangeError);
+  });
+
+  it.each(['Lib:R<">', "Lib:R\\x", "Lib:R:x", "Li\\b:R", ":R", "Lib:"])("refuses the lib id %j", (libId) => {
+    const { doc } = fixture();
+    const def = parseSexpr(DEF_R)[0] as Form;
+    expect(errorOf(() => placePartEdit({ doc, parts: [{ libId, def }] })).code).toBe("INVALID");
+    expect(errorOf(() => placementBlob({ def, libId })).code).toBe("INVALID");
+  });
+
+  it("refuses a tab in a lib id it is handed as is", () => {
+    const def = parseSexpr(DEF_R)[0] as Form;
+    expect(errorOf(() => placementBlob({ def, libId: "Lib:R\tx" })).code).toBe("INVALID");
+  });
+
+  it("takes a lib id with spaces and dots, as KiCad does", () => {
+    const { doc } = fixture();
+    const def = parseSexpr(DEF_R)[0] as Form;
+    const { edit } = placePartEdit({ doc, parts: [{ libId: "My Lib:R 0603.1", def }] });
+    expect(Object.keys(edit.libSymbols)).toEqual(["My Lib:R 0603.1"]);
+  });
 });
 
 describe("movePartEdit", () => {

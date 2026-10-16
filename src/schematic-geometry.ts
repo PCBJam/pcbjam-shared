@@ -33,12 +33,24 @@ export function round4(v: number): number {
   return r === 0 ? 0 : r;
 }
 
-/** A number as the file writes it: `2.54`, `-1.27`, `100`. */
-export const fmt = (v: number): string => String(round4(v));
+/**
+ * A coordinate as the file may hold it: finite and within a kilometre.
+ * `Infinity` (JSON `1e400`) would be written as `(at Infinity 0 0)`, which KiCad
+ * cannot load (ai-chat 0006 S18); a library with a pin at 1e300 is refused too.
+ */
+function finite(v: number): number {
+  if (!Number.isFinite(v) || Math.abs(v) > 1e6) throw new RangeError(`${v} is not a coordinate on a sheet`);
+  return v;
+}
 
-export const snap = (v: number, grid = GRID): number => round4(Math.round(v / grid) * grid);
+/** A number as the file writes it: `2.54`, `-1.27`, `100`. */
+export const fmt = (v: number): string => String(round4(finite(v)));
+
+export const snap = (v: number, grid = GRID): number => round4(Math.round(finite(v) / grid) * grid);
 
 export function normalizeAngle(angle: number): Angle {
+  // NaN would be written as `(at x y NaN)`, which KiCad cannot load.
+  if (!Number.isFinite(angle)) throw new RangeError(`${angle} is not an angle`);
   return ((((Math.round(angle / 90) * 90) % 360) + 360) % 360) as Angle;
 }
 
