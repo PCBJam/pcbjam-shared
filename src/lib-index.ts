@@ -590,3 +590,39 @@ export function decodeLibIndexTsv(tsv: string): {
   });
   return from && total ? { token, rows, page: { from: Number(from[1]), total: Number(total[1]) } } : { token, rows };
 }
+
+/**
+ * Footprint rows for the bridge (the footprint chooser and the footprint
+ * editor's tree, libs 0028 phase 9), in the same TSV style as the symbols:
+ *
+ *   v=<token>\tschema=1\tkind=footprint[\tfrom=<i>\ttotal=<n>]\n
+ *   <n>\t<d>\t<t>\t<pc>\t<up>\n
+ */
+export function encodeFootprintIndexTsv(
+  token: string,
+  rows: readonly FootprintIndexRow[],
+  page?: { from: number; size: number },
+): string {
+  const head = `v=${escTsv(token)}\tschema=${LIB_INDEX_SCHEMA}\tkind=footprint`;
+  const lines = [page ? `${head}\tfrom=${page.from}\ttotal=${rows.length}` : head];
+  for (const r of page ? rows.slice(page.from, page.from + page.size) : rows) {
+    lines.push([escTsv(r.n), escTsv(r.d ?? ""), escTsv(r.t ?? ""), String(r.pc), String(r.up)].join("\t"));
+  }
+  return lines.join("\n") + "\n";
+}
+
+/** Inverse of `encodeFootprintIndexTsv` (tests; the C++ side has its own reader). */
+export function decodeFootprintIndexTsv(tsv: string): { token: string; rows: FootprintIndexRow[] } {
+  const lines = tsv.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  const head = lines.shift() ?? "";
+  const token = unescTsv(/^v=([^\t]*)/.exec(head)?.[1] ?? "");
+  const rows = lines.map((line) => {
+    const c = line.split("\t");
+    const row: FootprintIndexRow = { n: unescTsv(c[0] ?? ""), pc: Number(c[3] ?? 0), up: Number(c[4] ?? 0) };
+    if (c[1]) row.d = unescTsv(c[1]);
+    if (c[2]) row.t = unescTsv(c[2]);
+    return { n: row.n, ...(row.d ? { d: row.d } : {}), ...(row.t ? { t: row.t } : {}), pc: row.pc, up: row.up };
+  });
+  return { token, rows };
+}

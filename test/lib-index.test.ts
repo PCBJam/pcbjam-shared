@@ -3,7 +3,9 @@ import {
   buildLibIndex,
   countStackedPinNotation,
   countUniquePads,
+  decodeFootprintIndexTsv,
   decodeLibIndexTsv,
+  encodeFootprintIndexTsv,
   encodeLibIndexTsv,
   indexFootprintItem,
   indexSymbolItem,
@@ -240,6 +242,13 @@ describe("TSV codec", () => {
     expect(tsv.split("\n")[0]).toBe("v=t\tschema=1\tkind=symbol\tfrom=2\ttotal=5");
     expect(decodeLibIndexTsv(tsv)).toEqual({ token: "t", rows: [{ n: "C" }, { n: "D" }], page: { from: 2, total: 5 } });
     expect(decodeLibIndexTsv(encodeLibIndexTsv("t", rows, { from: 4, size: 2 })).rows).toEqual([{ n: "E" }]);
+  });
+
+  it("footprints round-trip", () => {
+    const rows = [{ n: "R_0603", d: "a\tb", t: "res smd", pc: 2, up: 2 }, { n: "X", pc: 0, up: 0 }];
+    const tsv = encodeFootprintIndexTsv("tok", rows);
+    expect(tsv.split("\n")[0]).toBe("v=tok\tschema=1\tkind=footprint");
+    expect(decodeFootprintIndexTsv(tsv)).toEqual({ token: "tok", rows });
   });
 
   it("an empty library", () => {
