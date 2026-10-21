@@ -667,11 +667,24 @@ function stubWays(pin: SheetPin, opts: { onEnd: boolean; bent: boolean }): StubW
   return ways.sort((x, y) => x.cost - y.cost);
 }
 
-/** What is wrong with a stub along `path` from a pin end (null: nothing): ai-chat 0008 §2.1's rules, and not ending on a wire. */
-function stubProblem(path: Array<[number, number]>, obs: RouteObstacles): string | null {
+/**
+ * What is wrong with a stub along `path` from a pin end (null: nothing): ai-chat
+ * 0008 §2.1's rules, and not ending on a wire. `obs` leaves out the pin's own
+ * part, `own`: its first segment leaves the pin end outward, past whatever of
+ * the part sticks out beside it (an LED's light arrows); a sideways run after
+ * it keeps off the part.
+ */
+function stubProblem(path: Array<[number, number]>, obs: RouteObstacles, own?: Box): string | null {
   if (path.length < 2) return null;
   const end = path[path.length - 1]!;
+  if (own && path.slice(2).some((q, i) => hitsBox(path[i + 1]!, q, own))) return "crosses its own part";
   return pathProblem(path, obs) ?? (obs.wires.some((w) => onSegmentInterior(end, w.a, w.b)) ? "ends on a wire" : null);
+}
+
+/** A symbol's body on the sheet, by uuid (undefined: none, or its definition is unknown). */
+function bodyOf(b: EditBuilder, uuid: string | undefined): Box | undefined {
+  const s = b.sheet.symbols.find((x) => x.uuid === uuid);
+  return s?.def ? offsetBox(symbolBox(s.def, s.angle, s.mirror, s.unit), s.at) : undefined;
 }
 
 /** The boxes `b` keeps for the wires on `at` (a label may sit on its pin's wire). */
@@ -706,18 +719,19 @@ function drawStub(b: EditBuilder, path: Array<[number, number]>): void {
  * points up or down it sits on the pin end, turned away from the part. Either
  * way it goes out step by step until its box is clear; the stub touches nothing.
  */
-function powerSpot(b: EditBuilder, def: Form, pin: SheetPin): { at: [number, number]; angle: Angle } {
+function powerSpot(b: EditBuilder, def: Form, pin: SheetPin, owner?: string): { at: [number, number]; angle: Angle } {
   const natural = pinPositions(def, [0, 0], 0)[0]?.toward;
   const out: Point = [-pin.toward[0], -pin.toward[1]];
   const sideways = !!natural && natural[0] === 0 && out[1] === 0 && out[0] !== 0;
   // A pin facing the symbol's own way puts it upright (angle 0).
   const placeAt = (end: [number, number]) => powerPlacement(def, sideways ? { ...pin, at: end, toward: [-natural![0], -natural![1]] } : { ...pin, at: end });
-  const obs = obstaclesFor(b, [pin.at]);
+  const obs = obstaclesFor(b, [pin.at], owner);
+  const own = bodyOf(b, owner);
   const except = wireBoxesAt(b, pin.at);
   // Where three lines meet already, a stub would make four (0009 §3.2).
   const crowded = armsAt(b, pin.at) >= 3;
   const ways = stubWays(pin, { onEnd: !sideways, bent: false }).filter((w) => !crowded || w.path.length < 2);
-  const clean = ways.filter((w) => !stubProblem(w.path, obs));
+  const clean = ways.filter((w) => !stubProblem(w.path, obs, own));
   for (const way of clean) {
     const place = placeAt(way.path[way.path.length - 1]!);
     // Its name too (0009 §3.5).
@@ -738,14 +752,15 @@ function powerSpot(b: EditBuilder, def: Form, pin: SheetPin): { at: [number, num
  * from the part, when its text is clear; else out on a stub, straight then
  * bent, step by step. Nothing clear: the pin end (the layout check names it).
  */
-function labelSpot(b: EditBuilder, pin: SheetPin, name: string): { at: [number, number]; angle: Angle } {
-  const obs = obstaclesFor(b, [pin.at]);
+function labelSpot(b: EditBuilder, pin: SheetPin, name: string, owner?: string): { at: [number, number]; angle: Angle } {
+  const obs = obstaclesFor(b, [pin.at], owner);
+  const own = bodyOf(b, owner);
   const except = wireBoxesAt(b, pin.at);
   const crowded = armsAt(b, pin.at) >= 3;
   for (const way of stubWays(pin, { onEnd: true, bent: true }).filter((w) => !crowded || w.path.length < 2)) {
     const end = way.path[way.path.length - 1]!;
     const angle = outwardAngle([-way.dir[0], -way.dir[1]]);
-    if (stubProblem(way.path, obs) || !clearOf(b, textBox(end, angle, name), except)) continue;
+    if (stubProblem(way.path, obs, own) || !clearOf(b, textBox(end, angle, name), except)) continue;
     drawStub(b, way.path);
     return { at: end, angle };
   }
@@ -859,7 +874,7 @@ function attachPin(
   const power = ctx.powerDefs[net] ?? embeddedPower(sheet, net);
   if (power) {
     b.embed(power.libId, power.def);
-    const { at, angle } = powerSpot(b, power.def, pin);
+    const { at, angle } = powerSpot(b, power.def, pin, ownerUuid);
     const uuid = newUuid();
     const ref = b.nextRef("#PWR");
     b.upsert(uuid, symbolForm({ libId: power.libId, def: power.def, ref, at, angle, mirror: "", uuid }, sheet.instance));
@@ -884,7 +899,7 @@ function attachPin(
   }
   const global = isPowerNetName(net) || sheet.labels.some((l) => l.kind === "global_label" && l.name === net);
   const kind = target.labelKind ?? (global ? "global_label" : "label");
-  const { at, angle } = labelSpot(b, pin, net);
+  const { at, angle } = labelSpot(b, pin, net, ownerUuid);
   const uuid = newUuid();
   b.upsert(uuid, labelForm(kind, net, at, angle, uuid));
   sheet.labels.push({ uuid, kind, name: net, at, angle });
@@ -972,7 +987,7 @@ function pinEnd(b: EditBuilder, text: string): WireEnd {
  * symbols' too), label anchor, flag, junction and wire end on the sheet except
  * `ends`; the wires; the parts' bodies; label and field text, at a small cost.
  */
-function obstaclesFor(b: EditBuilder, ends: Point[]): RouteObstacles {
+function obstaclesFor(b: EditBuilder, ends: Point[], notBodyOf?: string): RouteObstacles {
   const live = <T extends { uuid: string }>(xs: T[]) => xs.filter((x) => !b.removed.has(x.uuid));
   const symbols = live(b.sheet.symbols);
   const wires = live(b.sheet.wires);
@@ -987,7 +1002,7 @@ function obstaclesFor(b: EditBuilder, ends: Point[]): RouteObstacles {
   return {
     points,
     wires: wires.map((w) => ({ a: w.a, b: w.b })),
-    bodies: symbols.filter((s) => !s.power && s.def).map((s) => offsetBox(symbolBox(s.def!, s.angle, s.mirror, s.unit), s.at)),
+    bodies: symbols.filter((s) => !s.power && s.def && s.uuid !== notBodyOf).map((s) => offsetBox(symbolBox(s.def!, s.angle, s.mirror, s.unit), s.at)),
     // Text: labels and the parts' own (values, references; 0009 §3.5).
     soft: [...labels.map((l) => textBox(l.at, l.angle, l.name)), ...symbols.flatMap((s) => b.texts.get(s.uuid) ?? [])],
   };
@@ -1942,9 +1957,18 @@ export function layoutIssues(doc: KicadDoc, edit: SchematicEdit, max = 10): Layo
   const wiresBefore = new Map(sheetBefore.wires.map((w) => [w.uuid, key(w.a) + key(w.b)]));
   const parts = sheetAfter.symbols.filter((s) => !s.power && s.def);
   const fresh = sheetAfter.wires.filter((x) => wiresBefore.get(x.uuid) !== key(x.a) + key(x.b));
+  // A wire leaving one of the part's own pin ends outward does not cross it, whatever of the
+  // part sticks out beside that pin (an LED's light arrows).
+  const leavesPinOf = (w: SheetWire, s: PlacedSymbol) =>
+    s.pins.some((p) =>
+      [
+        [w.a, w.b],
+        [w.b, w.a],
+      ].some(([from, to]) => samePoint(from!, p.at) && Math.sign(to![0] - from![0]) === -p.toward[0] && Math.sign(to![1] - from![1]) === -p.toward[1]),
+    );
   for (const w of fresh) {
     for (const s of parts) {
-      if (hitsBox(w.a, w.b, offsetBox(symbolBox(s.def!, s.angle, s.mirror, s.unit), s.at))) {
+      if (hitsBox(w.a, w.b, offsetBox(symbolBox(s.def!, s.angle, s.mirror, s.unit), s.at)) && !leavesPinOf(w, s)) {
         issues.push({ issue: "wire_crosses_part", items: ["wire", s.ref], at: w.a });
       }
       for (const p of s.pins) {

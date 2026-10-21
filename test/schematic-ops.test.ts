@@ -569,6 +569,17 @@ describe("the drawing rulebook (ai-chat 0009)", () => {
       (pin power_in line (at 0 7.62 270) (length 2.54) (name "VDD" ${F}) (number "1" ${F}))
       (pin power_in line (at 0 -7.62 90) (length 2.54) (name "GND" ${F}) (number "2" ${F}))
       (pin bidirectional line (at 7.62 0 180) (length 2.54) (name "SDA" ${F}) (number "3" ${F}))))`;
+  // An LED-like part: its light arrows reach past the cathode's pin end (K, on the left).
+  const DEF_D = `(symbol "Test:D" (pin_numbers (hide yes)) (pin_names (offset 1.016) (hide yes)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+    (property "Reference" "D" (at 0 2.54 0) ${F}) (property "Value" "D" (at 0 -2.54 0) ${F})
+    (property "Footprint" "" (at 0 0 0) ${HIDE}) (property "Datasheet" "" (at 0 0 0) ${HIDE})
+    (symbol "D_0_1"
+      (polyline (pts (xy -1.27 -1.27) (xy -1.27 1.27)) (stroke (width 0.254) (type default)) (fill (type none)))
+      (polyline (pts (xy 1.27 -1.27) (xy 1.27 1.27) (xy -1.27 0) (xy 1.27 -1.27)) (stroke (width 0.254) (type default)) (fill (type none)))
+      (polyline (pts (xy -1.778 -0.762) (xy -4.572 -2.286)) (stroke (width 0) (type default)) (fill (type none))))
+    (symbol "D_1_1"
+      (pin passive line (at -3.81 0 0) (length 2.54) (name "K" ${F}) (number "1" ${F}))
+      (pin passive line (at 3.81 0 180) (length 2.54) (name "A" ${F}) (number "2" ${F}))))`;
   const pinAt = (p: { pins: Array<{ number: string; at: [number, number] }> }, n: string) => p.pins.find((q) => q.number === n)!.at;
   const raw = (sexpr: string): SchematicEdit => ({ label: "x", upsert: [{ sexpr }], remove: [], libSymbols: {} });
 
@@ -642,6 +653,24 @@ describe("the drawing rulebook (ai-chat 0009)", () => {
     expect(layoutIssues(doc, down.edit)).toEqual([]);
     // Turned on purpose: kept.
     expect(placePartEdit({ doc, parts: [{ libId: "Test:R", angle: 90, nets: { "1": "SIG", "2": "+3V3" } }] }).placed[0]!.angle).toBe(90);
+  });
+
+  it("stands a ground upright on a stub off an LED's cathode, past its light arrows", () => {
+    // D1's cathode ends at 97.79,76.2, facing left; its arrows reach to 97.03. A stub used to
+    // count as crossing D1, so the ground sat on the pin end, turned sideways.
+    const d1 = placed("Test:D", "D1", 101.6, 76.2, { pins: ["1", "2"] });
+    const doc = fileToDoc(sheetText([d1.text], [DEF_D, DEF_3V3, DEF_GND]));
+    const { edit } = connectEdit({ doc, pins: [{ ref: "D1", pin: "1", net: "GND" }] });
+    const forms = upserted(edit);
+    expect(atOfForm(ofType(forms, "symbol").find((s) => prop(s, "Value") === "GND")!)).toEqual([95.25, 76.2, 0]);
+    expect(ofType(forms, "wire").map((w) => (w.find((n) => isForm(n, "pts")) as Form).slice(1).map((xy) => (xy as string[]).slice(1).map(Number)))).toEqual([
+      [
+        [97.79, 76.2],
+        [95.25, 76.2],
+      ],
+    ]);
+    // Leaving its own pin outward is not crossing D1.
+    expect(layoutIssues(doc, edit)).toEqual([]);
   });
 
   it("keeps text clear, and names text an edit covered (rule 13)", () => {
