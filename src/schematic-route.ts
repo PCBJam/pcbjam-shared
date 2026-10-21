@@ -164,12 +164,23 @@ export function routeWire(a: RouteEnd, z: RouteEnd, obs: RouteObstacles, opts: R
   if (samePoint(a.at, z.at)) return [a.at];
   const onGrid = (v: number) => Math.abs(v / GRID - Math.round(v / GRID)) < 1e-6;
   if (![a.at, z.at].every((p) => onGrid(p[0]) && onGrid(p[1]))) return simpleRoute(a, z, obs, opts);
-  for (const margin of [20, 60]) {
+  // The search's memory grows with its area: ends far apart (a point far off the sheet) get
+  // a straight or one-bend wire only.
+  const span = (m: number) => (Math.abs(a.at[0] - z.at[0]) / GRID + 2 * m + 1) * (Math.abs(a.at[1] - z.at[1]) / GRID + 2 * m + 1);
+  const margins = [20, 60].filter((m) => span(m) <= MAX_CELLS);
+  if (!margins.length) return simpleRoute(a, z, obs, opts);
+  for (const margin of margins) {
     const found = search(a, z, obs, opts, margin);
     if (found) return found;
   }
   return null;
 }
+
+/**
+ * The most grid cells one search covers: about 65 bytes each, so some 8 MB, in
+ * a Worker with 128 MB. A wire across a whole A3 sheet fits.
+ */
+const MAX_CELLS = 120_000;
 
 function search(a: RouteEnd, z: RouteEnd, obs: RouteObstacles, opts: RouteOptions, margin: number): Point[] | null {
   const cell = (v: number) => Math.round(v / GRID);

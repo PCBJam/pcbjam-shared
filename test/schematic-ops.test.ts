@@ -673,6 +673,15 @@ describe("the drawing rulebook (ai-chat 0009)", () => {
     expect(layoutIssues(doc, edit)).toEqual([]);
   });
 
+  it("bounds the router's search: a point far off the sheet gets a straight or one-bend wire, not a huge search", () => {
+    const { doc } = fixture();
+    // 5 m away: a search over that area would take about a gigabyte.
+    const started = Date.now();
+    const { wired } = wireEdit({ doc, wires: [{ from: "Q1.3", to: [5080, 5080] }] });
+    expect(wired[0]!.points.length).toBeLessThanOrEqual(3);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
   it("keeps text clear, and names text an edit covered (rule 13)", () => {
     const { doc } = fixture();
     // R1's value (10k) sits right of it at 55.88,50.8: a part placed next to R1 keeps off it.
