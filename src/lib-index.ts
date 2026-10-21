@@ -83,8 +83,25 @@ export interface LibIndexFile {
   bad?: string[];
 }
 
-/** Root files of a version prefix; never a synced item (see snapshot-bytes). */
-export const LIB_INDEX_FILE = "lib-index.json";
+/**
+ * The stored file's name at the root of a version prefix (root files are never
+ * synced items, see snapshot-bytes). The schema is in the name: a reader asks
+ * for exactly the schema it understands, so a schema bump needs no migration
+ * and an immutable cached copy of the old one can't be served as the new one.
+ */
+export const libIndexFileName = (schema: number = LIB_INDEX_SCHEMA) => `lib-index.v${schema}.json`;
+
+/**
+ * The official set's combined index: the per-version files of every library in
+ * the official lib pack (lib-pack.ts), stored next to it brotli-compressed. One
+ * request instead of one per library on a cold run.
+ */
+export interface LibIndexPack {
+  schema: number;
+  /** The lib pack id this index belongs to. */
+  packId: string;
+  libs: LibIndexFile[];
+}
 
 // ---------------------------------------------------------------- s-expr helpers
 

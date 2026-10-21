@@ -38,6 +38,8 @@ export interface LibPackPointer {
   bytes: number;
   libs: number;
   builtAt: string;
+  /** The combined library index stored next to the pack (libs 0028), when built. */
+  index?: { bytes: number; schema: number };
 }
 
 export const libPackKey = (id: string, versionId: string) => `${id}@${versionId}`;
