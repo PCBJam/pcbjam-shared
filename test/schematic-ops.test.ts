@@ -22,8 +22,10 @@ import {
   wireEdit,
   withDefinitions,
   type NetlistNet,
+  type PlacedReport,
   type SchematicEdit,
 } from "../src/schematic-ops.js";
+import { hitsBox, onSegmentInterior } from "../src/schematic-route.js";
 import { isForm, resolveSymbolDefinition, unquote, type Form } from "../src/symbol-lib.js";
 import { FIXTURES } from "./helpers.js";
 
@@ -50,8 +52,9 @@ const DEF_Q = `(symbol "Test:Q" (pin_names (offset 0)) (exclude_from_sim no) (in
     (pin passive line (at 2.54 5.08 270) (length 2.54) (name "B" ${F}) (number "2" ${F}))
     (pin passive line (at 5.08 -2.54 180) (length 2.54) (name "C" ${F}) (number "3" ${F}))))`;
 
+// The name sits beyond the symbol, as in KiCad's power library: above a supply, below a ground.
 const powerDef = (libId: string, value: string, pinAngle: number) => `(symbol "${libId}" (power) (pin_names (offset 0)) (exclude_from_sim no) (in_bom yes) (on_board yes)
-  (property "Reference" "#PWR" (at 0 -3.81 0) ${HIDE}) (property "Value" "${value}" (at 0 3.556 0) ${F})
+  (property "Reference" "#PWR" (at 0 -3.81 0) ${HIDE}) (property "Value" "${value}" (at 0 ${pinAngle === 90 ? "3.556" : "-3.81"} 0) ${F})
   (property "Footprint" "" (at 0 0 0) ${HIDE}) (property "Datasheet" "" (at 0 0 0) ${HIDE})
   (symbol "${value}_0_1" (polyline (pts (xy 0 0) (xy 0 ${pinAngle === 90 ? "2.54" : "-2.54"})) (stroke (width 0) (type default)) (fill (type none))))
   (symbol "${value}_1_1" (pin power_in line (at 0 0 ${pinAngle}) (length 0) (hide yes) (name "${value}" ${F}) (number "1" ${F}))))`;
@@ -406,9 +409,10 @@ describe("tidier drawing (ai-chat 0003 step 5c)", () => {
     const { doc } = fixture();
     // R3.1 (50.8,85.09) to R4.1 (63.5,85.09): in line.
     expect(wireEdit({ doc, wires: [{ from: "R3.1", to: "R4.1" }] }).wired[0]!.points).toEqual([[50.8, 85.09], [63.5, 85.09]]);
-    // Q1.1 (96.52,50.8, facing left) to R2.2 (80.01,50.8)... in line too; to a point below: one bend, leaving Q1 outward.
+    // Q1.1 (96.52,50.8, facing left) to a point above: one bend. Leaving Q1 outward would bend on
+    // (88.9,50.8), where w1 and w2 end: that joins the OUT net, so the wire goes up first (0008 §2.1).
     const bent = wireEdit({ doc, wires: [{ from: "Q1.1", to: [88.9, 40.64] }] }).wired[0]!.points;
-    expect(bent).toEqual([[96.52, 50.8], [88.9, 50.8], [88.9, 40.64]]);
+    expect(bent).toEqual([[96.52, 50.8], [96.52, 40.64], [88.9, 40.64]]);
     // To the middle of the wire w2 (88.9,50.8 → 88.9,60.96): KiCad connects it only with a junction.
     const { edit } = wireEdit({ doc, wires: [{ from: "Q1.1", to: [88.9, 55.88] }] });
     expect(ofType(upserted(edit), "junction").map(atOfForm)).toEqual([[88.9, 55.88]]);
@@ -426,14 +430,228 @@ describe("tidier drawing (ai-chat 0003 step 5c)", () => {
     const { doc } = fixture();
     // The old way (power symbols turned sideways on neighbouring pins) is gone; this edit is tidy.
     expect(layoutIssues(doc, connectEdit({ doc, pins: [{ ref: "Q1", pin: "1", net: "+3V3" }, { ref: "Q1", pin: "3", net: "GND" }] }).edit)).toEqual([]);
-    // A part dropped onto R1.
+    // A part dropped onto R1: the parts overlap, and so does their text (0009 §3.5).
     const { edit } = placePartEdit({ doc, parts: [{ libId: "Test:R", at: [50.8, 50.8] }] });
-    expect(layoutIssues(doc, edit)).toEqual([expect.objectContaining({ issue: "overlap", items: expect.arrayContaining(["R6", "R1"]) })]);
+    expect(layoutIssues(doc, edit)).toEqual([
+      expect.objectContaining({ issue: "overlap", items: expect.arrayContaining(["R6", "R1"]) }),
+      expect.objectContaining({ issue: "text_overlap", items: ["R1 Reference", "R6 Reference"] }),
+      expect.objectContaining({ issue: "text_overlap", items: ["R6 Value", "R1"] }),
+    ]);
     // An item off the grid.
     const label = `(label "X" (at 10.1 10.1 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "${id()}"))`;
     expect(layoutIssues(doc, { label: "x", upsert: [{ sexpr: label }], remove: [], libSymbols: {} })).toEqual([
       { issue: "off_grid", items: ["label X"], at: [10.1, 10.1] },
     ]);
+  });
+});
+
+// A connector with pins on its right (like a USB-C receptacle's CC1, CC2, D+) and one at the bottom.
+const DEF_J = `(symbol "Test:J" (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+  (property "Reference" "J" (at 0 10.16 0) ${F}) (property "Value" "J" (at 0 -10.16 0) ${F})
+  (property "Footprint" "" (at 0 0 0) ${HIDE}) (property "Datasheet" "" (at 0 0 0) ${HIDE})
+  (symbol "J_0_1" (rectangle (start -5.08 7.62) (end 5.08 -7.62) (stroke (width 0.254) (type default)) (fill (type background))))
+  (symbol "J_1_1"
+    (pin passive line (at 7.62 5.08 180) (length 2.54) (name "CC1" ${F}) (number "A5" ${F}))
+    (pin passive line (at 7.62 2.54 180) (length 2.54) (name "CC2" ${F}) (number "B5" ${F}))
+    (pin passive line (at 7.62 -2.54 180) (length 2.54) (name "D+" ${F}) (number "B6" ${F}))
+    (pin passive line (at 0 -10.16 90) (length 2.54) (name "GND" ${F}) (number "A1" ${F}))))`;
+
+describe("safe and tidy drawing (ai-chat 0008)", () => {
+  const segments = (pts: number[][]) => pts.slice(1).map((q, i) => [pts[i]!, q] as [[number, number], [number, number]]);
+  const touches = (p: [number, number], pts: number[][]) =>
+    pts.some((q) => q[0] === p[0] && q[1] === p[1]) || segments(pts).some(([a, z]) => onSegmentInterior(p, a, z));
+
+  it("goes around a part, never through another pin's end (the CC2 short)", () => {
+    // J1 at 101.6,76.2: A5 ends at 109.22,71.12, B5 at 109.22,73.66, B6 at 109.22,78.74. R7 left of
+    // it, its pin 1 at 76.2,78.74: level with B6, so an L to B5 either bends on B6 or crosses J1.
+    const j1 = placed("Test:J", "J1", 101.6, 76.2, { pins: ["A5", "B5", "B6", "A1"] });
+    const r7 = placed("Test:R", "R7", 76.2, 82.55, { pins: ["1", "2"] });
+    const doc = fileToDoc(sheetText([j1.text, r7.text], [DEF_R, DEF_J, DEF_3V3, DEF_GND]));
+    const { edit, wired } = wireEdit({ doc, wires: [{ from: "R7.1", to: "J1.B5" }] });
+    const pts = wired[0]!.points;
+    expect(pts[0]).toEqual([76.2, 78.74]);
+    expect(pts[pts.length - 1]).toEqual([109.22, 73.66]);
+    const body = { minX: 96.52, minY: 68.58, maxX: 109.22, maxY: 86.36 };
+    for (const [a, z] of segments(pts)) expect(hitsBox(a, z, body), `${a} → ${z}`).toBe(false);
+    for (const other of [[109.22, 71.12], [109.22, 78.74], [101.6, 86.36]] as Array<[number, number]>) expect(touches(other, pts)).toBe(false);
+    // Safe, but the way around is long: named, so the model can use a net name (0009 §3.1).
+    expect(layoutIssues(doc, edit)).toEqual([{ issue: "long_wire", items: ["R7.1", "J1.B5"], at: [76.2, 78.74], mm: 51 }]);
+  });
+
+  it("puts both pins on the net's name when no clean wire exists, and refuses a wire", () => {
+    // R4.1 (63.5,85.09) walled in: junctions left, right and above; R4's body below.
+    const f = fixture();
+    const items = Object.entries(f).filter(([k]) => k !== "doc").map(([, v]) => (v as { text: string }).text);
+    const walls = [junction([62.23, 85.09]), junction([64.77, 85.09]), junction([63.5, 83.82])];
+    const doc = fileToDoc(sheetText([...items, ...walls.map((w) => w.text)]));
+    expect(errorOf(() => wireEdit({ doc, wires: [{ from: "R3.1", to: "R4.1" }] })).code).toBe("NO_ROUTE");
+    expect(errorOf(() => connectEdit({ doc, pins: [{ ref: "R3", pin: "1", to: "R4.1" }] })).message).toMatch(/connect with a net/);
+    const { edit, connected } = connectEdit({ doc, pins: [{ ref: "R3", pin: "1", to: "R4.1", orNet: "LINK" }] });
+    expect(connected[0]).toMatchObject({ pin: "R3.1", net: "LINK", how: "label", note: expect.stringContaining("No clean wire to R4.1") });
+    expect(ofType(upserted(edit), "label").map((l) => unquote(l[1]))).toEqual(["LINK", "LINK"]);
+  });
+
+  it("takes a label that would run into a part out on a stub; the label stays its pin's", () => {
+    // R8's pin 2 points down at 50.8,54.61; R9 sits right below: a long label there runs into it.
+    const r8 = placed("Test:R", "R8", 50.8, 50.8, { pins: ["1", "2"] });
+    const r9 = placed("Test:R", "R9", 50.8, 63.5, { pins: ["1", "2"] });
+    const doc = fileToDoc(sheetText([r8.text, r9.text]));
+    const { edit } = connectEdit({ doc, pins: [{ ref: "R8", pin: "2", net: "CC_LONG_NAME" }] });
+    const forms = upserted(edit);
+    const label = ofType(forms, "label")[0]!;
+    // Out one step, then sideways: clear of both parts.
+    expect(atOfForm(label)).toEqual([53.34, 57.15, 0]);
+    expect(ofType(forms, "wire")).toHaveLength(2);
+    expect(layoutIssues(doc, edit)).toEqual([]);
+
+    const after = roundTrip(doc, edit);
+    expect(connectEdit({ doc: after, pins: [{ ref: "R8", pin: "2", net: "CC_LONG_NAME" }] }).connected[0]!.how).toBe("already");
+    // Moved, it is drawn again from the new pin end; removed, it goes with the part.
+    const moved = roundTrip(after, movePartEdit({ doc: after, moves: [{ ref: "R8", at: [101.6, 50.8] }] }).edit);
+    const sheet = readSheet(moved);
+    expect(sheet.labels.filter((l) => l.name === "CC_LONG_NAME")).toEqual([expect.objectContaining({ at: [101.6, 54.61] })]);
+    expect(sheet.wires).toEqual([]);
+    const { edit: gone } = removePartEdit({ doc: after, refs: ["R8"] });
+    expect(gone.remove).toEqual(expect.arrayContaining(readSheet(after).labels.map((l) => l.uuid)));
+    expect(readSheet(roundTrip(after, gone)).wires).toEqual([]);
+  });
+
+  it("places a part with room for its labels, beside the labels of its nets", () => {
+    const f = fixture();
+    // SDA's label hangs down from R1's pin 2 (50.8,54.61): the new part starts below it.
+    const { edit, placed: [part] } = placePartEdit({ doc: f.doc, parts: [{ libId: "Test:R", nets: { "1": "SDA", "2": "GND" } }] });
+    expect(Math.abs(part!.at[0] - 50.8)).toBeLessThanOrEqual(7.62);
+    expect(part!.at[1]).toBeGreaterThan(54.61);
+    expect(part!.at[1]).toBeLessThan(80);
+    expect(layoutIssues(f.doc, edit)).toEqual([]);
+    // Two turned parts in one request, long names on both pins: no label runs into the other part.
+    const two = placePartEdit({
+      doc: f.doc,
+      parts: [
+        { libId: "Test:R", angle: 90, nets: { "1": "ALPHA_LONG_NET", "2": "BRAVO_LONG_NET" } },
+        { libId: "Test:R", angle: 90, nets: { "1": "CHARLIE_LONG_NET", "2": "DELTA_LONG_NET" } },
+      ],
+    });
+    expect(layoutIssues(f.doc, two.edit)).toEqual([]);
+  });
+
+  it("names a wire through a part and a pin end on a wire's middle", () => {
+    const { doc } = fixture();
+    const wire = (a: [number, number], z: [number, number]) =>
+      `(wire (pts (xy ${a[0]} ${a[1]}) (xy ${z[0]} ${z[1]})) (stroke (width 0) (type default)) (uuid "${id()}"))`;
+    const edit = { label: "x", upsert: [{ sexpr: wire([40.64, 50.8], [60.96, 50.8]) }, { sexpr: wire([93.98, 50.8], [99.06, 50.8]) }], remove: [], libSymbols: {} };
+    expect(layoutIssues(doc, edit)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ issue: "wire_crosses_part", items: ["wire", "R1"] }),
+        expect.objectContaining({ issue: "wire_touches_pin", items: ["wire", "Q1.1"] }),
+      ]),
+    );
+  });
+});
+
+describe("the drawing rulebook (ai-chat 0009)", () => {
+  const DEF_C = `(symbol "Test:C" (pin_numbers (hide yes)) (pin_names (offset 0.254)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+    (property "Reference" "C" (at 0.635 2.54 0) (effects (font (size 1.27 1.27)) (justify left)))
+    (property "Value" "C" (at 0.635 -2.54 0) (effects (font (size 1.27 1.27)) (justify left)))
+    (property "Footprint" "" (at 0 0 0) ${HIDE}) (property "Datasheet" "~" (at 0 0 0) ${HIDE})
+    (symbol "C_0_1" (polyline (pts (xy -2.032 -0.762) (xy 2.032 -0.762)) (stroke (width 0.508) (type default)) (fill (type none)))
+      (polyline (pts (xy -2.032 0.762) (xy 2.032 0.762)) (stroke (width 0.508) (type default)) (fill (type none))))
+    (symbol "C_1_1"
+      (pin passive line (at 0 3.81 270) (length 2.794) (name "~" ${F}) (number "1" ${F}))
+      (pin passive line (at 0 -3.81 90) (length 2.794) (name "~" ${F}) (number "2" ${F}))))`;
+  // A chip: VDD on top and GND at the bottom (power inputs), SDA on the right.
+  const DEF_U = `(symbol "Test:U" (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+    (property "Reference" "U" (at -5.08 6.35 0) (effects (font (size 1.27 1.27)) (justify left)))
+    (property "Value" "U" (at -5.08 -6.35 0) (effects (font (size 1.27 1.27)) (justify left)))
+    (property "Footprint" "" (at 0 0 0) ${HIDE}) (property "Datasheet" "" (at 0 0 0) ${HIDE})
+    (symbol "U_0_1" (rectangle (start -5.08 5.08) (end 5.08 -5.08) (stroke (width 0.254) (type default)) (fill (type background))))
+    (symbol "U_1_1"
+      (pin power_in line (at 0 7.62 270) (length 2.54) (name "VDD" ${F}) (number "1" ${F}))
+      (pin power_in line (at 0 -7.62 90) (length 2.54) (name "GND" ${F}) (number "2" ${F}))
+      (pin bidirectional line (at 7.62 0 180) (length 2.54) (name "SDA" ${F}) (number "3" ${F}))))`;
+  const pinAt = (p: { pins: Array<{ number: string; at: [number, number] }> }, n: string) => p.pins.find((q) => q.number === n)!.at;
+  const raw = (sexpr: string): SchematicEdit => ({ label: "x", upsert: [{ sexpr }], remove: [], libSymbols: {} });
+
+  it("puts both pins on the net's name when the clean wire would be long, and names a long wire (rule 9)", () => {
+    // 0008's CC2 case: the way around J1 is 51 mm.
+    const j1 = placed("Test:J", "J1", 101.6, 76.2, { pins: ["A5", "B5", "B6", "A1"] });
+    const r7 = placed("Test:R", "R7", 76.2, 82.55, { pins: ["1", "2"] });
+    const doc = fileToDoc(sheetText([j1.text, r7.text], [DEF_R, DEF_J, DEF_3V3, DEF_GND]));
+    const { edit, connected } = connectEdit({ doc, pins: [{ ref: "R7", pin: "1", to: "J1.B5", orNet: "CC2" }] });
+    expect(connected[0]).toMatchObject({ how: "label", note: expect.stringContaining("No clean wire to J1.B5 (it would run 51 mm)") });
+    expect(ofType(upserted(edit), "label").map((l) => unquote(l[1]))).toEqual(["CC2", "CC2"]);
+    expect(layoutIssues(doc, edit)).toEqual([]);
+    // Without a net name to fall back on (a plain `to`), the wire is drawn, as asked.
+    expect(connectEdit({ doc, pins: [{ ref: "R7", pin: "1", to: "J1.B5" }] }).connected[0]!.how).toBe("wire");
+  });
+
+  it("never makes four lines meet at one dot (rule 10)", () => {
+    // R3.1 (50.8,85.09) has two wires already: with the pin, three lines meet there.
+    const r3 = placed("Test:R", "R3", 50.8, 88.9, { pins: ["1", "2"] });
+    const r4 = placed("Test:R", "R4", 76.2, 88.9, { pins: ["1", "2"] });
+    const doc = fileToDoc(sheetText([r3.text, r4.text, wire([50.8, 85.09], [45.72, 85.09]).text, wire([50.8, 85.09], [55.88, 85.09]).text]));
+    expect(errorOf(() => wireEdit({ doc, wires: [{ from: "R4.1", to: "R3.1" }] })).message).toMatch(/three lines already meet there/);
+    const { edit, connected } = connectEdit({ doc, pins: [{ ref: "R4", pin: "1", to: "R3.1", orNet: "LINK" }] });
+    expect(connected[0]!.note).toContain("three lines already meet at R3.1");
+    // R3.1's label sits on the pin end itself: a stub would be the fourth line.
+    const forms = upserted(edit);
+    expect(ofType(forms, "label").map(atOfForm)).toEqual(expect.arrayContaining([[50.8, 85.09, 90]]));
+    expect(ofType(forms, "wire")).toEqual([]);
+    // One drawn by hand is named.
+    const fourth = `(wire (pts (xy 50.8 85.09) (xy 50.8 80.01)) (stroke (width 0) (type default)) (uuid "${id()}"))`;
+    expect(layoutIssues(doc, raw(fourth))).toEqual([{ issue: "four_way_junction", items: ["R3.1"], at: [50.8, 85.09] }]);
+  });
+
+  it("stands a decoupling capacitor upright next to its chip's power pin, the next one at the next chip (rule 11)", () => {
+    const u1 = placed("Test:U", "U1", 101.6, 76.2, { pins: ["1", "2", "3"] });
+    const u2 = placed("Test:U", "U2", 50.8, 127, { pins: ["1", "2", "3"] });
+    const bare = fileToDoc(sheetText([u1.text, u2.text], [DEF_U, DEF_C, DEF_3V3, DEF_GND]));
+    const pins = ["U1", "U2"].flatMap((ref) => [{ ref, pin: "1", net: "+3V3" }, { ref, pin: "2", net: "GND" }]);
+    const doc = roundTrip(bare, connectEdit({ doc: bare, pins }).edit);
+    // Pin 2 on the supply: turned so it is on top.
+    const { edit, placed: caps } = placePartEdit({ doc, parts: [0, 1].map(() => ({ libId: "Test:C", value: "100n", nets: { "1": "GND", "2": "+3V3" } })) });
+    const [c1, c2] = caps as [PlacedReport, PlacedReport];
+    for (const c of [c1, c2]) {
+      expect(c.angle).toBe(180);
+      expect(pinAt(c, "2")[1]).toBeLessThan(pinAt(c, "1")[1]);
+    }
+    const vdd1: [number, number] = [101.6, 68.58];
+    const vdd2: [number, number] = [50.8, 119.38];
+    const dist = (p: [number, number], q: [number, number]) => Math.hypot(p[0] - q[0], p[1] - q[1]);
+    expect(dist(c1.at, vdd1)).toBeLessThan(15.24);
+    expect(dist(c2.at, vdd2)).toBeLessThan(15.24);
+    expect(layoutIssues(doc, edit)).toEqual([]);
+  });
+
+  it("puts a pull-up above its signal's label and a pull-down below, upright (rule 12)", () => {
+    const f = fixture();
+    // Q1.3 (106.68,53.34) gets the label SIG, facing right.
+    const doc = roundTrip(f.doc, connectEdit({ doc: f.doc, pins: [{ ref: "Q1", pin: "3", net: "SIG" }] }).edit);
+    const labelTop = 53.34 - 1.27;
+    const up = placePartEdit({ doc, parts: [{ libId: "Test:R", nets: { "1": "SIG", "2": "+3V3" } }] });
+    const [pullUp] = up.placed as [PlacedReport];
+    expect(pinAt(pullUp, "2")[0]).toBe(pinAt(pullUp, "1")[0]);
+    expect(pinAt(pullUp, "2")[1]).toBeLessThan(pinAt(pullUp, "1")[1]);
+    expect(pinAt(pullUp, "1")[1]).toBeLessThan(labelTop);
+    expect(layoutIssues(doc, up.edit)).toEqual([]);
+
+    const down = placePartEdit({ doc, parts: [{ libId: "Test:R", nets: { "1": "SIG", "2": "GND" } }] });
+    const [pullDown] = down.placed as [PlacedReport];
+    expect(pinAt(pullDown, "1")[1]).toBeLessThan(pinAt(pullDown, "2")[1]);
+    expect(pinAt(pullDown, "1")[1]).toBeGreaterThan(53.34);
+    expect(layoutIssues(doc, down.edit)).toEqual([]);
+    // Turned on purpose: kept.
+    expect(placePartEdit({ doc, parts: [{ libId: "Test:R", angle: 90, nets: { "1": "SIG", "2": "+3V3" } }] }).placed[0]!.angle).toBe(90);
+  });
+
+  it("keeps text clear, and names text an edit covered (rule 13)", () => {
+    const { doc } = fixture();
+    // R1's value (10k) sits right of it at 55.88,50.8: a part placed next to R1 keeps off it.
+    const { edit } = placePartEdit({ doc, parts: [{ libId: "Test:R", value: "4.7k", near: "R1" }] });
+    expect(layoutIssues(doc, edit)).toEqual([]);
+    // A label dropped on it is named.
+    const label = `(label "X" (at 54.61 52.07 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "${id()}"))`;
+    expect(layoutIssues(doc, raw(label))).toEqual(expect.arrayContaining([expect.objectContaining({ issue: "text_overlap", items: ["R1 Value", "label X"] })]));
   });
 });
 
@@ -659,13 +877,18 @@ describe("movePartEdit", () => {
   it("re-routes the wires on its pins from their new ends, so the part stays connected", () => {
     const f = fixture();
     const { edit, moved } = movePartEdit({ doc: f.doc, moves: [{ ref: "R2", at: [76.2, 127] }] });
-    expect(moved[0]!.rerouted).toBe(2);
+    // Pin 2's run (to the bend at 88.9) is re-routed. Pin 1's wire led only to the MID label: a
+    // stub, so MID is drawn again at the new pin end instead of a wire running back (0008 §2.3).
+    expect(moved[0]!).toMatchObject({ rerouted: 1, followed: 1 });
     const sheet = readSheet(roundTrip(f.doc, edit));
     const r2 = sheet.symbols.find((s) => s.ref === "R2")!;
-    // Each pin end of R2 now has a wire, and the old runs' far ends (the MID label, the bend at 88.9) are still reached.
-    for (const pin of r2.pins) expect(sheet.wires.some((w) => [w.a, w.b].some((p) => p[0] === pin.at[0] && p[1] === pin.at[1]))).toBe(true);
-    expect(sheet.wires.some((w) => [w.a, w.b].some((p) => p[0] === 66.04 && p[1] === 50.8))).toBe(true);
+    expect(sheet.wires.some((w) => [w.a, w.b].some((p) => p[0] === r2.pins[1]!.at[0] && p[1] === r2.pins[1]!.at[1]))).toBe(true);
     expect(sheet.wires.some((w) => [w.a, w.b].some((p) => p[0] === 88.9 && p[1] === 50.8))).toBe(true);
+    const mid = sheet.labels.filter((l) => l.name === "MID");
+    expect(mid).toHaveLength(1);
+    expect(Math.hypot(mid[0]!.at[0] - r2.pins[0]!.at[0], mid[0]!.at[1] - r2.pins[0]!.at[1])).toBeLessThan(15);
+    // Still on R2's pin 1: connecting it to MID again changes nothing.
+    expect(connectEdit({ doc: roundTrip(f.doc, edit), pins: [{ ref: "R2", pin: "1", net: "MID" }] }).connected[0]!.how).toBe("already");
   });
 });
 

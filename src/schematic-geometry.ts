@@ -273,6 +273,66 @@ export function textBox(at: Point, angle: number, text: string): Box {
   }
 }
 
+/** A symbol field's visible text: where it is, its own angle and justification, its font height. */
+export interface FieldText {
+  name: string;
+  text: string;
+  /** Library coordinates in a definition, sheet coordinates in a placed symbol. */
+  at: [number, number];
+  angle: number;
+  justify: "left" | "right" | "center";
+  size: number;
+}
+
+/** The visible fields of a definition or a placed symbol (`ki_` fields, hidden and empty ones left out). */
+export function fieldTexts(form: Form): FieldText[] {
+  const out: FieldText[] = [];
+  for (const node of form) {
+    if (!isForm(node, "property")) continue;
+    const name = unquote(node[1]) ?? "";
+    const text = unquote(node[2]) ?? "";
+    const at = atOf(node);
+    if (!at || !text || name.startsWith("ki_")) continue;
+    const effects = node.find((n) => isForm(n, "effects")) as Form | undefined;
+    const hides = (f: Form | undefined) => !!f && f.some((n) => n === "hide" || (isForm(n, "hide") && n[1] !== "no"));
+    if (hides(node) || hides(effects)) continue;
+    const justify = (effects?.find((n) => isForm(n, "justify")) as Form | undefined)?.slice(1) ?? [];
+    const size = Number(((effects?.find((n) => isForm(n, "font")) as Form | undefined)?.find((n) => isForm(n, "size")) as Form | undefined)?.[1]);
+    out.push({
+      name,
+      text,
+      at: [at.x, at.y],
+      angle: at.angle,
+      justify: justify.includes("left") ? "left" : justify.includes("right") ? "right" : "center",
+      size: Number.isFinite(size) && size > 0 ? size : 1.27,
+    });
+  }
+  return out;
+}
+
+/**
+ * The room a field's text takes on the sheet, as KiCad draws it: horizontal or
+ * vertical (never upside down), turned and mirrored with its symbol, starting at
+ * its anchor for left, ending there for right, centred otherwise. `at` is the
+ * field's place on the sheet.
+ */
+export function fieldTextBox(field: FieldText, at: Point, symbolAngle: number, mirror: Mirror): Box {
+  const vertical = normalizeAngle(field.angle) % 180 !== 0;
+  const [dx, dy] = toSheet(vertical ? 0 : 1, vertical ? 1 : 0, symbolAngle, mirror);
+  const w = textWidth(field.text) * (field.size / 1.27);
+  const h = field.size;
+  const [s0, s1] = field.justify === "left" ? [0, w] : field.justify === "right" ? [-w, 0] : [-w / 2, w / 2];
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (const s of [s0, s1]) {
+    for (const t of [-h / 2, h / 2]) {
+      xs.push(at[0] + dx * s - dy * t);
+      ys.push(at[1] + dy * s + dx * t);
+    }
+  }
+  return { minX: round4(Math.min(...xs)), minY: round4(Math.min(...ys)), maxX: round4(Math.max(...xs)), maxY: round4(Math.max(...ys)) };
+}
+
 export const offsetBox = (box: Box, at: Point): Box => ({
   minX: box.minX + at[0],
   minY: box.minY + at[1],

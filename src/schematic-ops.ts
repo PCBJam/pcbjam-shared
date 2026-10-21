@@ -28,6 +28,8 @@ import { parseSexpr, printSexpr, type SNode } from "./sexpr.js";
 import { buildSymbolClipboard, isForm, quote, safeDefinition, unquote, type Form } from "./symbol-lib.js";
 import {
   atOf,
+  fieldTextBox,
+  fieldTexts,
   fmt,
   freeSpot,
   GRID,
@@ -47,6 +49,7 @@ import {
   type Point,
   type SheetPin,
 } from "./schematic-geometry.js";
+import { hitsBox, onSegmentInterior, pathProblem, pointKey, routeWire, samePoint, type RouteObstacles } from "./schematic-route.js";
 
 // ── Results ──────────────────────────────────────────────────────────────────
 
@@ -59,13 +62,15 @@ export interface SchematicEdit {
   libSymbols: Record<string, string>;
 }
 
-export type SchematicOpErrorCode = "NOT_FOUND" | "NO_PIN" | "NO_DEFINITION" | "INVALID";
+export type SchematicOpErrorCode = "NOT_FOUND" | "NO_PIN" | "NO_DEFINITION" | "INVALID" | "NO_ROUTE";
 
 /** A refusal the agent can act on: the message says what to fix. */
 export class SchematicOpError extends Error {
   constructor(
     readonly code: SchematicOpErrorCode,
     message: string,
+    /** For a `NO_ROUTE`: why, in a few words, for a note ("it would run 52 mm"). */
+    readonly why?: string,
   ) {
     super(message);
     this.name = "SchematicOpError";
@@ -320,21 +325,7 @@ export function compareRefs(a: string, b: string): number {
 
 // ── Small helpers ────────────────────────────────────────────────────────────
 
-const key = (p: Point): string => `${Math.round(p[0] * 10000)},${Math.round(p[1] * 10000)}`;
-const samePoint = (a: Point, b: Point): boolean => key(a) === key(b);
-
-/** Whether `p` lies on segment a-b, ends excluded. */
-function onSegmentInterior(p: Point, a: Point, b: Point): boolean {
-  if (samePoint(p, a) || samePoint(p, b)) return false;
-  const cross = (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
-  if (Math.abs(cross) > 1e-6) return false;
-  return (
-    p[0] >= Math.min(a[0], b[0]) - 1e-6 &&
-    p[0] <= Math.max(a[0], b[0]) + 1e-6 &&
-    p[1] >= Math.min(a[1], b[1]) - 1e-6 &&
-    p[1] <= Math.max(a[1], b[1]) + 1e-6
-  );
-}
+const key = pointKey;
 
 /**
  * Text from outside as a KiCad string: no control characters (C0, DEL, C1),
@@ -372,6 +363,27 @@ export function checkLibId(libId: string): { lib: string; item: string } {
 /** Names KiCad's power library covers: `+3V3`, `-12V`, `GND`, `VCC`, … */
 export function isPowerNetName(net: string): boolean {
   return /^[+-]/.test(net) || /^(GND|AGND|DGND|PGND|GNDA|GNDD|GNDPWR|VCC|VDD|VSS|VEE|VBUS|VBAT|VAA|VPP)\w*$/i.test(net);
+}
+
+/** Ground nets: GND and its kin. */
+const isGroundNet = (net: string): boolean => /^(GND|AGND|DGND|PGND|GNDA|GNDD|GNDPWR|VSS|0V)\w*$/i.test(net);
+
+/** Positive supplies (`+3V3`, `VCC`, `VBUS`, …): drawn on top. */
+const isSupplyNet = (net: string): boolean => isPowerNetName(net) && !isGroundNet(net) && !net.startsWith("-") && !/^VEE/i.test(net);
+
+/** The room a placed symbol's visible field text takes on the sheet (0009 §3.5). */
+function placedTextBoxes(form: Form, angle: Angle, mirror: Mirror): Box[] {
+  return fieldTexts(form).map((f) => fieldTextBox(f, f.at, angle, mirror));
+}
+
+/** The room `def`'s visible fields take for a part at `at`, with the texts it will get (Reference, Value, …). */
+function defTextBoxes(def: Form, at: Point, angle: Angle, mirror: Mirror, texts: Record<string, string | undefined>): Box[] {
+  return fieldTexts(def).flatMap((f) => {
+    const text = texts[f.name] ?? f.text;
+    if (!text) return [];
+    const [dx, dy] = toSheet(f.at[0], f.at[1], angle, mirror);
+    return [fieldTextBox({ ...f, text }, [at[0] + dx, at[1] + dy], angle, mirror)];
+  });
 }
 
 const newUuid = (): string => crypto.randomUUID();
@@ -419,11 +431,14 @@ class EditBuilder {
   readonly libSymbols: Record<string, string> = {};
   readonly refs = new Set<string>();
   readonly boxes: Box[] = [];
+  /** The room each symbol's visible field text takes (0009 §3.5), by symbol uuid; also in `boxes`. */
+  readonly texts = new Map<string, Box[]>();
 
   constructor(readonly sheet: Sheet) {
     for (const s of sheet.symbols) this.refs.add(s.ref);
     for (const s of sheet.symbols) {
       this.boxes.push(s.def ? offsetBox(symbolBox(s.def, s.angle, s.mirror, s.unit), s.at) : offsetBox({ minX: -2.54, minY: -2.54, maxX: 2.54, maxY: 2.54 }, s.at));
+      this.setTexts(s.uuid, placedTextBoxes(s.form, s.angle, s.mirror));
     }
     for (const l of sheet.labels) this.boxes.push(textBox(l.at, l.angle, l.name));
     for (const w of sheet.wires) {
@@ -448,6 +463,12 @@ class EditBuilder {
 
   upsert(uuid: string, form: SNode): void {
     this.upserts.set(uuid, printSexpr(form));
+  }
+
+  /** A symbol's field text boxes, at its (new) place. */
+  setTexts(uuid: string, boxes: Box[]): void {
+    this.texts.set(uuid, boxes);
+    this.boxes.push(...boxes);
   }
 
   remove(uuid: string): void {
@@ -584,6 +605,8 @@ export interface ConnectReport {
   pin: string;
   net: string | null;
   how: "label" | "global_label" | "power" | "no_connect" | "disconnected" | "already" | "wire";
+  /** Why it was connected otherwise than asked (a wire with no clean route became labels). */
+  note?: string;
 }
 
 /** The embedded power symbol whose value is `net`, if the sheet has one. */
@@ -607,47 +630,189 @@ function powerPlacement(def: Form, pin: SheetPin): { at: [number, number]; angle
   return { at: pin.at, angle: 0 };
 }
 
-/** How far a stub wire takes a power symbol out from a sideways pin (two grid steps). */
+/** One step of a stub wire taking a label or power symbol out from a pin (two grid steps). */
 const STUB = 2.54;
 
+/** A way out of a pin for a label or power symbol: the stub's points from the pin end, and the way its decoration faces. */
+interface StubWay {
+  path: Array<[number, number]>;
+  dir: Point;
+}
+
 /**
- * Where a power symbol goes for `pin` (ai-chat 0003 step 5c). On a sideways pin
- * it keeps its natural orientation (a supply points up, a ground down) on a
- * short stub wire: turned sideways, the symbols of neighbouring pins (a
+ * Ways out of `pin` for a label or power symbol, shortest first (ai-chat 0008
+ * §2.3): on the pin end, straight out up to four steps, then out and sideways.
+ */
+function stubWays(pin: SheetPin, opts: { onEnd: boolean; bent: boolean }): StubWay[] {
+  const out: Point = [-pin.toward[0], -pin.toward[1]];
+  const step = (p: Point, d: Point, n: number): [number, number] => [round4(p[0] + d[0] * STUB * n), round4(p[1] + d[1] * STUB * n)];
+  const ways: Array<StubWay & { cost: number }> = [];
+  if (opts.onEnd) ways.push({ path: [pin.at], dir: out, cost: 0 });
+  for (let k = 1; k <= 4; k++) ways.push({ path: [pin.at, step(pin.at, out, k)], dir: out, cost: k });
+  if (opts.bent) {
+    const sides: Point[] = [
+      [out[1], out[0]],
+      [-out[1], -out[0]],
+    ];
+    for (let k = 1; k <= 2; k++) {
+      for (let m = 1; m <= 4; m++) {
+        for (const side of sides) {
+          const corner = step(pin.at, out, k);
+          ways.push({ path: [pin.at, corner, step(corner, side, m)], dir: side, cost: k + m + 1 });
+        }
+      }
+    }
+  }
+  // Stable: on a tie the straight way (listed first) wins.
+  return ways.sort((x, y) => x.cost - y.cost);
+}
+
+/** What is wrong with a stub along `path` from a pin end (null: nothing): ai-chat 0008 §2.1's rules, and not ending on a wire. */
+function stubProblem(path: Array<[number, number]>, obs: RouteObstacles): string | null {
+  if (path.length < 2) return null;
+  const end = path[path.length - 1]!;
+  return pathProblem(path, obs) ?? (obs.wires.some((w) => onSegmentInterior(end, w.a, w.b)) ? "ends on a wire" : null);
+}
+
+/** The boxes `b` keeps for the wires on `at` (a label may sit on its pin's wire). */
+function wireBoxesAt(b: EditBuilder, at: Point): Box[] {
+  return b.sheet.wires
+    .filter((w) => !b.removed.has(w.uuid) && (samePoint(w.a, at) || samePoint(w.b, at)))
+    .map((w) => ({ minX: Math.min(w.a[0], w.b[0]), minY: Math.min(w.a[1], w.b[1]), maxX: Math.max(w.a[0], w.b[0]), maxY: Math.max(w.a[1], w.b[1]) }));
+}
+
+/** Whether `box` meets nothing on the sheet but `except` (touching edges do not count, as in the layout check). */
+function clearOf(b: EditBuilder, box: Box, except: Box[]): boolean {
+  const inset = (x: Box): Box => ({ minX: x.minX + 0.1, minY: x.minY + 0.1, maxX: x.maxX - 0.1, maxY: x.maxY - 0.1 });
+  const meet = (p: Box, q: Box) => p.minX < q.maxX && q.minX < p.maxX && p.minY < q.maxY && q.minY < p.maxY;
+  const skip = new Set(except.map((x) => JSON.stringify(x)));
+  const mine = inset(box);
+  return !b.boxes.some((o) => !skip.has(JSON.stringify(o)) && meet(mine, inset(o)));
+}
+
+/** Draw a stub from its pin end; a junction where the pin already had a wire (three ends meet). */
+function drawStub(b: EditBuilder, path: Array<[number, number]>): void {
+  if (path.length < 2) return;
+  const had = b.sheet.wires.some((w) => !b.removed.has(w.uuid) && (samePoint(w.a, path[0]!) || samePoint(w.b, path[0]!)));
+  for (let i = 1; i < path.length; i++) b.addWire(path[i - 1]!, path[i]!);
+  if (had) b.addJunction(path[0]!);
+}
+
+/**
+ * Where a power symbol goes for `pin` (ai-chat 0003 step 5c, 0008 §2.3). On a
+ * sideways pin it keeps its natural orientation (a supply points up, a ground
+ * down) on a stub wire: turned sideways, the symbols of neighbouring pins (a
  * connector's +5V and GND, 2.54 mm apart) landed on each other. On a pin that
- * points up or down it sits on the pin end, turned away from the part.
+ * points up or down it sits on the pin end, turned away from the part. Either
+ * way it goes out step by step until its box is clear; the stub touches nothing.
  */
 function powerSpot(b: EditBuilder, def: Form, pin: SheetPin): { at: [number, number]; angle: Angle } {
   const natural = pinPositions(def, [0, 0], 0)[0]?.toward;
   const out: Point = [-pin.toward[0], -pin.toward[1]];
-  if (natural && natural[0] === 0 && out[1] === 0 && out[0] !== 0) {
-    const end: [number, number] = [round4(pin.at[0] + out[0] * STUB), pin.at[1]];
-    b.addWire(pin.at, end);
-    // A pin facing the symbol's own way puts it upright (angle 0).
-    return powerPlacement(def, { ...pin, at: end, toward: [-natural[0], -natural[1]] });
+  const sideways = !!natural && natural[0] === 0 && out[1] === 0 && out[0] !== 0;
+  // A pin facing the symbol's own way puts it upright (angle 0).
+  const placeAt = (end: [number, number]) => powerPlacement(def, sideways ? { ...pin, at: end, toward: [-natural![0], -natural![1]] } : { ...pin, at: end });
+  const obs = obstaclesFor(b, [pin.at]);
+  const except = wireBoxesAt(b, pin.at);
+  // Where three lines meet already, a stub would make four (0009 §3.2).
+  const crowded = armsAt(b, pin.at) >= 3;
+  const ways = stubWays(pin, { onEnd: !sideways, bent: false }).filter((w) => !crowded || w.path.length < 2);
+  const clean = ways.filter((w) => !stubProblem(w.path, obs));
+  for (const way of clean) {
+    const place = placeAt(way.path[way.path.length - 1]!);
+    // Its name too (0009 §3.5).
+    const room = [offsetBox(symbolBox(def, place.angle), place.at), ...defTextBoxes(def, place.at, place.angle, "", {})];
+    if (!room.every((box) => clearOf(b, box, except))) continue;
+    drawStub(b, way.path);
+    return place;
   }
-  return powerPlacement(def, pin);
+  // Nothing clear: the shortest clean way (the layout check names the overlap), else the pin end.
+  const way = clean[0];
+  if (!way) return powerPlacement(def, pin);
+  drawStub(b, way.path);
+  return placeAt(way.path[way.path.length - 1]!);
 }
 
 /**
- * A pin's power stub, as `powerSpot` draws it: the one wire from the pin end,
- * STUB long, to a power symbol and nothing else. A wire the person drew (any
- * other length, or going on to more) is not one, so nothing redraws it.
+ * Where a label goes for `pin` (ai-chat 0008 §2.3): on the pin end, facing away
+ * from the part, when its text is clear; else out on a stub, straight then
+ * bent, step by step. Nothing clear: the pin end (the layout check names it).
  */
-function stubOf(b: EditBuilder, at: Point): { wire: string; end: [number, number] } | null {
+function labelSpot(b: EditBuilder, pin: SheetPin, name: string): { at: [number, number]; angle: Angle } {
+  const obs = obstaclesFor(b, [pin.at]);
+  const except = wireBoxesAt(b, pin.at);
+  const crowded = armsAt(b, pin.at) >= 3;
+  for (const way of stubWays(pin, { onEnd: true, bent: true }).filter((w) => !crowded || w.path.length < 2)) {
+    const end = way.path[way.path.length - 1]!;
+    const angle = outwardAngle([-way.dir[0], -way.dir[1]]);
+    if (stubProblem(way.path, obs) || !clearOf(b, textBox(end, angle, name), except)) continue;
+    drawStub(b, way.path);
+    return { at: end, angle };
+  }
+  return { at: pin.at, angle: outwardAngle(pin.toward) };
+}
+
+/**
+ * A pin's decoration stub, as `powerSpot` and `labelSpot` draw it: from the pin
+ * end (its only wire) through plain bends to one label or power symbol and
+ * nothing else. A run going on to more (a branch, another pin, a junction) is
+ * not one, so nothing redraws it.
+ */
+function stubOf(b: EditBuilder, at: Point): { wires: string[]; end: [number, number] } | null {
   const sheet = b.sheet;
   const live = sheet.wires.filter((w) => !b.removed.has(w.uuid));
-  const fromPin = live.filter((w) => samePoint(w.a, at) || samePoint(w.b, at));
-  if (fromPin.length !== 1) return null;
-  const w = fromPin[0]!;
-  const end = samePoint(w.a, at) ? w.b : w.a;
-  if (Math.abs(Math.hypot(end[0] - at[0], end[1] - at[1]) - STUB) > 1e-3) return null;
-  if (live.filter((x) => samePoint(x.a, end) || samePoint(x.b, end)).length !== 1) return null;
-  if (live.some((x) => onSegmentInterior(end, x.a, x.b))) return null;
-  if (sheet.labels.some((l) => !b.removed.has(l.uuid) && samePoint(l.at, end))) return null;
-  if (sheet.symbols.some((s) => !s.power && !b.removed.has(s.uuid) && s.pins.some((p) => samePoint(p.at, end)))) return null;
-  const powered = sheet.symbols.some((s) => s.power && !b.removed.has(s.uuid) && s.pins.some((p) => samePoint(p.at, end)));
-  return powered ? { wire: w.uuid, end } : null;
+  const wiresAt = (p: Point) => live.filter((w) => samePoint(w.a, p) || samePoint(w.b, p));
+  const has = (p: Point) => ({
+    pin: sheet.symbols.some((s) => !s.power && !b.removed.has(s.uuid) && s.pins.some((q) => samePoint(q.at, p))),
+    power: sheet.symbols.some((s) => s.power && !b.removed.has(s.uuid) && s.pins.some((q) => samePoint(q.at, p))),
+    label: sheet.labels.some((l) => !b.removed.has(l.uuid) && l.kind !== "hierarchical_label" && samePoint(l.at, p)),
+    other:
+      sheet.labels.some((l) => !b.removed.has(l.uuid) && l.kind === "hierarchical_label" && samePoint(l.at, p)) ||
+      [...sheet.junctions, ...sheet.noConnects].some((x) => !b.removed.has(x.uuid) && samePoint(x.at, p)) ||
+      live.some((w) => onSegmentInterior(p, w.a, w.b)),
+  });
+  const first = wiresAt(at);
+  if (first.length !== 1) return null;
+  const wires: string[] = [];
+  let prev: Point = at;
+  let w = first[0]!;
+  for (let n = 0; n < 3; n++) {
+    wires.push(w.uuid);
+    const end = samePoint(w.a, prev) ? w.b : w.a;
+    const here = has(end);
+    if (here.pin || here.other) return null;
+    const next = wiresAt(end).filter((x) => x.uuid !== w.uuid);
+    if (!next.length) return here.label !== here.power ? { wires, end } : null;
+    if (next.length !== 1 || here.label || here.power) return null;
+    prev = end;
+    w = next[0]!;
+  }
+  return null;
+}
+
+/**
+ * The lines meeting at `p` (0009 §3.2): wire ends, wires passing through (two
+ * each) and pin ends, power symbols' included. Four read like a crossing.
+ */
+function armsAt(b: EditBuilder, p: Point): number {
+  let n = 0;
+  for (const w of b.sheet.wires) {
+    if (b.removed.has(w.uuid)) continue;
+    if (samePoint(w.a, p) || samePoint(w.b, p)) n += 1;
+    else if (onSegmentInterior(p, w.a, w.b)) n += 2;
+  }
+  for (const s of b.sheet.symbols) if (!b.removed.has(s.uuid)) n += s.pins.filter((q) => samePoint(q.at, p)).length;
+  return n;
+}
+
+/** The nets named on a pin: labels and power symbols on its end or at the far end of its stub. */
+function pinNets(b: EditBuilder, pin: SheetPin): string[] {
+  const stub = stubOf(b, pin.at);
+  const ends = [pin.at, ...(stub ? [stub.end] : [])];
+  return [
+    ...b.sheet.labels.filter((l) => !b.removed.has(l.uuid) && ends.some((e) => samePoint(l.at, e))).map((l) => l.name),
+    ...b.sheet.symbols.filter((s) => s.power && !b.removed.has(s.uuid) && s.pins.some((p) => ends.some((e) => samePoint(p.at, e)))).map((s) => s.value),
+  ];
 }
 
 interface ConnectContext {
@@ -660,7 +825,7 @@ function attachPin(
   ctx: ConnectContext,
   pin: SheetPin,
   pinName: string,
-  target: { net: string } | { noConnect: true } | { disconnect: true },
+  target: { net: string; labelKind?: "label" | "global_label" } | { noConnect: true } | { disconnect: true },
   ownerUuid: string,
 ): ConnectReport {
   const { b } = ctx;
@@ -713,15 +878,17 @@ function attachPin(
       def: power.def,
       pins: pinPositions(power.def, at, angle),
     });
+    b.boxes.push(offsetBox(symbolBox(power.def, angle), at));
+    b.setTexts(uuid, defTextBoxes(power.def, at, angle, "", {}));
     return { pin: pinName, net, how: "power" };
   }
   const global = isPowerNetName(net) || sheet.labels.some((l) => l.kind === "global_label" && l.name === net);
-  const kind = global ? "global_label" : "label";
-  const angle = outwardAngle(pin.toward);
+  const kind = target.labelKind ?? (global ? "global_label" : "label");
+  const { at, angle } = labelSpot(b, pin, net);
   const uuid = newUuid();
-  b.upsert(uuid, labelForm(kind, net, pin.at, angle, uuid));
-  sheet.labels.push({ uuid, kind, name: net, at: pin.at, angle });
-  b.boxes.push(textBox(pin.at, angle, net));
+  b.upsert(uuid, labelForm(kind, net, at, angle, uuid));
+  sheet.labels.push({ uuid, kind, name: net, at, angle });
+  b.boxes.push(textBox(at, angle, net));
   return { pin: pinName, net, how: kind };
 }
 
@@ -735,6 +902,8 @@ export interface ConnectPin {
   noConnect?: boolean;
   /** Draw a wire to this pin (`"R2.1"`) instead of a label: for pins near each other. */
   to?: string;
+  /** With `to`: when no clean wire exists, put both pins on this net name instead (ai-chat 0008 §2.2). */
+  orNet?: string;
 }
 
 /**
@@ -756,8 +925,19 @@ export function connectEdit(input: { doc: KicadDoc; pins: ConnectPin[]; powerDef
     const name = `${symbol.ref}.${pin.number}`;
     if (p.to) {
       const other = pinEnd(b, p.to);
-      wireBetween(b, { at: pin.at, leave: [-pin.toward[0], -pin.toward[1]], name }, other);
-      return { pin: name, net: other.name, how: "wire" as const };
+      try {
+        wireBetween(b, { at: pin.at, leave: [-pin.toward[0], -pin.toward[1]], name }, other, p.orNet ? { maxLength: LONG_WIRE } : {});
+        return { pin: name, net: other.name, how: "wire" as const };
+      } catch (error) {
+        if (!(error instanceof SchematicOpError && error.code === "NO_ROUTE") || !p.orNet) throw error;
+        // No clean wire: both pins on the net's name instead, as for pins far apart.
+        const mine = attachPin(ctx, pin, name, { net: p.orNet }, symbol.uuid);
+        const [ref, pinText] = [other.name.slice(0, other.name.lastIndexOf(".")), other.name.slice(other.name.lastIndexOf(".") + 1)];
+        const otherSymbol = findSymbol(b.sheet, ref);
+        attachPin(ctx, findPin(otherSymbol, pinText), other.name, { net: p.orNet }, otherSymbol.uuid);
+        const note = `No clean wire to ${other.name} (${error.why ?? "every way crosses a part or touches another pin"}): both pins got the net name ${p.orNet} instead.`;
+        return { ...mine, note };
+      }
     }
     if (p.noConnect) return attachPin(ctx, pin, name, { noConnect: true }, symbol.uuid);
     if (p.net === null) return attachPin(ctx, pin, name, { disconnect: true }, symbol.uuid);
@@ -787,40 +967,82 @@ function pinEnd(b: EditBuilder, text: string): WireEnd {
   return { at: pin.at, leave: [-pin.toward[0], -pin.toward[1]], name: `${symbol.ref}.${pin.number}` };
 }
 
-const hitsBox = (a: Point, z: Point, box: Box): boolean => {
-  const eps = 0.05; // touching an edge (a pin end on its part's outline) is not crossing
-  const [minX, maxX] = [Math.min(a[0], z[0]), Math.max(a[0], z[0])];
-  const [minY, maxY] = [Math.min(a[1], z[1]), Math.max(a[1], z[1])];
-  return minX < box.maxX - eps && maxX > box.minX + eps && minY < box.maxY - eps && maxY > box.minY + eps;
-};
+/**
+ * What a new wire must keep off (ai-chat 0008 §2.1): every pin end (power
+ * symbols' too), label anchor, flag, junction and wire end on the sheet except
+ * `ends`; the wires; the parts' bodies; label and field text, at a small cost.
+ */
+function obstaclesFor(b: EditBuilder, ends: Point[]): RouteObstacles {
+  const live = <T extends { uuid: string }>(xs: T[]) => xs.filter((x) => !b.removed.has(x.uuid));
+  const symbols = live(b.sheet.symbols);
+  const wires = live(b.sheet.wires);
+  const labels = live(b.sheet.labels);
+  const points: Point[] = [
+    ...symbols.flatMap((s) => s.pins.map((p) => p.at)),
+    ...labels.map((l) => l.at),
+    ...live(b.sheet.noConnects).map((n) => n.at),
+    ...live(b.sheet.junctions).map((j) => j.at),
+    ...wires.flatMap((w) => [w.a, w.b]),
+  ].filter((p) => !ends.some((e) => samePoint(e, p)));
+  return {
+    points,
+    wires: wires.map((w) => ({ a: w.a, b: w.b })),
+    bodies: symbols.filter((s) => !s.power && s.def).map((s) => offsetBox(symbolBox(s.def!, s.angle, s.mirror, s.unit), s.at)),
+    // Text: labels and the parts' own (values, references; 0009 §3.5).
+    soft: [...labels.map((l) => textBox(l.at, l.angle, l.name)), ...symbols.flatMap((s) => b.texts.get(s.uuid) ?? [])],
+  };
+}
 
 /**
- * Points of a wire from `a` to `z` on the grid: straight when they line up,
- * else an L. Of the two Ls, the one crossing the fewest parts and passing over
- * the fewest other pins, leaving `a`'s part outward on a tie.
+ * Points of a wire from `a` to `z` (bends included) that makes no connection
+ * nobody asked for: around parts, never on another pin, label, flag, junction
+ * or wire end, never along another wire (ai-chat 0008 §2.1). `throughBodies`
+ * lets it cross a part when nothing else works (a moved part's wires).
  */
-function route(b: EditBuilder, a: WireEnd, z: WireEnd): Array<[number, number]> {
-  if (Math.abs(a.at[0] - z.at[0]) < 1e-6 || Math.abs(a.at[1] - z.at[1]) < 1e-6) return [a.at, z.at];
-  const live = b.sheet.symbols.filter((s) => !b.removed.has(s.uuid) && !s.power && s.def);
-  const boxes = live.map((s) => offsetBox(symbolBox(s.def!, s.angle, s.mirror, s.unit), s.at));
-  const pins = live.flatMap((s) => s.pins.map((p) => p.at)).filter((p) => !samePoint(p, a.at) && !samePoint(p, z.at));
-  const cost = (corner: [number, number]): number => {
-    const segs: Array<[Point, Point]> = [
-      [a.at, corner],
-      [corner, z.at],
-    ];
-    const crossings = boxes.filter((box) => segs.some(([p, q]) => hitsBox(p, q, box))).length;
-    const overPins = pins.filter((p) => segs.some(([q, r]) => onSegmentInterior(p, q, r) || samePoint(p, corner))).length;
-    const dir: Point = [Math.sign(corner[0] - a.at[0]), Math.sign(corner[1] - a.at[1])];
-    const outward = a.leave && dir[0] === a.leave[0] && dir[1] === a.leave[1] ? 0 : 1;
-    return crossings * 100 + overPins * 10 + outward;
-  };
-  const corners: Array<[number, number]> = [
-    [z.at[0], a.at[1]],
-    [a.at[0], z.at[1]],
-  ];
-  const corner = cost(corners[0]!) <= cost(corners[1]!) ? corners[0]! : corners[1]!;
-  return [a.at, corner, z.at];
+function route(b: EditBuilder, a: WireEnd, z: WireEnd, opts: WireOptions = {}): Array<[number, number]> {
+  // A fourth line where three meet reads like a crossing (0009 §3.2); a redrawn wire keeps what was there.
+  for (const end of opts.redraw ? [] : [a, z]) {
+    if (armsAt(b, end.at) >= 3) {
+      throw new SchematicOpError(
+        "NO_ROUTE",
+        `No wire to ${end.name}: three lines already meet there, and a fourth makes a four-way junction, which reads like a crossing. Connect both pins to one net name instead (connect with a net).`,
+        `three lines already meet at ${end.name}`,
+      );
+    }
+  }
+  const points = routeWire(a, z, obstaclesFor(b, [a.at, z.at]), opts);
+  if (!points) {
+    throw new SchematicOpError(
+      "NO_ROUTE",
+      `No clean wire from ${a.name} to ${z.name}: every way crosses a part or touches another pin. Connect both pins to one net name instead (connect with a net).`,
+      "every way crosses a part or touches another pin",
+    );
+  }
+  const mm = pathLength(points);
+  if (opts.maxLength !== undefined && mm > opts.maxLength) {
+    throw new SchematicOpError(
+      "NO_ROUTE",
+      `A wire from ${a.name} to ${z.name} would run ${Math.round(mm)} mm around parts. Connect both pins to one net name instead (connect with a net).`,
+      `it would run ${Math.round(mm)} mm`,
+    );
+  }
+  return points.map((p): [number, number] => [p[0], p[1]]);
+}
+
+/** A wire's length along its points, in mm. */
+const pathLength = (points: readonly Point[]): number =>
+  points.slice(1).reduce((mm, q, i) => mm + Math.hypot(q[0] - points[i]![0], q[1] - points[i]![1]), 0);
+
+/** Wires longer than this read better as a net name on both ends (0009 §3.1). */
+const LONG_WIRE = 38.1;
+
+interface WireOptions {
+  /** Cross a part when nothing else works (a moved part's wires). */
+  throughBodies?: boolean;
+  /** Redrawing a connection that was there (a moved part's wire): ends where three lines meet are kept. */
+  redraw?: boolean;
+  /** Refuse a longer wire (`NO_ROUTE`), so the caller can use net names. */
+  maxLength?: number;
 }
 
 /**
@@ -828,10 +1050,10 @@ function route(b: EditBuilder, a: WireEnd, z: WireEnd): Array<[number, number]> 
  * another wire connects only with a junction, and three or more ends at one
  * point get one too.
  */
-function wireBetween(b: EditBuilder, a: WireEnd, z: WireEnd): Array<[number, number]> {
+function wireBetween(b: EditBuilder, a: WireEnd, z: WireEnd, opts: WireOptions = {}): Array<[number, number]> {
   if (samePoint(a.at, z.at)) return [a.at];
   const before = b.sheet.wires.filter((w) => !b.removed.has(w.uuid));
-  const points = route(b, a, z);
+  const points = route(b, a, z, opts);
   for (let i = 1; i < points.length; i++) b.addWire(points[i - 1]!, points[i]!);
   const pinsAt = (p: Point) =>
     b.sheet.symbols.filter((s) => !s.power && !b.removed.has(s.uuid)).reduce((n, s) => n + s.pins.filter((q) => samePoint(q.at, p)).length, 0);
@@ -969,8 +1191,129 @@ export interface PlacedReport {
   connected: ConnectReport[];
 }
 
+/**
+ * `box` grown by the part's own text (`texts`, 0009 §3.5) and by the labels
+ * `nets` will put on its pins, each facing away from the body (a power symbol
+ * takes about as much): parts placed with their nets are not packed so close
+ * that their labels run into each other.
+ */
+function withLabelRoom(box: Box, def: Form, angle: Angle, mirror: Mirror, nets: Record<string, string> | undefined, texts: Box[] = []): Box {
+  const room = { ...box };
+  const grow = (t: Box) => {
+    room.minX = Math.min(room.minX, t.minX);
+    room.minY = Math.min(room.minY, t.minY);
+    room.maxX = Math.max(room.maxX, t.maxX);
+    room.maxY = Math.max(room.maxY, t.maxY);
+  };
+  texts.forEach(grow);
+  if (!nets) return room;
+  const pins = pinPositions(def, [0, 0], angle, mirror);
+  for (const [which, net] of Object.entries(nets)) {
+    const pin = pins.find((p) => p.number === which) ?? pins.find((p) => p.name === which);
+    if (!pin || !net) continue;
+    grow(textBox(pin.at, outwardAngle(pin.toward), net));
+  }
+  return room;
+}
+
+/**
+ * Where a part placed with `nets` should start looking for room: beyond the end
+ * of a label already on the sheet for one of its nets, the way that label
+ * faces. Power nets are everywhere, so they do not count. None: undefined.
+ */
+function netAnchor(b: EditBuilder, nets: Record<string, string> | undefined): Point | undefined {
+  for (const net of Object.values(nets ?? {})) {
+    if (!net || isPowerNetName(net)) continue;
+    const label = b.sheet.labels.find((l) => !b.removed.has(l.uuid) && l.name === net);
+    if (!label) continue;
+    const t = textBox(label.at, label.angle, label.name);
+    const gap = 2 * STUB;
+    switch (normalizeAngle(label.angle)) {
+      case 0:
+        return [t.maxX + gap, label.at[1]];
+      case 180:
+        return [t.minX - gap, label.at[1]];
+      case 90:
+        return [label.at[0], t.minY - gap];
+      default:
+        return [label.at[0], t.maxY + gap];
+    }
+  }
+  return undefined;
+}
+
 /** A reference prefix from a definition's Reference field: `R`, `U`, `#PWR`. */
 const refPrefix = (def: Form): string => (prop(def, "Reference") ?? "U").replace(/[?\d]+$/, "") || "U";
+
+/**
+ * The pin that goes on top, for a part drawn upright by convention (0009 §3.3,
+ * §3.4): a capacitor between a supply and ground (supply up), a resistor
+ * between a supply and a signal (a pull-up: supply up) or between ground and a
+ * signal (a pull-down: ground down). Anything else: undefined.
+ */
+function topPin(def: Form, nets: Record<string, string> | undefined): string | undefined {
+  const entries = Object.entries(nets ?? {});
+  if (entries.length !== 2) return undefined;
+  const supply = entries.find(([, n]) => isSupplyNet(n));
+  const ground = entries.find(([, n]) => isGroundNet(n));
+  const signal = entries.find(([, n]) => !isPowerNetName(n));
+  const prefix = refPrefix(def);
+  if (prefix === "C" && supply && ground) return supply[0];
+  if (prefix === "R" && supply && signal) return supply[0];
+  if (prefix === "R" && ground && signal) return signal[0];
+  return undefined;
+}
+
+/** The angle that stands a two-pin part upright with `top` (a pin number or name) up; undefined when it has none. */
+function uprightAngle(def: Form, top: string, mirror: Mirror): Angle | undefined {
+  for (const angle of [0, 180, 90, 270] as const) {
+    const pins = pinPositions(def, [0, 0], angle, mirror);
+    if (pins.length !== 2) return undefined;
+    const t = pins.find((p) => p.number === top) ?? pins.find((p) => p.name === top);
+    const o = pins.find((p) => p !== t);
+    if (t && o && Math.abs(t.at[0] - o.at[0]) < 1e-6 && t.at[1] < o.at[1]) return angle;
+  }
+  return undefined;
+}
+
+/**
+ * Where a decoupling capacitor starts looking for room (0009 §3.3): just out
+ * from a chip's power input pin on its supply, the `near` part's first, else
+ * the first with no capacitor close. Not a capacitor between a supply and
+ * ground, or no such pin: undefined.
+ */
+function decouplingAnchor(b: EditBuilder, def: Form, nets: Record<string, string> | undefined, near: string | undefined): Point | undefined {
+  const names = Object.values(nets ?? {});
+  const supply = names.find(isSupplyNet);
+  if (refPrefix(def) !== "C" || names.length !== 2 || !supply || !names.some(isGroundNet)) return undefined;
+  const live = b.sheet.symbols.filter((s) => !s.power && !b.removed.has(s.uuid));
+  const isCap = (s: PlacedSymbol) => /^C\d/.test(s.ref);
+  const wanted = near?.trim().toLowerCase();
+  const first = (s: PlacedSymbol) => Number(s.ref.toLowerCase() === wanted);
+  const chips = live.filter((s) => !isCap(s)).sort((x, y) => first(y) - first(x) || compareRefs(x.ref, y.ref));
+  const pins = chips.flatMap((s) => s.pins.filter((p) => p.type === "power_in" && pinNets(b, p).includes(supply)));
+  const capped = (p: SheetPin) => live.some((c) => isCap(c) && c.pins.some((q) => Math.hypot(q.at[0] - p.at[0], q.at[1] - p.at[1]) < 12.7));
+  const pin = pins.find((p) => !capped(p)) ?? pins[0];
+  return pin && [pin.at[0] - pin.toward[0] * 2 * STUB, pin.at[1] - pin.toward[1] * 2 * STUB];
+}
+
+/**
+ * Where a pull-up or pull-down starts looking for room (0009 §3.4): above (a
+ * pull-up) or below the label of the signal it pulls, `room` clear of it. Not
+ * a pull resistor, or no such label: undefined.
+ */
+function pullAnchor(b: EditBuilder, def: Form, nets: Record<string, string> | undefined, room: Box): Point | undefined {
+  const entries = Object.entries(nets ?? {});
+  if (refPrefix(def) !== "R" || entries.length !== 2) return undefined;
+  const rail = entries.find(([, n]) => isSupplyNet(n) || isGroundNet(n));
+  const signal = entries.find(([, n]) => !isPowerNetName(n));
+  if (!rail || !signal) return undefined;
+  const label = b.sheet.labels.find((l) => !b.removed.has(l.uuid) && l.name === signal[1]);
+  if (!label) return undefined;
+  const t = textBox(label.at, label.angle, label.name);
+  const x = (t.minX + t.maxX) / 2;
+  return isSupplyNet(rail[1]) ? [x, t.minY - 2 * STUB - room.maxY] : [x, t.maxY + 2 * STUB - room.minY];
+}
 
 /**
  * Place parts: references continue the sheet's numbering, each part goes to a
@@ -994,17 +1337,11 @@ export function placePartEdit(input: { doc: KicadDoc; parts: PlacePart[]; powerD
     const def = part.def ?? b.sheet.defs.get(libId);
     if (!def) throw new SchematicOpError("NO_DEFINITION", `The sheet does not embed ${libId}; get it from the library first.`);
     b.embed(libId, def);
-    const angle = normalizeAngle(part.angle ?? 0);
     const mirror = part.mirror ?? "";
+    // A decoupling capacitor, a pull-up or a pull-down stands upright, supply on top, unless turned on purpose (0009 §3.3, §3.4).
+    const top = part.angle === undefined ? topPin(def, part.nets) : undefined;
+    const angle = top === undefined ? normalizeAngle(part.angle ?? 0) : (uprightAngle(def, top, mirror) ?? 0);
     const box = symbolBox(def, angle, mirror);
-    let at: [number, number];
-    if (part.at) {
-      at = [snap(part.at[0]), snap(part.at[1])];
-    } else if (part.near) {
-      at = freeSpot(b.boxes, box, { near: findSymbol(b.sheet, part.near).at });
-    } else {
-      at = freeSpot(b.boxes, box, { rowY: middleY });
-    }
     const value = part.value === undefined ? undefined : cleanText(part.value, "value");
     const footprint = part.footprint === undefined ? undefined : cleanText(part.footprint, "footprint", 200, true);
     for (const [field, text] of [["Value", value], ["Footprint", footprint]] as const) {
@@ -1016,9 +1353,26 @@ export function placePartEdit(input: { doc: KicadDoc; parts: PlacePart[]; powerD
       throw new SchematicOpError("INVALID", `${libId} is not a power symbol, but its reference starts with "#": KiCad would leave it off the board.`);
     }
     const ref = b.nextRef(refPrefix(def));
+    const texts = (pos: Point) => defTextBoxes(def, pos, angle, mirror, { Reference: ref, Value: value, Footprint: footprint });
+    // The room it needs: its body, its text, and the labels its nets will put on its pins (0008 §2.4, 0009 §3.5).
+    const room = withLabelRoom(box, def, angle, mirror, part.nets, texts([0, 0]));
+    // A decoupling capacitor beside its chip's power pin, a pull-up above its signal (0009 §3.3, §3.4); else
+    // next to where its nets already are, on the side their labels face (0008 §2.5); else next to `near`.
+    const anchor = decouplingAnchor(b, def, part.nets, part.near) ?? pullAnchor(b, def, part.nets, room) ?? netAnchor(b, part.nets);
+    let at: [number, number];
+    if (part.at) {
+      at = [snap(part.at[0]), snap(part.at[1])];
+    } else if (anchor) {
+      at = freeSpot(b.boxes, room, { near: anchor });
+    } else if (part.near) {
+      at = freeSpot(b.boxes, room, { near: findSymbol(b.sheet, part.near).at });
+    } else {
+      at = freeSpot(b.boxes, room, { rowY: middleY });
+    }
     const uuid = newUuid();
     b.upsert(uuid, symbolForm({ libId, def, ref, value, footprint, at, angle, mirror, uuid }, b.sheet.instance));
     b.boxes.push(offsetBox(box, at));
+    b.setTexts(uuid, texts(at));
     const pins = pinPositions(def, at, angle, mirror);
     const symbol: PlacedSymbol = {
       uuid,
@@ -1216,23 +1570,30 @@ export function movePartEdit(input: { doc: KicadDoc; moves: MovePart[] }): {
       reposition(node as SNode[], at[0] + dx, at[1] + dy);
     }
     b.upsert(symbol.uuid, form);
+    b.setTexts(symbol.uuid, placedTextBoxes(form, angle, mirror));
 
     let followed = 0;
     let rerouted = 0;
     if (symbol.def) {
       const after = pinPositions(symbol.def, at, angle, mirror, symbol.unit);
-      for (const before of symbol.pins) {
+      // The sheet view takes the part's new place first: what is drawn again below keeps off it.
+      const pinsBefore = symbol.pins;
+      Object.assign(symbol, { form, at, angle, mirror, pins: after });
+      b.boxes.push(offsetBox(symbolBox(symbol.def, angle, mirror, symbol.unit), at));
+      for (const before of pinsBefore) {
         const now = after.find((p) => p.number === before.number);
         if (!now || samePoint(now.at, before.at)) continue;
         for (const l of sheet.labels) {
           if (!samePoint(l.at, before.at)) continue;
           const la = outwardAngle(now.toward);
           b.upsert(l.uuid, relabel(renderForm(sheet.doc, l.uuid), now.at, la));
+          Object.assign(l, { at: now.at, angle: la });
           followed++;
         }
         for (const n of sheet.noConnects) {
           if (!samePoint(n.at, before.at)) continue;
           b.upsert(n.uuid, noConnectForm(now.at, n.uuid));
+          n.at = now.at;
           followed++;
         }
         for (const s of sheet.symbols) {
@@ -1251,26 +1612,42 @@ export function movePartEdit(input: { doc: KicadDoc; moves: MovePart[] }): {
             reposition(node as SNode[], place.at[0] + dx, place.at[1] + dy);
           }
           b.upsert(s.uuid, f);
+          b.setTexts(s.uuid, placedTextBoxes(f, place.angle, ""));
+          Object.assign(s, { form: f, at: place.at, angle: place.angle, pins: pinPositions(s.def, place.at, place.angle) });
           followed++;
         }
-        // A power stub (step 5c) is drawn again from the pin's new end: its way out may have turned.
+        // A stubbed power symbol or label (0003 step 5c, 0008 §2.3) is drawn again from the
+        // pin's new end: its way out may have turned, and the old spot may be taken.
         const stub = stubOf(b, before.at);
         if (stub) {
-          b.remove(stub.wire);
+          for (const uuid of stub.wires) b.remove(uuid);
+          const name = `${symbol.ref}.${now.number}`;
           for (const s of sheet.symbols.filter((x) => x.power && x.def && !b.removed.has(x.uuid) && x.pins.some((p) => samePoint(p.at, stub.end)))) {
             b.remove(s.uuid);
             ctx.powerDefs[s.value] = { libId: s.libId, def: s.def! };
-            attachPin(ctx, now, `${symbol.ref}.${now.number}`, { net: s.value }, symbol.uuid);
+            attachPin(ctx, now, name, { net: s.value }, symbol.uuid);
+          }
+          for (const l of sheet.labels.filter((x) => !b.removed.has(x.uuid) && samePoint(x.at, stub.end))) {
+            b.remove(l.uuid);
+            attachPin(ctx, now, name, { net: l.name, labelKind: l.kind === "global_label" ? "global_label" : "label" }, symbol.uuid);
           }
           followed++;
         }
-        // Wires on the pin: re-routed from its new end (straight or one bend), so the part
-        // stays connected. KiCad's Move would leave them behind; this is its Drag.
+        // Wires on the pin: re-routed from its new end, so the part stays connected. KiCad's
+        // Move would leave them behind; this is its Drag. Through a part only when nothing else works.
         const leave: Point = [-now.toward[0], -now.toward[1]];
         for (const w of sheet.wires.filter((x) => !b.removed.has(x.uuid) && (samePoint(x.a, before.at) || samePoint(x.b, before.at)))) {
           const other = samePoint(w.a, before.at) ? w.b : w.a;
           b.remove(w.uuid);
-          wireBetween(b, { at: now.at, leave, name: `${symbol.ref}.${now.number}` }, { at: other, name: "wire" });
+          try {
+            wireBetween(b, { at: now.at, leave, name: `${symbol.ref}.${now.number}` }, { at: other, name: "wire" }, { throughBodies: true, redraw: true });
+          } catch (error) {
+            if (!(error instanceof SchematicOpError && error.code === "NO_ROUTE")) throw error;
+            throw new SchematicOpError(
+              "NO_ROUTE",
+              `Moving ${symbol.ref} there leaves no clean wire from its pin ${now.number} to (${fmt(other[0])}, ${fmt(other[1])}): every way touches another pin. Move it elsewhere, or connect that pin with a net name.`,
+            );
+          }
           rerouted++;
         }
       }
@@ -1496,10 +1873,18 @@ export function applySchematicEdit(doc: KicadDoc, edit: SchematicEdit): KicadDoc
 // ── Layout check ─────────────────────────────────────────────────────────────
 
 export interface LayoutIssue {
-  issue: "overlap" | "off_grid";
-  /** What is involved: `R5`, `label SDA`, `+5V symbol`. */
+  /**
+   * `wire_crosses_part`: a wire through a part's body; `wire_touches_pin`: a pin end on a wire's middle,
+   * which joins it (0008 §2.6). `long_wire`: a run of new wire longer than 38.1 mm, between `items`;
+   * `four_way_junction`: four lines meeting at one dot; `text_overlap`: a value, reference or other
+   * field text on something (0009 §3).
+   */
+  issue: "overlap" | "off_grid" | "wire_crosses_part" | "wire_touches_pin" | "long_wire" | "four_way_junction" | "text_overlap";
+  /** What is involved: `R5`, `label SDA`, `+5V symbol`, `wire`, `R5 Value`, `R5.1`. */
   items: string[];
   at: [number, number];
+  /** A `long_wire`'s length. */
+  mm?: number;
 }
 
 /**
@@ -1551,6 +1936,103 @@ export function layoutIssues(doc: KicadDoc, edit: SchematicEdit, max = 10): Layo
       seen.add(pair);
       issues.push({ issue: "overlap", items: [t.name, u.name], at: t.at });
     }
+  }
+  // Wires the edit drew or moved (ai-chat 0008 §2.6): through a part, or over a pin end.
+  const sheetBefore = readSheet(doc);
+  const wiresBefore = new Map(sheetBefore.wires.map((w) => [w.uuid, key(w.a) + key(w.b)]));
+  const parts = sheetAfter.symbols.filter((s) => !s.power && s.def);
+  const fresh = sheetAfter.wires.filter((x) => wiresBefore.get(x.uuid) !== key(x.a) + key(x.b));
+  for (const w of fresh) {
+    for (const s of parts) {
+      if (hitsBox(w.a, w.b, offsetBox(symbolBox(s.def!, s.angle, s.mirror, s.unit), s.at))) {
+        issues.push({ issue: "wire_crosses_part", items: ["wire", s.ref], at: w.a });
+      }
+      for (const p of s.pins) {
+        if (onSegmentInterior(p.at, w.a, w.b)) issues.push({ issue: "wire_touches_pin", items: ["wire", `${s.ref}.${p.number}`], at: p.at });
+      }
+    }
+  }
+
+  // Field text (0009 §3.5): text the edit placed or moved on something, or something it placed on text.
+  type Text = { owner: string; key: string; name: string; box: Box };
+  const textsOf = (sheet: Sheet): Text[] =>
+    sheet.symbols.flatMap((s) =>
+      fieldTexts(s.form).map((f) => ({
+        owner: s.uuid,
+        key: `${s.uuid}/${f.name}`,
+        name: s.power ? `${s.value} symbol` : `${s.ref} ${f.name}`,
+        box: fieldTextBox(f, f.at, s.angle, s.mirror),
+      })),
+    );
+  const textBefore = new Map(textsOf(sheetBefore).map((t) => [t.key, JSON.stringify(t.box)]));
+  const texts = textsOf(sheetAfter);
+  const textMoved = (t: Text) => textBefore.get(t.key) !== JSON.stringify(t.box);
+  const thingMoved = new Set(changed.map((t) => t.uuid));
+  const textIssue = (t: Text, other: string, otherKey: string) => {
+    const pair = [t.key, otherKey].sort().join();
+    if (seen.has(pair)) return;
+    seen.add(pair);
+    issues.push({ issue: "text_overlap", items: [t.name, other], at: [round4((t.box.minX + t.box.maxX) / 2), round4((t.box.minY + t.box.maxY) / 2)] });
+  };
+  for (const t of texts) {
+    const mine = inset(t.box);
+    for (const u of after) {
+      if (u.uuid !== t.owner && (textMoved(t) || thingMoved.has(u.uuid)) && meet(mine, inset(u.box))) textIssue(t, u.name, u.uuid);
+    }
+    for (const v of texts) {
+      if (v.owner !== t.owner && (textMoved(t) || textMoved(v)) && meet(mine, inset(v.box))) textIssue(t, v.name, v.key);
+    }
+    for (const w of fresh) if (hitsBox(w.a, w.b, t.box)) textIssue(t, "wire", w.uuid);
+  }
+
+  // What sits on a point: pin ends (power symbols' too), or a label.
+  const pinNames = (p: Point) => sheetAfter.symbols.flatMap((s) => s.pins.filter((q) => samePoint(q.at, p)).map((q) => (s.power ? `${s.value} symbol` : `${s.ref}.${q.number}`)));
+  const nameAt = (p: Point) => {
+    const label = sheetAfter.labels.find((l) => samePoint(l.at, p));
+    return pinNames(p)[0] ?? (label ? `label ${label.name}` : `(${fmt(p[0])}, ${fmt(p[1])})`);
+  };
+
+  // Four lines at one dot (0009 §3.2), where the edit drew a wire or put a part.
+  const touched = new Map<string, Point>();
+  for (const w of fresh) for (const p of [w.a, w.b]) touched.set(key(p), p);
+  for (const s of sheetAfter.symbols) if (thingMoved.has(s.uuid)) for (const p of s.pins) touched.set(key(p.at), p.at);
+  for (const p of touched.values()) {
+    const ends = sheetAfter.wires.filter((w) => samePoint(w.a, p) || samePoint(w.b, p)).length;
+    const through = sheetAfter.wires.filter((w) => onSegmentInterior(p, w.a, w.b)).length;
+    if (ends > 0 && ends + 2 * through + pinNames(p).length >= 4) issues.push({ issue: "four_way_junction", items: [nameAt(p)], at: [p[0], p[1]] });
+  }
+
+  // Long runs of new wire (0009 §3.1): a net name on both ends reads better. A run goes on through
+  // plain bends (two of its wires, nothing else) and stops at anything else.
+  const freshIds = new Set(fresh.map((w) => w.uuid));
+  const freshAt = (p: Point) => fresh.filter((w) => samePoint(w.a, p) || samePoint(w.b, p));
+  const plainBend = (p: Point) =>
+    freshAt(p).length === 2 &&
+    !sheetAfter.wires.some((w) => !freshIds.has(w.uuid) && (samePoint(w.a, p) || samePoint(w.b, p) || onSegmentInterior(p, w.a, w.b))) &&
+    !pinNames(p).length &&
+    !sheetAfter.labels.some((l) => samePoint(l.at, p)) &&
+    !sheetAfter.junctions.some((j) => samePoint(j.at, p));
+  const done = new Set<string>();
+  for (const w of fresh) {
+    if (done.has(w.uuid)) continue;
+    done.add(w.uuid);
+    let mm = 0;
+    const ends: Point[] = [];
+    for (const stack = [w]; stack.length; ) {
+      const x = stack.pop()!;
+      mm += Math.hypot(x.a[0] - x.b[0], x.a[1] - x.b[1]);
+      for (const p of [x.a, x.b]) {
+        if (!plainBend(p)) {
+          ends.push(p);
+          continue;
+        }
+        for (const y of freshAt(p).filter((y) => !done.has(y.uuid))) {
+          done.add(y.uuid);
+          stack.push(y);
+        }
+      }
+    }
+    if (mm > LONG_WIRE + 1e-6) issues.push({ issue: "long_wire", items: ends.slice(0, 2).map(nameAt), at: [(ends[0] ?? w.a)[0], (ends[0] ?? w.a)[1]], mm: Math.round(mm) });
   }
   return issues.slice(0, max);
 }
