@@ -474,7 +474,7 @@ export function buildLibIndex(
  * Tab-separated form of a symbol library's rows for the wasm bridge: the C++
  * side splits it without a JSON parser (nlohmann is slow in wasm, libs 0013).
  *
- *   v=<token>\tschema=1\tkind=symbol\n
+ *   v=<token>\tschema=1\tkind=symbol[\tfrom=<i>\ttotal=<n>]\n
  *   <n>\t<x>\t<pw>\t<u>\t<gp>\t<pc>\t<tv>\t<d>\t<k>\t<f>\t<fp>\t<r>\t<v>\t<ds>\t<un>\t<fl>\n
  *
  * Text escapes `\` `\t` `\n` as `\\` `\t` `\n`. `un` and `fl` are `key=value`
@@ -514,10 +514,20 @@ function decodePairs(s: string): Record<string, string> | undefined {
   return out;
 }
 
-/** Encode resolved symbol rows for the bridge; `token` identifies this state of the library. */
-export function encodeLibIndexTsv(token: string, rows: readonly SymbolIndexRow[]): string {
-  const lines = [`v=${escTsv(token)}\tschema=${LIB_INDEX_SCHEMA}\tkind=symbol`];
-  for (const r of rows) {
+/**
+ * Encode resolved symbol rows for the bridge; `token` identifies this state of
+ * the library. With `page`, only rows [from, from + size) are written and the
+ * header says where they start and how many the library has (the warm-up reads
+ * a large library in steps).
+ */
+export function encodeLibIndexTsv(
+  token: string,
+  rows: readonly SymbolIndexRow[],
+  page?: { from: number; size: number },
+): string {
+  const head = `v=${escTsv(token)}\tschema=${LIB_INDEX_SCHEMA}\tkind=symbol`;
+  const lines = [page ? `${head}\tfrom=${page.from}\ttotal=${rows.length}` : head];
+  for (const r of page ? rows.slice(page.from, page.from + page.size) : rows) {
     lines.push(
       [
         escTsv(r.n),
@@ -543,11 +553,17 @@ export function encodeLibIndexTsv(token: string, rows: readonly SymbolIndexRow[]
 }
 
 /** Inverse of `encodeLibIndexTsv` (tests; the C++ side has its own reader). */
-export function decodeLibIndexTsv(tsv: string): { token: string; rows: SymbolIndexRow[] } {
+export function decodeLibIndexTsv(tsv: string): {
+  token: string;
+  rows: SymbolIndexRow[];
+  page?: { from: number; total: number };
+} {
   const lines = tsv.split("\n");
   if (lines.at(-1) === "") lines.pop();
   const head = lines.shift() ?? "";
   const token = unescTsv(/^v=([^\t]*)/.exec(head)?.[1] ?? "");
+  const from = /\tfrom=(\d+)/.exec(head);
+  const total = /\ttotal=(\d+)/.exec(head);
   const rows = lines.map((line) => {
     const c = line.split("\t");
     const s = (i: number) => unescTsv(c[i] ?? "");
@@ -572,5 +588,5 @@ export function decodeLibIndexTsv(tsv: string): { token: string; rows: SymbolInd
     if (fl) row.fl = fl;
     return row;
   });
-  return { token, rows };
+  return from && total ? { token, rows, page: { from: Number(from[1]), total: Number(total[1]) } } : { token, rows };
 }

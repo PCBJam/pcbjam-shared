@@ -234,6 +234,14 @@ describe("TSV codec", () => {
     expect(back.rows).toEqual(rows);
   });
 
+  it("pages", () => {
+    const rows: SymbolIndexRow[] = ["A", "B", "C", "D", "E"].map((n) => ({ n }));
+    const tsv = encodeLibIndexTsv("t", rows, { from: 2, size: 2 });
+    expect(tsv.split("\n")[0]).toBe("v=t\tschema=1\tkind=symbol\tfrom=2\ttotal=5");
+    expect(decodeLibIndexTsv(tsv)).toEqual({ token: "t", rows: [{ n: "C" }, { n: "D" }], page: { from: 2, total: 5 } });
+    expect(decodeLibIndexTsv(encodeLibIndexTsv("t", rows, { from: 4, size: 2 })).rows).toEqual([{ n: "E" }]);
+  });
+
   it("an empty library", () => {
     expect(decodeLibIndexTsv(encodeLibIndexTsv("t", []))).toEqual({ token: "t", rows: [] });
   });

@@ -865,3 +865,23 @@ describe("realtime resync", () => {
     expect(text(await s.read("symbol/N"))).toBe("(N)");
   });
 });
+
+describe("layerEntries", () => {
+  it("lists each layer's own entries with its descriptor, bottom → top", async () => {
+    const cloud = new FakeCloud();
+    await cloud.server(ORIGIN).seed("symbol/R", body("(R)"));
+    await cloud.server(ORIGIN).seed("symbol/C", body("(C)"));
+    await cloud.server(MIRROR).seed("symbol/R", body("(R override)"));
+    const s = browser().stack(cloud, [staticOrigin(), liveMirror()]);
+    await s.open();
+
+    const layers = s.layerEntries();
+    expect(layers.map((l) => l.descriptor.namespace)).toEqual(["origin:R@v1", "mirror:p1"]);
+    expect(Object.keys(layers[0]!.entries).sort()).toEqual(["symbol/C", "symbol/R"]);
+    expect(Object.keys(layers[1]!.entries)).toEqual(["symbol/R"]);
+    expect(layers[1]!.entries["symbol/R"]!.hash).not.toBe("");
+
+    s.close();
+    expect(() => s.layerEntries()).toThrow("closed");
+  });
+});

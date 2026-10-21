@@ -1,4 +1,4 @@
-import type { LayerDescriptor } from "@pcbjam/shared";
+import type { LayerDescriptor, SyncEntry } from "@pcbjam/shared";
 import { SyncLayer, type LayerChange } from "./layer.js";
 import { idbStore, type LayerStore } from "./store.js";
 import {
@@ -166,6 +166,19 @@ export class SyncStack {
     }
     this.assertLifecycle(generation);
     return [...merged].map(([path, e]) => ({ path, ...e }));
+  }
+
+  /**
+   * Each layer's own listing, bottom → top, with the descriptor it was opened
+   * from — what {@link list} merges away. Lets a caller keep per-layer data
+   * (e.g. a library index served for an immutable origin layer) and apply the
+   * same top-wins rule itself. Unpushed local writes show with `hash: ""`.
+   */
+  layerEntries(): Array<{ descriptor: LayerDescriptor; entries: Record<string, SyncEntry> }> {
+    const generation = this.captureLifecycle();
+    const out = this.layers.map((l, i) => ({ descriptor: this.descriptors[i]!, entries: l.entries() }));
+    this.assertLifecycle(generation);
+    return out;
   }
 
   push(path: string, body: Uint8Array): Promise<void> {
