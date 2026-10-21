@@ -61,6 +61,21 @@ export interface SyncStackDescriptor {
 }
 
 /**
+ * A team library's 3D models for a VIEW-ONLY session (libs 0027): the boot
+ * payload's `modelLibs`. Readers get no symbol/footprint catalog and cannot
+ * open a team's live lib room, so the backend hands them, per library the
+ * project's boards reference, a sparse read-only layer that serves ONLY the
+ * referenced `model3d` items (`model3d/<name>` paths). `paths` carries the
+ * path variable the board refs use (`${<NICK>_DIR}/<modelsDir>/<name>`).
+ */
+export interface ModelLibDescriptor {
+  id: string;
+  name: string;
+  paths: { pathVar: string; modelsDir: string; docsDir: string | null };
+  layer: LayerDescriptor;
+}
+
+/**
  * Ids per batch request. The server caps each request at this many and returns
  * the rest in `remaining`, so a client that ignores paging still gets a valid
  * (partial) answer instead of an error.
