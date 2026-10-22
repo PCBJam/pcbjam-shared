@@ -4,7 +4,7 @@
   "kind": "fab",
   "version": 3,
   "createdAt": "2026-10-05",
-  "reviewedAt": "2026-10-05",
+  "reviewedAt": "2026-10-22",
   "reviewers": ["Gergő Törcsvári"],
   "website": "https://www.pcbway.com",
   "sources": [
@@ -12,13 +12,15 @@
       "id": "capabilities",
       "url": "https://www.pcbway.com/capabilities.html",
       "title": "PCBWay PCB Capabilities",
-      "retrievedAt": "2026-10-05"
+      "retrievedAt": "2026-10-22"
     },
     {
       "id": "kicad-drc",
       "url": "https://github.com/pcbway/PCBWay-Design-Rules/blob/main/KiCad/KiCAD_Custom_DRC_Rules_for_PCBWay.zip",
+      "fetchUrl": "https://raw.githubusercontent.com/pcbway/PCBWay-Design-Rules/main/KiCad/KiCAD_Custom_DRC_Rules_for_PCBWay.zip",
+      "archiveEntry": "*.kicad_dru",
       "title": "PCBWay's KiCad custom DRC rules (KiCAD_Custom_DRC_Rules_for_PCBWay.kicad_dru)",
-      "retrievedAt": "2026-10-05"
+      "retrievedAt": "2026-10-22"
     }
   ],
   "tiers": {
@@ -53,8 +55,8 @@
       "byCopper": {
         "2": {
           "rules": {
-            "trackWidth": { "mm": 0.178, "source": "capabilities", "anchor": "The min width/spacing of outer layer (before compensation)", "quote": "≥7/8mil", "note": "7 mil width, 70 µm (2 oz) copper, Normal process column.", "minimum": { "mm": 0.1524, "source": "kicad-drc", "anchor": "Minimum Trace Width and Spacing (outer layer)", "quote": "(rule \"Minimum Trace Width and Spacing (outer layer)\" (constraint track_width (min 0.1524mm)) (constraint clearance (min 0.1778mm)) (layer outer) (condition \"A.Type == 'track'\"))", "note": "The file's commented-out 2 oz alternative."  } },
-            "clearance": { "mm": 0.203, "source": "capabilities", "anchor": "The min width/spacing of outer layer (before compensation)", "quote": "≥7/8mil", "note": "8 mil spacing, 70 µm (2 oz) copper, Normal process column.", "minimum": { "mm": 0.1778, "source": "kicad-drc", "anchor": "Minimum Trace Width and Spacing (outer layer)", "quote": "(rule \"Minimum Trace Width and Spacing (outer layer)\" (constraint track_width (min 0.1524mm)) (constraint clearance (min 0.1778mm)) (layer outer) (condition \"A.Type == 'track'\"))", "note": "The file's commented-out 2 oz alternative."  } },
+            "trackWidth": { "mm": 0.178, "source": "capabilities", "anchor": "The min width/spacing of outer layer (before compensation)", "quote": "≥7/8mil", "note": "7 mil width, 70 µm (2 oz) copper, Normal process column.", "minimum": { "mm": 0.1524, "source": "kicad-drc", "anchor": "Minimum Trace Width and Spacing (outer layer)", "quote": "#(rule \"Minimum Trace Width and Spacing (outer layer)\" #(constraint track_width (min 0.1524mm)) #(constraint clearance (min 0.1778mm)) #(layer outer) #(condition \"A.Type == 'track'\"))", "note": "The file's commented-out 2 oz alternative."  } },
+            "clearance": { "mm": 0.203, "source": "capabilities", "anchor": "The min width/spacing of outer layer (before compensation)", "quote": "≥7/8mil", "note": "8 mil spacing, 70 µm (2 oz) copper, Normal process column.", "minimum": { "mm": 0.1778, "source": "kicad-drc", "anchor": "Minimum Trace Width and Spacing (outer layer)", "quote": "#(rule \"Minimum Trace Width and Spacing (outer layer)\" #(constraint track_width (min 0.1524mm)) #(constraint clearance (min 0.1778mm)) #(layer outer) #(condition \"A.Type == 'track'\"))", "note": "The file's commented-out 2 oz alternative."  } },
             "pthAnnular": { "mm": 0.305, "source": "capabilities", "anchor": "Minimum weld ring (outer layer)", "quote": "≥12mil", "note": "Component hole, 70 µm (2 oz) copper, Normal process column." }
           }
         }

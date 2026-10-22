@@ -4,7 +4,7 @@
   "kind": "fab",
   "version": 3,
   "createdAt": "2026-10-05",
-  "reviewedAt": "2026-10-05",
+  "reviewedAt": "2026-10-22",
   "reviewers": ["Gergő Törcsvári"],
   "website": "https://jlcpcb.com",
   "sources": [
@@ -12,13 +12,13 @@
       "id": "capabilities",
       "url": "https://jlcpcb.com/capabilities/pcb-capabilities",
       "title": "JLCPCB PCB Manufacturing & Assembly Capabilities",
-      "retrievedAt": "2026-10-05"
+      "retrievedAt": "2026-10-22"
     },
     {
       "id": "impedance",
       "url": "https://jlcpcb.com/impedance",
       "title": "JLCPCB Controlled Impedance PCB Parameters and Stackup",
-      "retrievedAt": "2026-10-05"
+      "retrievedAt": "2026-10-22"
     }
   ],
   "tiers": {

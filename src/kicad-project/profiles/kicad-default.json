@@ -4,21 +4,23 @@
   "kind": "kicad",
   "version": 1,
   "createdAt": "2026-10-05",
-  "reviewedAt": "2026-10-05",
+  "reviewedAt": "2026-10-22",
   "reviewers": ["Gergő Törcsvári"],
   "website": "https://www.kicad.org",
   "sources": [
     {
       "id": "bds-header",
-      "url": "https://gitlab.com/kicad/code/kicad/-/blob/master/include/board_design_settings.h",
-      "title": "KiCad include/board_design_settings.h (default design rules)",
-      "retrievedAt": "2026-10-05"
+      "url": "https://github.com/PCBJam/kicad-source-mirror/blob/d7a99d32b75e6645a27a11a75bccd7a3fdf89944/include/board_design_settings.h",
+      "fetchUrl": "https://raw.githubusercontent.com/PCBJam/kicad-source-mirror/d7a99d32b75e6645a27a11a75bccd7a3fdf89944/include/board_design_settings.h",
+      "title": "KiCad include/board_design_settings.h (default design rules), PCBJam's KiCad 10.0.7 fork",
+      "retrievedAt": "2026-10-22"
     },
     {
       "id": "bds-source",
-      "url": "https://gitlab.com/kicad/code/kicad/-/blob/master/pcbnew/board_design_settings.cpp",
-      "title": "KiCad pcbnew/board_design_settings.cpp (BOARD_DESIGN_SETTINGS constructor)",
-      "retrievedAt": "2026-10-05"
+      "url": "https://github.com/PCBJam/kicad-source-mirror/blob/d7a99d32b75e6645a27a11a75bccd7a3fdf89944/pcbnew/board_design_settings.cpp",
+      "fetchUrl": "https://raw.githubusercontent.com/PCBJam/kicad-source-mirror/d7a99d32b75e6645a27a11a75bccd7a3fdf89944/pcbnew/board_design_settings.cpp",
+      "title": "KiCad pcbnew/board_design_settings.cpp (BOARD_DESIGN_SETTINGS constructor), PCBJam's KiCad 10.0.7 fork",
+      "retrievedAt": "2026-10-22"
     }
   ],
   "tiers": {

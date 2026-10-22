@@ -160,7 +160,15 @@ export type FabStackup = z.infer<typeof fabStackupSchema>;
 
 export const fabSourceSchema = z.object({
   id: z.string().min(1),
+  /** The page people open (the dialog links it). */
   url: z.string().url(),
+  /**
+   * What the freshness check reads instead of `url`, when the page is only a
+   * viewer: the raw file behind a GitHub / GitLab blob page.
+   */
+  fetchUrl: z.string().url().optional(),
+  /** The fetched file is a zip; the check reads the one entry matching this glob (e.g. "*.kicad_dru"). */
+  archiveEntry: z.string().min(1).optional(),
   title: z.string().min(1),
   retrievedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   /** false = the daily freshness check skips this page (it changes on every load). */
