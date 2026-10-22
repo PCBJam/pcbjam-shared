@@ -41,6 +41,9 @@ export class FakeServer {
    * are wired first — same delayed delivery as `broadcast`.
    */
   private registryNamespaces: string[] | null = null;
+  /** A hand-built connect-time registry frame (libs 0030 snapshots with
+   *  `dirty` / `scanned`, or a delta); wins over `sendRegistryOnConnect`. */
+  registryOverride: ServerMsg | null = null;
 
   /** Seed an item with no change broadcast (initial server state). */
   async seed(path: string, body: Uint8Array): Promise<void> {
@@ -163,7 +166,7 @@ export class FakeServer {
   connect(): FakeChannel {
     const ch = new FakeChannel(this);
     this.channels.add(ch);
-    if (this.realisticOpen || this.registryNamespaces) {
+    if (this.realisticOpen || this.registryNamespaces || this.registryOverride) {
       setTimeout(() => {
         if (this.realisticOpen) ch._open();
         this.trackRegistry(this.deliverRegistry(ch));
@@ -200,6 +203,10 @@ export class FakeServer {
   }
 
   private async deliverRegistry(ch: FakeChannel): Promise<void> {
+    if (this.registryOverride) {
+      ch._deliver(this.registryOverride);
+      return;
+    }
     // Capture before the await: a test may disarm the registry mid-delivery.
     const namespaces = this.registryNamespaces;
     if (!namespaces) return;

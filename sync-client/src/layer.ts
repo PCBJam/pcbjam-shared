@@ -1,6 +1,7 @@
 import {
   diffManifest,
   manifestDigest,
+  registrySaysEmpty,
   type ServerMsg,
   type SyncChange,
   type SyncEntry,
@@ -312,8 +313,10 @@ export class SyncLayer {
    *  ever opened, where a deadline would only race the socket dial. */
   private registryWatch: { timer: ReturnType<typeof setTimeout> | null } | null =
     null;
-  /** undefined = no registry frame yet; null = frame arrived without our entry. */
-  private registryEntry: { v: number; digest: string } | null | undefined;
+  /** undefined = no registry frame yet; null = frame arrived without our
+   *  entry; "empty" = a FULL snapshot that covers our namespace says it is
+   *  empty (libs 0030: not listed, not dirty, under a scanned prefix). */
+  private registryEntry: { v: number; digest: string } | "empty" | null | undefined;
   private readonly onChange?: (change: LayerChange) => void;
 
   private manifest: SyncManifest = emptyManifest();
@@ -487,11 +490,19 @@ export class SyncLayer {
     };
   }
 
-  /** Digest match keeps the skipped sync skipped; anything else syncs. */
+  /**
+   * Digest match keeps the skipped sync skipped; anything else syncs. A full
+   * snapshot that says "empty" (libs 0030) affirms only an empty v0 local
+   * manifest — the one a cold open answered locally from the scope's overlay
+   * list. A local manifest with content under an "empty" verdict is a
+   * contradiction, and contradictions sync.
+   */
   private async settleRegistryVerdict(): Promise<void> {
     const entry = this.registryEntry;
     const affirmed =
-      entry != null && (await manifestDigest(this.manifest)) === entry.digest;
+      entry === "empty"
+        ? this.manifest.version === 0 && Object.keys(this.manifest.entries).length === 0
+        : entry != null && (await manifestDigest(this.manifest)) === entry.digest;
     if (!affirmed) await this.sync();
   }
 
@@ -791,7 +802,12 @@ export class SyncLayer {
       if (message.partial && !(message.libs && this.namespace in message.libs)) {
         return;
       }
-      this.registryEntry = message.libs?.[this.namespace] ?? null;
+      // libs 0030: a FULL snapshot that lists its dirty namespaces and the
+      // prefixes it has scanned can also say "empty". Without those fields
+      // (an older server) absence keeps meaning "unknown, GET it".
+      this.registryEntry =
+        message.libs?.[this.namespace] ??
+        (registrySaysEmpty(message, this.namespace) ? "empty" : null);
       if (this.registryWatch) {
         if (this.registryWatch.timer !== null) clearTimeout(this.registryWatch.timer);
         this.registryWatch = null;

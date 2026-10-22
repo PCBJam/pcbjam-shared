@@ -158,6 +158,51 @@ describe("mux channel factory", () => {
     expect(gotB2).toEqual([]);
   });
 
+  it("libs 0030: a full snapshot also reaches facades it names dirty or says are empty", async () => {
+    const { factory, rawsFor } = harness();
+    const listed = factory({ url: ROOM, namespace: "mirror:s1:a", lib: "mirror:s1:a" });
+    const dirty = factory({ url: ROOM, namespace: "mirror:s1:b", lib: "mirror:s1:b" });
+    const empty = factory({ url: ROOM, namespace: "mirror:s1:c", lib: "mirror:s1:c" });
+    const foreign = factory({ url: ROOM, namespace: "org:x", lib: "org:x" });
+    const got: Record<string, ServerMsg[]> = { listed: [], dirty: [], empty: [], foreign: [] };
+    listed.onMessage((m) => got.listed!.push(m));
+    dirty.onMessage((m) => got.dirty!.push(m));
+    empty.onMessage((m) => got.empty!.push(m));
+    foreign.onMessage((m) => got.foreign!.push(m));
+
+    const frame: ServerMsg = {
+      t: "registry",
+      libs: { "mirror:s1:a": { v: 1, digest: "dA" } },
+      dirty: ["mirror:s1:b"],
+      scanned: ["mirror:s1:"],
+    };
+    rawsFor(ROOM)[0]!.deliver(frame);
+    expect(got.listed).toEqual([frame]);
+    expect(got.dirty).toEqual([frame]);
+    expect(got.empty).toEqual([frame]);
+    expect(got.foreign).toEqual([]); // outside the scanned prefix: no verdict
+
+    // A late facade under the scanned prefix gets the replay too.
+    const late = factory({ url: ROOM, namespace: "mirror:s1:d", lib: "mirror:s1:d" });
+    const gotLate: ServerMsg[] = [];
+    late.onMessage((m) => gotLate.push(m));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(gotLate).toEqual([frame]);
+
+    // A delta carries no absence verdict: only the facades it lists hear it.
+    const delta: ServerMsg = {
+      t: "registry",
+      partial: true,
+      libs: { "mirror:s1:a": { v: 2, digest: "dA2" } },
+      dirty: ["mirror:s1:b"],
+      scanned: ["mirror:s1:"],
+    };
+    rawsFor(ROOM)[0]!.deliver(delta);
+    expect(got.listed).toEqual([frame, delta]);
+    expect(got.dirty).toEqual([frame]);
+    expect(got.empty).toEqual([frame]);
+  });
+
   it("synthesizes an open event for a facade created after the raw opened", async () => {
     // Open-ness is state, like the registry snapshot: without the synthetic
     // event a late layer would never arm the deadline that guards the

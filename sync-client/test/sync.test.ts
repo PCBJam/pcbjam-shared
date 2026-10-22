@@ -362,6 +362,103 @@ describe("registry-bearing rooms (scope socket, load-path-rework 0002)", () => {
   });
 });
 
+describe("registry snapshot says empty (libs 0030)", () => {
+  // A cold overlay that the scope's mirror list let the client answer
+  // locally as an empty v0 bundle. The FULL connect-time snapshot of a room
+  // that has listed its storage confirms "empty" with no manifest GET.
+  const NS = "mirror:s1:libA";
+  const muxOverlay = (): LayerDescriptor => ({
+    ...liveMirror(MIRROR, NS),
+    channel: { url: MIRROR, lib: NS },
+  });
+  let cloud: FakeCloud;
+  beforeEach(() => {
+    cloud = new FakeCloud();
+  });
+  const openCold = async (frame: Parameters<typeof JSON.stringify>[0]) => {
+    const server = cloud.server(MIRROR);
+    server.realisticOpen = true;
+    server.registryOverride = frame as never;
+    const b = browser();
+    const s = new SyncStack({
+      layers: [muxOverlay()],
+      fetchImpl: cloud.fetchImpl,
+      channelFactory: cloud.channelFactory,
+      storeFactory: (ns) => b.stores.get(ns) ?? b.stores.set(ns, memStore()).get(ns)!,
+      registryDeadlineMs: 10,
+    });
+    await s.open();
+    expect(server.bundleFetches).toBe(1); // the cold init (empty v0)
+    return { s, server };
+  };
+
+  it("absent, not dirty, under a scanned prefix: affirmed, no manifest GET, no deadline sync", async () => {
+    const { s, server } = await openCold({
+      t: "registry",
+      libs: {},
+      dirty: [],
+      scanned: ["mirror:s1:"],
+    });
+    await server.registryFlushed();
+    await new Promise((r) => setTimeout(r, 50)); // well past the 10 ms deadline
+    expect(server.manifestFetches).toBe(0);
+    s.close();
+  });
+
+  it("dirty: syncs", async () => {
+    const { s, server } = await openCold({
+      t: "registry",
+      libs: {},
+      dirty: [NS],
+      scanned: ["mirror:s1:"],
+    });
+    await vi.waitFor(() => expect(server.manifestFetches).toBe(1));
+    s.close();
+  });
+
+  it("an older server's snapshot (no dirty / scanned): absence still syncs", async () => {
+    const { s, server } = await openCold({ t: "registry", libs: {} });
+    await vi.waitFor(() => expect(server.manifestFetches).toBe(1));
+    s.close();
+  });
+
+  it("a namespace outside every scanned prefix: absence still syncs", async () => {
+    const { s, server } = await openCold({
+      t: "registry",
+      libs: {},
+      dirty: [],
+      scanned: ["mirror:s2:"],
+    });
+    await vi.waitFor(() => expect(server.manifestFetches).toBe(1));
+    s.close();
+  });
+
+  it("a partial delta never implies absence (the deadline syncs)", async () => {
+    const { s, server } = await openCold({
+      t: "registry",
+      partial: true,
+      libs: { "mirror:s1:other": { v: 1, digest: "d" } },
+      dirty: [],
+      scanned: ["mirror:s1:"],
+    });
+    await vi.waitFor(() => expect(server.manifestFetches).toBe(1));
+    s.close();
+  });
+
+  it("an 'empty' verdict over a local manifest WITH content is a contradiction: syncs", async () => {
+    await cloud.server(MIRROR).seed("symbol/R", body("live-R"));
+    const { s, server } = await openCold({
+      t: "registry",
+      libs: {},
+      dirty: [],
+      scanned: ["mirror:s1:"],
+    });
+    await vi.waitFor(() => expect(server.manifestFetches).toBe(1));
+    expect(text(await s.read("symbol/R"))).toBe("live-R");
+    s.close();
+  });
+});
+
 describe("immutable descriptors (version-pinned statics)", () => {
   let cloud: FakeCloud;
   beforeEach(async () => {

@@ -2,6 +2,7 @@ import {
   decodeBundle,
   decodeFrames,
   mapLimit,
+  registrySaysEmpty,
   SYNC_ACTION_HEADER,
   SYNC_ACTION_RELOAD,
   type ClientMsg,
@@ -291,6 +292,18 @@ function emitRoomFrame(roomUrl: string, msg: ServerMsg): void {
 }
 
 /**
+ * Does a registry frame carry a verdict for the facade keyed `lib`? It does
+ * when it lists `lib`, and — for a FULL snapshot from a libs 0030 room — when
+ * it names `lib` dirty (GET now, instead of waiting out the deadline) or says
+ * `lib` is empty. Any other facade hears nothing, as before.
+ */
+function registryConcerns(m: ServerMsg & { t: "registry" }, lib: string): boolean {
+  if (m.libs && lib in m.libs) return true;
+  if (m.partial) return false;
+  return (Array.isArray(m.dirty) && m.dirty.includes(lib)) || registrySaysEmpty(m, lib);
+}
+
+/**
  * One shared raw channel fanning out to per-lib facades. Outbound frames are
  * stamped with the facade's `lib`; inbound frames route to the facade whose
  * `lib` matches exactly (a frame without `lib` matches no facade — facades
@@ -359,9 +372,8 @@ class MuxRawChannel {
                 libs: { ...this.lastRegistry.libs, ...m.libs },
               }
             : m;
-        for (const lib of Object.keys(m.libs ?? {})) {
-          const group = this.facades.get(lib);
-          if (!group) continue;
+        for (const [lib, group] of [...this.facades]) {
+          if (!registryConcerns(m, lib)) continue;
           for (const facade of [...group]) {
             for (const cb of [...facade.msgCbs]) {
               if (facade.closed) break;
@@ -411,7 +423,7 @@ class MuxRawChannel {
         // creation): after a partial-frame merge or a reconnect's fresh
         // snapshot, "now" is strictly the safer verdict source.
         const replay = this.lastRegistry;
-        if (!state.closed && replay && lib in (replay.libs ?? {})) {
+        if (!state.closed && replay && registryConcerns(replay, lib)) {
           for (const cb of [...state.msgCbs]) {
             if (state.closed) break;
             cb(replay);
