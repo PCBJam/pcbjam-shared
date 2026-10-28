@@ -68,6 +68,7 @@ export function externalUrlAllowed(url: string, origins: string[]) {
 export const EXPORT_LIMITS = Object.freeze({ jsonBytes: 1024 * 1024, bundleBytes: 32 * 1024 * 1024, extraFiles: 16, extraBytes: 2 * 1024 * 1024, bundleParts: 8, ttlMs: 60 * 60 * 1000 });
 const exportFile = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,120}$/);
 const exportId = z.string().uuid();
+const exportKind = z.enum(Object.keys(EXPORT_KINDS) as [ExportKind, ...ExportKind[]]);
 /** The complete host operation allowlist. Tests must cover every entry. */
 export const METHODS = {
     // Dynamic endpoint grants are checked by both the host and server.
@@ -106,7 +107,9 @@ export const METHODS = {
     'files.saveHtml': request('files:save-html', z.object({ name: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,90}\.html$/), html: z.string().max(8 * 1024 * 1024) }).strict()),
     'files.saveImage': request('files:save', z.object({ name: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,90}\.png$/), base64: z.string().min(16).max(Math.ceil(4 * 1024 * 1024 / 3) * 4) }).strict()),
     // Server-side exports of the open document; bundles zip them for download.
-    'exports.run': request('project:export', z.object({ kind: z.enum(Object.keys(EXPORT_KINDS) as [ExportKind, ...ExportKind[]]) }).strict()),
+    'exports.run': request('project:export', z.object({ kind: exportKind }).strict()),
+    // Several exports of the open document in one KiCad run (one board load), in the order asked.
+    'exports.runMany': request('project:export', z.object({ kinds: z.array(exportKind).min(1).max(Object.keys(EXPORT_KINDS).length).refine(v => new Set(v).size === v.length, 'Each export kind at most once') }).strict()),
     'exports.readJson': request('project:export', z.object({ exportId, name: exportFile }).strict()),
     'exports.bundle': request('project:export', z.object({
         parts: z.array(z.object({ exportId, rename: z.record(exportFile, exportFile).optional() }).strict()).min(1).max(EXPORT_LIMITS.bundleParts),

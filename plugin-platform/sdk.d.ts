@@ -59,7 +59,7 @@ type PCBJamTourCond =
 type PCBJamTour = {id:string;title?:string;editor:'eeschema'|'pcbnew';closable?:boolean;
   steps:(Omit<PCBJamPointer,'target'> & {id:string;target?:PCBJamTarget;celebrate?:'rainbow';when?:PCBJamTourCond;until:PCBJamTourCond})[]};
 // BEGIN GENERATED HOST METHODS
-type PCBJamHostMethod = "http.request" | "http.upload" | "net.fetch" | "ui.openExternal" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "board.geometryStart" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "exports.run" | "exports.readJson" | "exports.bundle" | "files.saveBundle" | "editor.requestPlacement" | "board.edit" | "schematic.edit" | "tour.start" | "tour.stop" | "tour.status" | "ui.overlay.show" | "ui.overlay.clear" | "parts.save" | "schematic.symbols" | "schematic.connectivity";
+type PCBJamHostMethod = "http.request" | "http.upload" | "net.fetch" | "ui.openExternal" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "board.geometryStart" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "exports.run" | "exports.runMany" | "exports.readJson" | "exports.bundle" | "files.saveBundle" | "editor.requestPlacement" | "board.edit" | "schematic.edit" | "tour.start" | "tour.stop" | "tour.status" | "ui.overlay.show" | "ui.overlay.clear" | "parts.save" | "schematic.symbols" | "schematic.connectivity";
 // END GENERATED HOST METHODS
 /** Plugin logic only, and only while a command is being handled: at most 32 pending, 60 s each,
  *  all cancelled when the command settles. An exception thrown from a callback stops the plugin. */
@@ -174,6 +174,12 @@ declare const pcbjam: {
    *  you get ids, file names and sizes, can read small JSON outputs, and can zip exports for download. */
   exports:{
     run(kind:'gerbers'|'drill'|'ipc356'|'fab-components'):Promise<{exportId:string;kind:string;files:{name:string;size:number}[]}>;
+    /** Several kinds of the open board in one KiCad run (the board loads once): faster than one `run` per kind.
+     *  All or nothing, results in the order asked. Check `context.methods` for it; older hosts only have `run`. */
+    runMany(kinds:('gerbers'|'drill'|'ipc356'|'fab-components')[]):Promise<{exportId:string;kind:string;files:{name:string;size:number}[]}[]>;
+    /** Several kinds of the open board in one KiCad run (the board loads once): faster than one `run` per kind.
+     *  All or nothing, results in the order asked. Check `context.methods` for it; older hosts only have `run`. */
+    runMany(kinds:('gerbers'|'drill'|'ipc356'|'fab-components')[]):Promise<{exportId:string;kind:string;files:{name:string;size:number}[]}[]>;
     /** A JSON output of an export, at most 1 MiB (e.g. `fab-components.json`). */
     readJson(exportId:string,name:string):Promise<PCBJamJSON>;
     /** Zip exports with text files you made (≤ 16 files, ≤ 2 MiB); `rename` maps an export's file names. */

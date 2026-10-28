@@ -54,6 +54,7 @@ permissions. `context.get()` needs no additional permission.
 | `files.saveHtml({name, html})` | `files:save-html` | Trusted download confirmation for a standalone web page; PCBJam prepends a policy that blocks all network access from the saved file. |
 | `files.saveImage({name, base64})` | `files:save` | Trusted download confirmation for a PNG; bytes that are not a PNG are refused. |
 | `exports.run(kind)` | `project:export` | Run a KiCad export (`gerbers`, `drill`, `ipc356`, `fab-components`) of the open document on PCBJam’s servers; returns an export id and its file names and sizes. The bytes stay on the server. |
+| `exports.runMany(kinds)` | `project:export` | Run several of those exports in one KiCad run (the board loads once), all or nothing; returns them in the order asked, each like `exports.run`. |
 | `exports.readJson(exportId, name)` | `project:export` | Read a JSON output of an export (at most 1 MiB), e.g. the `fab-components` component list. |
 | `exports.bundle({parts, extraFiles?, zipName})` | `project:export` | Zip exports (optionally renaming files) with text files the plugin made; returns a bundle id, name, size and file list. |
 | `files.saveBundle({bundleId})` | `files:save` | Trusted download confirmation for a bundle ZIP; download-requested or cancelled. |
@@ -89,7 +90,7 @@ feature uses: every extra line is a reason to decline.
 | `editor:read-selection` | Read selected item IDs in the current editor | `selection.get` |
 | `editor:select` | Change which items are selected in the current editor | `editor.select` |
 | `storage:local` | Store local data for this plugin, account and project | `storage.get`, `storage.set`, `storage.delete`, `storage.list` |
-| `project:export` | Generate export files such as Gerbers, drill files and netlists from the current document on PCBJam's servers | `exports.run`, `exports.readJson`, `exports.bundle` |
+| `project:export` | Generate export files such as Gerbers, drill files and netlists from the current document on PCBJam's servers | `exports.run`, `exports.runMany`, `exports.readJson`, `exports.bundle` |
 | `ui:open-external` | Open pages of this plugin's approved sites in a new browser tab, after you confirm | `ui.openExternal` |
 | `editor:overlay` | Show guided tours and pointers over the editor, labelled with this plugin's name | `tour.start`, `tour.stop`, `tour.status`, `ui.overlay.show`, `ui.overlay.clear` |
 | `library:write-parts` | Save parts this plugin ships into its own team library and place them, confirmed by you | `parts.save` |

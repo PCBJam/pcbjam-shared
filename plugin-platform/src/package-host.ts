@@ -486,9 +486,10 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
                 return { status: result.status };
             }
             case 'exports.run':
-                if (EXPORT_KINDS[params.kind as keyof typeof EXPORT_KINDS].surface !== 'editor:' + context.tool)
+            case 'exports.runMany':
+                if ((method === 'exports.run' ? [params.kind] : params.kinds as string[]).some(kind => EXPORT_KINDS[kind as keyof typeof EXPORT_KINDS].surface !== 'editor:' + context.tool))
                     throw new Error('This export is unavailable in this editor');
-                // Exports run KiCad on the server and may take a while.
+                // Exports run KiCad on the server and may take a while. The route tells {kind} from {kinds}.
                 return platformRequest('activations/' + activation!.id + '/exports', 'POST', params, signal, 120000);
             case 'exports.readJson':
                 return platformRequest('activations/' + activation!.id + '/exports/' + params.exportId + '/json?name=' + encodeURIComponent(params.name), 'GET', undefined, signal);

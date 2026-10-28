@@ -100,6 +100,7 @@ declare const __clearTimer: (message: string) => void;
         }),
         exports: Object.freeze({
             run: (kind: unknown) => call('exports.run', { kind }),
+            runMany: async (kinds: unknown) => ((await call('exports.runMany', { kinds })) as any).exports,
             readJson: (exportId: unknown, name: unknown) => call('exports.readJson', { exportId, name }),
             bundle: (proposal: unknown) => call('exports.bundle', proposal),
         }),
