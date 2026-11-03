@@ -11,6 +11,8 @@
  * `merge3Slots(base, mine, theirs)` keeps a sub-slot from `mine` only where
  * `mine` differs from `base` (the writer's actual edit); everywhere else the
  * current doc (`theirs`) wins. `(k …)` children are matched by identity:
+ *  - an embedded file `(file (name "x.ttf") …)` → its name, even when it is the
+ *    only one, so two writers' embedded file sets merge per file;
  *  - a kind occurring once in its list → its head;
  *  - a repeated kind → its unquoted FIRST ATOM when unique among its siblings
  *    (stackup `(layer "In1.Cu" …)`, root `(property "k" …)`, and — unlike the
@@ -40,6 +42,14 @@ function repeatedKinds(slots: readonly Slot[]): Set<string> {
   return rep;
 }
 
+/** The name of an embedded `(file (name "x.ttf") …)` entry. */
+function fileName(slot: Slot): string | undefined {
+  if (!("k" in slot)) return undefined;
+  const name = slot.v.find((c) => "k" in c && c.k === "name");
+  const first = name && "k" in name ? name.v[0] : undefined;
+  return first && "atom" in first ? unquoteAtom(first.atom) : undefined;
+}
+
 /**
  * `repeated`: kinds repeated in ANY of the three lists being merged — keyed by
  * first atom in all of them, so `(comment 2 …)` alone in the base still matches
@@ -55,6 +65,16 @@ function keyed(slots: readonly Slot[], repeated: ReadonlySet<string>): Keyed[] {
   });
   const keys = new Array<string>(slots.length);
   for (const [kind, idxs] of byKind) {
+    if (kind === "file") {
+      const names = idxs.map((i) => fileName(slots[i]!));
+      let occurrence = 0;
+      idxs.forEach((i, j) => {
+        const name = names[j];
+        keys[i] =
+          name !== undefined && names.indexOf(name) === j ? `k:file#${name}` : `k:file@${occurrence++}`;
+      });
+      continue;
+    }
     if (idxs.length === 1 && !repeated.has(kind)) {
       keys[idxs[0]!] = `k:${kind}`;
       continue;

@@ -27,6 +27,7 @@ export * from "./sidecar-doc.js";
 export * from "./items-wire.js";
 export * from "./drift.js";
 export * from "./problem-report.js";
+export * from "./font-files.js";
 export * from "./sync-wire.js";
 export * from "./gateway-wire.js";
 export * from "./sheet-refs.js";

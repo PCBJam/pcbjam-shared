@@ -1,5 +1,6 @@
 import {
   diffManifest,
+  isLazyPath,
   manifestDigest,
   registrySaysEmpty,
   type ServerMsg,
@@ -22,6 +23,8 @@ export interface SyncLayerDeps {
   bodyUrlTemplate?: string;
   digest?: string;
   immutable?: boolean;
+  /** Path prefixes whose bodies are fetched on read (LayerDescriptor.lazy). */
+  lazy?: readonly string[];
   /**
    * The channel is a mux facade on a registry-bearing room (descriptor carried
    * `channel.lib`): open() may skip the eager manifest sync and instead await
@@ -227,11 +230,13 @@ function validateBodySize(
 function validateBundleSnapshot(
   manifest: SyncManifest,
   bodies: Array<[string, Uint8Array]>,
+  lazy?: readonly string[],
 ): void {
   // The fingerprint algorithm is deliberately opaque to the generic client;
   // the server binds bytes to it. Here we enforce everything independently
   // knowable from the bundle: exact path set, uniqueness, and advertised size.
-  const expected = Object.keys(manifest.entries);
+  // Lazy paths carry no body (the layer has already dropped any the server sent).
+  const expected = Object.keys(manifest.entries).filter((path) => !isLazyPath(path, lazy));
   if (bodies.length !== expected.length) {
     throw new Error(
       `bundle body count ${bodies.length} does not match manifest count ${expected.length}`,
@@ -306,6 +311,7 @@ export class SyncLayer {
   private readonly bodyUrlTemplate?: string;
   private readonly digest?: string;
   private readonly immutable?: boolean;
+  private readonly lazy?: readonly string[];
   private readonly registryEligible: boolean;
   private readonly registryDeadlineMs: number;
   /** Armed between a registry-skipped open and its verdict (frame or deadline).
@@ -371,6 +377,7 @@ export class SyncLayer {
     this.bodyUrlTemplate = deps.bodyUrlTemplate;
     this.digest = deps.digest;
     this.immutable = deps.immutable;
+    this.lazy = deps.lazy?.length ? [...deps.lazy] : undefined;
     this.registryEligible = deps.registryEligible ?? false;
     this.registryDeadlineMs = positiveIntegerLimit(
       deps.registryDeadlineMs,
@@ -580,8 +587,10 @@ export class SyncLayer {
         ? await this.store.getManifest()
         : expectedManifest;
     if (!this.isCurrentGeneration(generation)) return;
-    const bundle = await this.http.getBundle(this.httpAbort.signal);
-    validateBundleSnapshot(bundle.manifest, bundle.bodies);
+    const bundle = await this.http.getBundle(this.httpAbort.signal, this.lazy);
+    // A server that predates `lazy` sends those bodies anyway; they are not kept.
+    if (this.lazy) bundle.bodies = bundle.bodies.filter(([path]) => !this.isLazy(path));
+    validateBundleSnapshot(bundle.manifest, bundle.bodies, this.lazy);
     let reconcile = false;
     await this.enqueueCommit(async () => {
       if (!this.isCurrentGeneration(generation)) return;
@@ -634,16 +643,16 @@ export class SyncLayer {
       const remote = await this.http.getManifest(this.httpAbort.signal);
       if (!this.isCurrentGeneration(generation)) return;
       const diff = diffManifest(baseline, remote);
-      const fetched =
-        this.kind !== "sparse" && diff.put.length
-          ? await this.http.getBodies(
-              diff.put.map((path) => ({
-                path,
-                hash: remote.entries[path]?.hash ?? "",
-              })),
-              this.httpAbort.signal,
-            )
-          : [];
+      const eager = this.kind === "sparse" ? [] : diff.put.filter((path) => !this.isLazy(path));
+      const fetched = eager.length
+        ? await this.http.getBodies(
+            eager.map((path) => ({
+              path,
+              hash: remote.entries[path]?.hash ?? "",
+            })),
+            this.httpAbort.signal,
+          )
+        : [];
       if (!this.isCurrentGeneration(generation)) return;
       await this.commitFullSync(
         barrier,
@@ -700,7 +709,8 @@ export class SyncLayer {
         const replacement = remote.entries[path];
         if (replacement) {
           if (previous?.hash !== replacement.hash) {
-            if (this.kind === "sparse") {
+            if (this.kind === "sparse" || this.isLazy(path)) {
+              // Fetched on the next read; a cached copy of the old body goes.
               if (previous) deletes.push(path);
             } else {
               const body = bodies.get(path);
@@ -752,6 +762,7 @@ export class SyncLayer {
 
       const changed = diffManifest(before, this.manifest);
       if (this.kind !== "sparse") {
+        // Lazy paths too: listeners learn of them by path and read on demand.
         for (const path of changed.put) {
           const entry = this.manifest.entries[path];
           this.onChange?.({
@@ -912,6 +923,25 @@ export class SyncLayer {
       if (change.op === "put") {
         if (this.manifest.entries[change.path]?.hash === change.hash) {
           await this.commitVersion(change.path, sequence, change.version, generation);
+          return;
+        }
+        if (this.isLazy(change.path)) {
+          // Not fetched now: the entry moves to the new hash, the old cached body goes,
+          // and the next read fetches the new one.
+          await this.enqueueCommit(async () => {
+            if (!this.pathIsCurrent(change.path, sequence, generation)) return;
+            const next = cloneManifest(this.manifest);
+            next.entries[change.path] = { hash: change.hash ?? "", size: change.size ?? 0, mtime: Date.now() };
+            next.version = Math.max(next.version, change.version);
+            const persisted = await this.store.apply({
+              deletes: [change.path],
+              manifest: next,
+              manifestPaths: [change.path],
+            });
+            if (!this.isCurrentGeneration(generation)) return;
+            this.manifest = persisted ? cloneManifest(persisted) : next;
+            this.onChange?.({ ...change, origin: "remote" });
+          });
           return;
         }
         const fetched = await this.http.getBodies(
@@ -1493,8 +1523,12 @@ export class SyncLayer {
     if (this.optimistic.has(path)) {
       return Promise.resolve(this.optimistic.get(path)?.slice() ?? null);
     }
-    if (this.kind !== "sparse") return this.store.getBody(path);
+    if (this.kind !== "sparse" && !this.isLazy(path)) return this.store.getBody(path);
     return this.sparseRead(path);
+  }
+
+  private isLazy(path: string): boolean {
+    return this.kind !== "sparse" && isLazyPath(path, this.lazy);
   }
 
   private async sparseRead(path: string): Promise<Uint8Array | null> {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { docToFile, fileToDoc } from "../src/kicad-doc.js";
+import { docToFile, fileToDoc, type Slot } from "../src/kicad-doc.js";
 import { seedDocToY, syncLayoutToY, yToDoc } from "../src/kicad-y.js";
 import { merge3Slots } from "../src/layout-merge.js";
 
@@ -83,5 +83,72 @@ describe("syncLayoutToY with a baseline merges per field (SYNC-06b through the r
     const text = docToFile(yToDoc(a));
     expect(text).toContain('(title "Remote title")');
     expect(text).toContain('(rev "2")');
+  });
+});
+
+describe("merge3Slots: embedded files", () => {
+  const f = (name: string, data: string): Slot => ({
+    k: "file",
+    v: [
+      { k: "name", v: [{ atom: `"${name}"` }] },
+      { k: "data", v: [{ atom: data }] },
+    ],
+  });
+
+  it("keys files by name, so one added on each side is kept on both", () => {
+    const merged = merge3Slots([], [f("a.ttf", "1")], [f("b.ttf", "2")]);
+    expect(merged).toHaveLength(2);
+    expect(merged).toEqual(expect.arrayContaining([f("a.ttf", "1"), f("b.ttf", "2")]));
+  });
+
+  it("a file both sides changed is the writer's", () => {
+    expect(merge3Slots([f("a.ttf", "0")], [f("a.ttf", "1")], [f("a.ttf", "2")])).toEqual([f("a.ttf", "1")]);
+  });
+});
+
+describe("syncLayoutToY: the embedded files budget (fonts 0001)", () => {
+  // Boards: no root-context rule, the embedded files are plain content.
+  const board = (files: string) =>
+    fileToDoc(`(kicad_pcb (version 20241229) (paper "A4")
+      (embedded_files ${files})
+      (segment (start 0 0) (end 1 1) (width 0.25) (layer "F.Cu") (uuid "seg-1")))`);
+  const file = (name: string, size: number) => `(file (name "${name}") (type font) (data "${"A".repeat(size)}"))`;
+  const names = (doc: Y.Doc) => [...docToFile(yToDoc(doc)).matchAll(/\(file \(name "([^"]+)"\)/g)].map((m) => m[1]);
+
+  it("a merge past the budget is not written, and the caller hears its size", () => {
+    const doc = new Y.Doc();
+    const opened = board(file("a.ttf", 100));
+    seedDocToY(opened, doc, "seed", "n");
+    const sizes: number[] = [];
+    const changed = syncLayoutToY(board(file("a.ttf", 100) + file("big.ttf", 5000)), doc, "layout-save", opened, {
+      embeddedFilesBudget: 1000,
+      onEmbeddedOverBudget: (size) => sizes.push(size),
+    });
+    expect(changed).toBe(false);
+    expect(names(doc)).toEqual(["a.ttf"]);
+    expect(sizes).toHaveLength(1);
+    expect(sizes[0]).toBeGreaterThan(5000);
+  });
+
+  it("a merge within the budget is written", () => {
+    const doc = new Y.Doc();
+    const opened = board(file("a.ttf", 100));
+    seedDocToY(opened, doc, "seed", "n");
+    const over = () => {
+      throw new Error("not over the budget");
+    };
+    syncLayoutToY(board(file("a.ttf", 100) + file("b.ttf", 100)), doc, "layout-save", opened, {
+      embeddedFilesBudget: 1000,
+      onEmbeddedOverBudget: over,
+    });
+    expect(names(doc)).toEqual(["a.ttf", "b.ttf"]);
+  });
+
+  it("removing files from a room already past the budget is written", () => {
+    const doc = new Y.Doc();
+    const opened = board(file("a.ttf", 3000) + file("b.ttf", 3000));
+    seedDocToY(opened, doc, "seed", "n");
+    syncLayoutToY(board(file("a.ttf", 3000)), doc, "layout-save", opened, { embeddedFilesBudget: 1000 });
+    expect(names(doc)).toEqual(["a.ttf"]);
   });
 });

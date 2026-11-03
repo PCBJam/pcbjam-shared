@@ -34,6 +34,10 @@ export class FakeServer {
   blobFetches = 0;
   /** Cutover mode: every write answers 409 + x-pcbjam-sync-action: reload. */
   refuseWritesMoved = false;
+  /** An older server: `/bundle` ignores `?lazy=` and sends every body. */
+  ignoreLazy = false;
+  /** The paths whose bodies the last `/bundle` carried. */
+  lastBundlePaths: string[] = [];
   /**
    * Registry-bearing room (load-path-rework 0002): namespaces whose digest the
    * room affirms on connect via a `registry` frame. `sendRegistryOnConnect(ns)`
@@ -62,7 +66,10 @@ export class FakeServer {
     }
     if (req.method === "GET" && p === "/bundle") {
       this.bundleFetches += 1;
-      return bin(encodeBundle(this.snapshot(), [...this.bodies.entries()]));
+      const lazy = this.ignoreLazy ? [] : u.searchParams.getAll("lazy");
+      const bodies = [...this.bodies.entries()].filter(([path]) => !lazy.some((prefix) => path.startsWith(prefix)));
+      this.lastBundlePaths = bodies.map(([path]) => path).sort();
+      return bin(encodeBundle(this.snapshot(), bodies));
     }
     if (req.method === "POST" && p === "/bodies") {
       const { entries } = (await req.json()) as {

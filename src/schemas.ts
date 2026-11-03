@@ -377,13 +377,51 @@ export const libSchema = z.object({
 });
 export type Lib = z.infer<typeof libSchema>;
 
-/** One item (symbol/footprint/3D model) in a library's listing. */
+/**
+ * One face of a font file in a team library (fonts 0002). `family` and `style` are the
+ * names FreeType reports, which is what KiCad lists and saves as `(face "...")`.
+ * `embedding` is KiCad's embedding permission: "preview" faces draw but are never
+ * embedded, "restricted" ones are refused.
+ */
+export const fontFaceSchema = z.object({
+  /** Face index inside a collection (.ttc); 0 for a single-face file. */
+  index: z.number().int().nonnegative(),
+  family: z.string(),
+  style: z.string(),
+  fullName: z.string().nullish(),
+  postscriptName: z.string().nullish(),
+  /** OS/2 usWeightClass (400 regular, 700 bold). */
+  weight: z.number().int(),
+  italic: z.boolean(),
+  embedding: z.enum(["installable", "editable", "preview", "restricted"]),
+  /**
+   * The license the face states in its name table (IDs 13, 14). `id` is set only for the
+   * free licenses a public library takes (`OFL`, `Apache-2.0`, `UFL`); null otherwise,
+   * including when the face states nothing. Absent on fonts indexed before it existed.
+   */
+  license: z
+    .object({ id: z.enum(["OFL", "Apache-2.0", "UFL"]).nullable(), text: z.string().nullish(), url: z.string().nullish() })
+    .nullish(),
+});
+export type FontFace = z.infer<typeof fontFaceSchema>;
+
+/** What a font item's file holds (lib_item.meta for kind "font"). */
+export const fontMetaSchema = z.object({
+  faces: z.array(fontFaceSchema),
+  sha256: z.string(),
+  size: z.number().int().nonnegative(),
+});
+export type FontMeta = z.infer<typeof fontMetaSchema>;
+
+/** One item (symbol/footprint/3D model/datasheet/font) in a library's listing. */
 export const libItemSchema = z.object({
-  // 'symbol' | 'footprint' | 'model3d'
+  // 'symbol' | 'footprint' | 'model3d' | 'doc' | 'font'
   kind: z.string(),
   name: z.string(),
   description: z.string().nullish(),
   keywords: z.string().nullish(),
+  /** A font item's faces (fonts 0002); absent for other kinds. */
+  font: fontMetaSchema.nullish(),
 });
 export type LibItem = z.infer<typeof libItemSchema>;
 

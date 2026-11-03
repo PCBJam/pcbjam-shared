@@ -96,6 +96,7 @@ export class SyncStack {
         bodyUrlTemplate: d.bodyUrlTemplate,
         digest: d.digest,
         immutable: d.immutable,
+        lazy: d.lazy,
         // Only mux-keyed layers may skip their eager sync on a registry
         // verdict: the mux key names a registry-bearing room (0002 §3.3);
         // dedicated single-namespace sockets keep today's eager sync.

@@ -41,6 +41,7 @@ import {
   kicadItemSchema,
   libSymbolsFromLayout,
   SCH_ROOT_CONTEXT_HEADS,
+  SCH_ROOT_EMBEDDED_HEADS,
   slotFromSexpr,
   type KicadDoc,
   type KicadItem,
@@ -741,6 +742,14 @@ export interface SyncLayoutOptions {
    * as deleted). `lib_symbols` is skipped too unless listed.
    */
   heads?: ReadonlySet<string>;
+  /**
+   * The most the merged `embedded_files` group may weigh, serialized (see
+   * EMBEDDED_FILES_ROOM_BUDGET). A merge past it is not written, unless it shrinks the
+   * group: the doc keeps its files and `onEmbeddedOverBudget` gets the size the group
+   * would have had.
+   */
+  embeddedFilesBudget?: number;
+  onEmbeddedOverBudget?: (size: number) => void;
 }
 
 /**
@@ -812,7 +821,12 @@ export function syncLayoutToY(
 
     const fileGroups = groupsOf(fileDoc.layout);
     const baseGroups = baseline ? groupsOf(baseline.layout) : undefined;
-    const heads = new Set([...fileGroups.keys(), ...groupsOf(layout.toArray()).keys()]);
+    const roomGroups = groupsOf(layout.toArray());
+    const heads = new Set([...fileGroups.keys(), ...roomGroups.keys()]);
+    // The save and the room are both the sheet as a hierarchy root: its embedded files
+    // are content there (SCH_ROOT_EMBEDDED_HEADS).
+    const rootViews =
+      fileDoc.root === "kicad_sch" && fileGroups.has("sheet_instances") && roomGroups.has("sheet_instances");
 
     for (const head of heads) {
       if (opts?.heads && !opts.heads.has(head)) continue;
@@ -822,11 +836,13 @@ export function syncLayoutToY(
       if (JSON.stringify(curGroup) === JSON.stringify(fileGroup)) continue;
       // A root-context schematic section (SCH_ROOT_CONTEXT_HEADS) is never added
       // to or removed from a sheet by a save — its presence says how the editor
-      // opened the sheet, not what the user changed.
+      // opened the sheet, not what the user changed. Except a root sheet's own
+      // embedded files, between two root views.
       if (
         fileDoc.root === "kicad_sch" &&
         SCH_ROOT_CONTEXT_HEADS.has(head) &&
-        (curGroup.length === 0) !== (fileGroup.length === 0)
+        (curGroup.length === 0) !== (fileGroup.length === 0) &&
+        !(rootViews && SCH_ROOT_EMBEDDED_HEADS.has(head))
       ) {
         continue;
       }
@@ -842,10 +858,24 @@ export function syncLayoutToY(
       // (proposal 21 WP1, sync audit SYNC-06b): only the fields the writer
       // changed relative to its baseline — a peer's newer title, stackup or
       // layer name in the same head survives a stale writer's other edit.
-      const next = baseGroups
-        ? merge3Slots(baseGroups.get(head) ?? [], fileGroup, curGroup)
-        : fileGroup;
-      if (JSON.stringify(next) === JSON.stringify(curGroup)) continue;
+      // Embedded files merge per file: when the writer's baseline had none but
+      // both sides have some now, both added files, and each keeps its own.
+      const baseGroup =
+        baseGroups?.get(head) ??
+        (head === "embedded_files" && fileGroup.length && curGroup.length ? [{ k: head, v: [] }] : []);
+      const next = baseGroups ? merge3Slots(baseGroup, fileGroup, curGroup) : fileGroup;
+      const nextText = JSON.stringify(next);
+      const curText = JSON.stringify(curGroup);
+      if (nextText === curText) continue;
+      if (
+        head === "embedded_files" &&
+        opts?.embeddedFilesBudget !== undefined &&
+        nextText.length > opts.embeddedFilesBudget &&
+        nextText.length > curText.length
+      ) {
+        opts.onEmbeddedOverBudget?.(nextText.length);
+        continue;
+      }
 
       // Replace the whole group: delete existing occurrences (reverse keeps
       // indices valid), then insert the merged group at the first old position

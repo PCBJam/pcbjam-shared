@@ -369,6 +369,27 @@ export const SCH_ROOT_CONTEXT_HEADS: ReadonlySet<string> = new Set([
   "embedded_files",
 ]);
 
+/**
+ * The root-context sections that are also document content: a root sheet's embedded files
+ * and their `embedded_fonts` flag change when the user embeds a font or file, or removes
+ * the last one (fonts 0001). Between two ROOT views of the same sheet (the save and the room
+ * both carry `sheet_instances`) their presence is that edit and syncs; any other presence
+ * difference is still how the sheet was opened (SCH_ROOT_CONTEXT_HEADS).
+ */
+export const SCH_ROOT_EMBEDDED_HEADS: ReadonlySet<string> = new Set([
+  "embedded_fonts",
+  "embedded_files",
+]);
+
+/**
+ * The most a document's `embedded_files` may weigh in a collab room, measured as its
+ * serialized slots: about what a sync update carries for it (the compressed, base64-encoded
+ * files). A room syncs over websocket messages of at most 32 MiB and every collaborator
+ * downloads the whole document when it opens, so the editors do not write embedded files
+ * past this into a room (fonts 0001).
+ */
+export const EMBEDDED_FILES_ROOM_BUDGET = 16 * 1024 * 1024;
+
 /** Singleton heads KiCad writes AFTER the items (everything else precedes them). */
 const TRAILER_HEADS: ReadonlySet<string> = new Set(["sheet_instances", "symbol_instances"]);
 

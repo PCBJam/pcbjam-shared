@@ -57,7 +57,8 @@ export interface BodyRequest {
  */
 export interface LayerHttp {
   getManifest(signal?: AbortSignal): Promise<SyncManifest>;
-  getBundle(signal?: AbortSignal): Promise<{
+  /** `lazy`: path prefixes whose bodies the bundle may leave out (LayerDescriptor.lazy). */
+  getBundle(signal?: AbortSignal, lazy?: readonly string[]): Promise<{
     manifest: SyncManifest;
     bodies: Array<[string, Uint8Array]>;
   }>;
@@ -117,10 +118,12 @@ export function httpLayer(
       if (!r.ok) throw new Error(`getManifest ${r.status}`);
       return (await r.json()) as SyncManifest;
     },
-    async getBundle(signal) {
+    async getBundle(signal, lazy) {
       if (mode === "sparse")
         throw new Error(`sparse layer ${base} has no bundle`);
-      const r = await fetchImpl(url("/bundle"), { headers: authH, signal });
+      // A server that does not know `lazy` sends every body; the layer drops those.
+      const query = lazy?.length ? `?${lazy.map((p) => `lazy=${encodeURIComponent(p)}`).join("&")}` : "";
+      const r = await fetchImpl(url(`/bundle${query}`), { headers: authH, signal });
       if (!r.ok) throw new Error(`getBundle ${r.status}`);
       return decodeBundle(new Uint8Array(await r.arrayBuffer()));
     },

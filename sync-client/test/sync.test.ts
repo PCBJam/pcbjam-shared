@@ -982,3 +982,76 @@ describe("layerEntries", () => {
     expect(() => s.layerEntries()).toThrow("closed");
   });
 });
+
+describe("lazy paths (fonts 0002: a team library's fonts)", () => {
+  const lazyLib = (): LayerDescriptor => ({ ...liveMirror(MIRROR, "org:lib1"), lazy: ["font/"] });
+
+  let cloud: FakeCloud;
+  beforeEach(async () => {
+    cloud = new FakeCloud();
+    await cloud.server(MIRROR).seed("symbol/R", body("(R)"));
+    await cloud.server(MIRROR).seed("font/Big.ttf", body("FONT-BYTES-V1"));
+  });
+
+  it("a cold open lists the font but downloads only the other bodies; a read fetches it once", async () => {
+    const s = browser().stack(cloud, [lazyLib()]);
+    await s.open();
+
+    expect((await s.list()).map((e) => e.path).sort()).toEqual(["font/Big.ttf", "symbol/R"]);
+    expect(cloud.server(MIRROR).lastBundlePaths).toEqual(["symbol/R"]);
+    expect(cloud.server(MIRROR).bodyFetches).toBe(0);
+
+    expect(text(await s.read("font/Big.ttf"))).toBe("FONT-BYTES-V1");
+    expect(cloud.server(MIRROR).bodyFetches).toBe(1);
+    expect(text(await s.read("font/Big.ttf"))).toBe("FONT-BYTES-V1");
+    expect(cloud.server(MIRROR).bodyFetches).toBe(1); // cached
+  });
+
+  it("from an older server that sends every body, the font body is not kept", async () => {
+    cloud.server(MIRROR).ignoreLazy = true;
+    const s = browser().stack(cloud, [lazyLib()]);
+    await s.open();
+    expect(cloud.server(MIRROR).lastBundlePaths).toEqual(["font/Big.ttf", "symbol/R"]);
+    expect(text(await s.read("symbol/R"))).toBe("(R)");
+    expect(cloud.server(MIRROR).bodyFetches).toBe(0);
+    expect(text(await s.read("font/Big.ttf"))).toBe("FONT-BYTES-V1");
+    expect(cloud.server(MIRROR).bodyFetches).toBe(1);
+  });
+
+  it("a manifest sync fetches changed symbols, not changed fonts", async () => {
+    const s = browser().stack(cloud, [lazyLib()]);
+    await s.open();
+    await cloud.server(MIRROR).revise("symbol/R", body("(R2)"));
+    await cloud.server(MIRROR).revise("font/Big.ttf", body("FONT-BYTES-V2"));
+    await cloud.server(MIRROR).seed("font/New.ttf", body("NEW-FONT"));
+
+    await s.sync();
+    expect(cloud.server(MIRROR).bodyFetches).toBe(1); // symbol/R only
+    expect(text(await s.read("symbol/R"))).toBe("(R2)");
+    expect((await s.list()).map((e) => e.path).sort()).toEqual(["font/Big.ttf", "font/New.ttf", "symbol/R"]);
+    expect(text(await s.read("font/Big.ttf"))).toBe("FONT-BYTES-V2");
+    expect(cloud.server(MIRROR).bodyFetches).toBe(2);
+  });
+
+  it("a collaborator's new font arrives as a path, not as bytes; a cached font is refetched after a change", async () => {
+    const writer = browser().stack(cloud, [lazyLib()]);
+    const reader = browser().stack(cloud, [lazyLib()]);
+    await writer.open();
+    await reader.open();
+    const seen: string[] = [];
+    reader.subscribe((c) => seen.push(`${c.present ? "put" : "del"} ${c.path}`));
+
+    expect(text(await reader.read("font/Big.ttf"))).toBe("FONT-BYTES-V1");
+    const before = cloud.server(MIRROR).bodyFetches;
+
+    await writer.push("font/Added.ttf", body("ADDED"));
+    await writer.push("font/Big.ttf", body("FONT-BYTES-V3"));
+    await settle();
+    expect(cloud.server(MIRROR).bodyFetches).toBe(before); // nothing downloaded yet
+    expect(seen).toEqual(expect.arrayContaining(["put font/Added.ttf", "put font/Big.ttf"]));
+
+    expect(text(await reader.read("font/Big.ttf"))).toBe("FONT-BYTES-V3");
+    expect(text(await reader.read("font/Added.ttf"))).toBe("ADDED");
+    expect(cloud.server(MIRROR).bodyFetches).toBe(before + 2);
+  });
+});
