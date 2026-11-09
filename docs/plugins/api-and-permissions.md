@@ -107,6 +107,7 @@ feature uses: every extra line is a reason to decline.
 | `identity:account` | Give this plugin's own site your PCBJam account ID | — |
 | `identity:role` | Tell this plugin's own site whether you are a PCBJam administrator | — |
 | `identity:entitlements` | Tell this plugin's own site your PCBJam plan and its limits | — |
+| `api:project` | Let this plugin's own server use PCBJam as you, on the project it is opened in, as its manifest declares | — |
 <!-- END GENERATED PERMISSIONS -->
 
 `network:<name>` and `backend:identity:<name>` are declared per backend; see

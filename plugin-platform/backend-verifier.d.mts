@@ -39,5 +39,9 @@ export function createIdentityVerifier(config: {
   role?: "admin" | "user";
   pro?: boolean;
   limits?: Record<string, unknown>;
+  /** With api:project: what the backend names when it asks for a project key. */
+  activationId?: string;
+  /** The token's jti, which a backend credential binds to. */
+  tokenId: string;
   expiresAt: Date;
 }>;

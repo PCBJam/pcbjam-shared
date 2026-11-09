@@ -2,6 +2,7 @@ import { inflateRawSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { hostedUi, hostedUiPermissions, isHostedUi, validateContributes } from './hosted-ui-contract.mjs';
 import { validateLimits } from './manifest-limits.mjs';
+import { PROJECT_API_PERMISSION, validateProjectApi } from './project-api-contract.mjs';
 
 export const LIMITS = { archive: 8 * 1024 * 1024, total: 12 * 1024 * 1024, file: 4 * 1024 * 1024, files: 32 };
 export { default as PERMISSIONS } from './api-permissions.json' with { type: 'json' };
@@ -116,7 +117,7 @@ export function validatePackage(input, { legacyDigest = false, allowLocalHostedU
   if (Buffer.byteLength(get('manifest.json') ?? '') > 16384) fail('Manifest exceeds 16 KiB');
   const manifest = JSON.parse(get('manifest.json') ?? fail('Missing manifest.json'));
   if (manifest && typeof manifest === 'object' && manifest.kind === 'remote-provider') return validateProviderPackage(files, manifest, legacyDigest);
-  exact(manifest, ['apiVersion', 'kind', 'id', 'name', 'version', 'description', 'main', 'ui', 'uiSize', 'surfaces', 'permissions', 'endpoints', 'network', 'contributes', 'limits']);
+  exact(manifest, ['apiVersion', 'kind', 'id', 'name', 'version', 'description', 'main', 'ui', 'uiSize', 'surfaces', 'permissions', 'endpoints', 'network', 'contributes', 'limits', 'api']);
   if (manifest.kind !== undefined && manifest.kind !== 'plugin') fail('Unsupported package kind');
   if (Object.hasOwn(manifest, 'uiSize')) {
     exact(manifest.uiSize, ['width', 'height']);
@@ -138,6 +139,10 @@ export function validatePackage(input, { legacyDigest = false, allowLocalHostedU
   // Its own rate limits (plugins 0025 §5.3), within the platform's ceilings: part of the reviewed policy.
   const limits = validateLimits(manifest.limits);
   if (contributes && !hosted) fail('contributes needs a hosted ui: its pages come from that site');
+  // Its own server on the PCBJam API as the person (plugins 0025 §5.6): reviewed with the release.
+  const api = validateProjectApi(manifest.api);
+  if (api && !hosted) fail('api needs a hosted ui: the key goes to the plugin\'s own site');
+  if (!!api !== (Array.isArray(manifest.permissions) && manifest.permissions.includes(PROJECT_API_PERMISSION))) fail('api and the api:project permission go together');
   if (hosted) {
     if (manifest.main !== 'main.js' || !get('main.js')) fail('main.js is required');
     if (get('ui.html') !== undefined) fail('A hosted UI has no ui.html: its page comes from ui.origin');
@@ -159,8 +164,8 @@ export function validatePackage(input, { legacyDigest = false, allowLocalHostedU
   if (!hosted && manifest.permissions.some(p => p.startsWith('identity:'))) fail('Identity permissions need a hosted ui');
   if (manifest.permissions.includes('identity:role') && !['adminNav', 'adminUser', 'adminProject'].some(k => contributes?.[k]?.length)) fail('identity:role needs an admin page in contributes');
   if (!hosted && /<script\b[^>]*\bsrc\s*=|<link\b[^>]*\bhref\s*=/i.test(get('ui.html'))) fail('Bundle scripts and styles inline in ui.html; remote/module imports are not supported');
-  const policyDigest = createHash('sha256').update(JSON.stringify({ apiVersion: 1, permissions: [...manifest.permissions].sort(), ...(endpoints?{backendPolicyVersion:1,endpoints}: {}), ...(network ? { networkPolicyVersion: 1, network } : {}), ...(hosted ? { hostedUiPolicyVersion: 1, hostedUi: hosted } : {}), ...(limits ? { limitsPolicyVersion: 1, limits } : {}) })).digest('hex');
-  return { ...release(files, legacyDigest), manifest: hosted ? { ...manifest, ui: hosted, ...(contributes ? { contributes } : {}) } : manifest, policyDigest, validationVersion: hosted ? 6 : network ? 5 : endpoints ? 3 : 2 };
+  const policyDigest = createHash('sha256').update(JSON.stringify({ apiVersion: 1, permissions: [...manifest.permissions].sort(), ...(endpoints?{backendPolicyVersion:1,endpoints}: {}), ...(network ? { networkPolicyVersion: 1, network } : {}), ...(hosted ? { hostedUiPolicyVersion: 1, hostedUi: hosted } : {}), ...(limits ? { limitsPolicyVersion: 1, limits } : {}), ...(api ? { projectApiPolicyVersion: 1, api } : {}) })).digest('hex');
+  return { ...release(files, legacyDigest), manifest: hosted ? { ...manifest, ui: hosted, ...(contributes ? { contributes } : {}), ...(api ? { api } : {}) } : manifest, policyDigest, validationVersion: hosted ? 6 : network ? 5 : endpoints ? 3 : 2 };
 }
 
 function identity(manifest) {

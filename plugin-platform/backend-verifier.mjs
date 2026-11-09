@@ -180,7 +180,8 @@ export function createIdentityVerifier({ issuer, audience, pluginId, jwks }) {
       (payload.uid !== undefined && (typeof payload.uid !== "string" || !payload.uid || payload.uid.length > 128)) ||
       (payload.role !== undefined && !["admin", "user"].includes(payload.role)) ||
       (payload.pro !== undefined && typeof payload.pro !== "boolean") ||
-      (payload.limits !== undefined && (typeof payload.limits !== "object" || payload.limits === null || Array.isArray(payload.limits)))
+      (payload.limits !== undefined && (typeof payload.limits !== "object" || payload.limits === null || Array.isArray(payload.limits))) ||
+      (payload.act !== undefined && (typeof payload.act !== "string" || !/^[0-9a-f-]{36}$/.test(payload.act)))
     )
       throw new Error("Plugin identity does not match");
     return Object.freeze({
@@ -191,6 +192,8 @@ export function createIdentityVerifier({ issuer, audience, pluginId, jwks }) {
       role: payload.role,
       pro: payload.pro,
       limits: payload.limits,
+      activationId: payload.act,
+      tokenId: payload.jti,
       expiresAt: new Date(payload.exp * 1000),
     });
   };
