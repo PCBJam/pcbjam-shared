@@ -144,6 +144,13 @@ export const METHODS = {
     'editor.pickPoint': request('editor:interact', z.object({ prompt: z.string().min(1).max(120) }).strict()),
     // Open another file of this project in the editor, after the user confirms.
     'editor.openFile': request('project:navigate', z.object({ path: z.string().min(1).max(500) }).strict()),
+    // KiCad's own highlight: these items brightened and these nets highlighted, replacing what
+    // the plugin highlighted before, for durationMs (default 5 s); both lists empty clears it.
+    'editor.highlight': request('editor:overlay', z.object({
+        ids: z.array(id.max(64)).max(500).optional(),
+        nets: z.array(z.string().min(1).max(256)).max(32).optional(),
+        durationMs: z.number().int().min(500).max(60000).optional(),
+    }).strict()),
 } as const;
 export type Method = keyof typeof METHODS;
 export const LIMITS = Object.freeze({ snapshotBytes: 1024 * 1024, pageItems: 100, fileBytes: 4 * 1024 * 1024, exportBytes: 512 * 1024, storageBytes: 256 * 1024, storageValueBytes: 16 * 1024, storageKeys: 64, htmlBytes: 8 * 1024 * 1024, imageBytes: 4 * 1024 * 1024, selectItems: 500,

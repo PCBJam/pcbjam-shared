@@ -74,6 +74,8 @@ export interface PackageHostOptions {
     pickPoint?(prompt: string, signal: AbortSignal): Promise<{ x: number; y: number } | null>;
     /** Open another file of the project after the user confirms. */
     openFile?(path: string, signal: AbortSignal): Promise<{ status: 'opened' | 'cancelled' }>;
+    /** KiCad's highlight of items and nets for a while; an empty request clears it. */
+    highlight?(request: { ids: string[]; nets: string[]; durationMs: number }): Promise<{ highlighted: string[]; missing: string[]; nets: string[]; missingNets: string[] }>;
     onDisconnected(message: string): void;
     documents?: DocumentAdapter;
     /** Stable trusted account/project binding, never supplied by a plugin. */
@@ -299,6 +301,8 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             return !!options.pickPoint;
         if (method === 'editor.openFile')
             return !!options.openFile && !!options.documents;
+        if (method === 'editor.highlight')
+            return !!options.highlight;
         if (method === 'editor.requestPlacement')
             return !options.context().readOnly && options.context().canPlaceItems && (!platformConfiguration()||(activation?.placementEnabled ?? (served && options.hashServing!.placementEnabled))===true);
         if (method.startsWith('storage.'))
@@ -586,6 +590,8 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
                 return options.updatePcb!({ dryRun: params.dryRun, deleteUnused: params.deleteUnused === true }, signal);
             case 'editor.pickPoint':
                 return options.pickPoint!(params.prompt, signal);
+            case 'editor.highlight':
+                return options.highlight!({ ids: params.ids ?? [], nets: params.nets ?? [], durationMs: params.durationMs ?? 5000 });
             case 'editor.openFile': {
                 // Only a file of this project, as its catalog names it.
                 if (!options.documents!.catalog().some(f => f.name === params.path))

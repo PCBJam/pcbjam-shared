@@ -59,7 +59,7 @@ type PCBJamTourCond =
 type PCBJamTour = {id:string;title?:string;editor:'eeschema'|'pcbnew';closable?:boolean;
   steps:(Omit<PCBJamPointer,'target'> & {id:string;target?:PCBJamTarget;celebrate?:'rainbow';when?:PCBJamTourCond;until:PCBJamTourCond})[]};
 // BEGIN GENERATED HOST METHODS
-type PCBJamHostMethod = "http.request" | "http.upload" | "net.fetch" | "ui.openExternal" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "board.geometryStart" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "exports.run" | "exports.runMany" | "exports.readJson" | "exports.bundle" | "files.saveBundle" | "editor.requestPlacement" | "board.edit" | "schematic.edit" | "tour.start" | "tour.stop" | "tour.status" | "ui.overlay.show" | "ui.overlay.clear" | "parts.save" | "schematic.symbols" | "schematic.connectivity" | "board.updateFromSchematic" | "editor.pickPoint" | "editor.openFile";
+type PCBJamHostMethod = "http.request" | "http.upload" | "net.fetch" | "ui.openExternal" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "board.geometryStart" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "exports.run" | "exports.runMany" | "exports.readJson" | "exports.bundle" | "files.saveBundle" | "editor.requestPlacement" | "board.edit" | "schematic.edit" | "tour.start" | "tour.stop" | "tour.status" | "ui.overlay.show" | "ui.overlay.clear" | "parts.save" | "schematic.symbols" | "schematic.connectivity" | "board.updateFromSchematic" | "editor.pickPoint" | "editor.openFile" | "editor.highlight";
 // END GENERATED HOST METHODS
 /** Plugin logic only, and only while a command is being handled: at most 32 pending, 60 s each,
  *  all cancelled when the command settles. An exception thrown from a callback stops the plugin. */
@@ -223,6 +223,10 @@ declare const pcbjam: {
     pickPoint(prompt:string):Promise<{x:number;y:number}|null>;
     /** Asks the user to open another file of this project in the editor. Needs `project:navigate`. */
     openFile(path:string):Promise<{status:'opened'|'cancelled'}>;
+    /** KiCad's own highlight on the open document: `ids` brightened, `nets` highlighted (the schematic editor shows
+     *  the first net only), for `durationMs` (500–60000, default 5000). Replaces this plugin's previous highlight;
+     *  both lists empty clears it. Needs `editor:overlay`. Changes nothing in the document. */
+    highlight(options:{ids?:string[];nets?:string[];durationMs?:number}):Promise<{highlighted:string[];missing:string[];nets:string[];missingNets:string[]}>;
   };
   randomUUID():string;
 };

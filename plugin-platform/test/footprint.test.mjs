@@ -4,7 +4,7 @@ import {build} from 'esbuild';
 import {readFile} from 'node:fs/promises';
 
 const load=async(entry)=>{const c=await build({entryPoints:[new URL(entry,import.meta.url).pathname],bundle:true,write:false,format:'esm',platform:'node'});return import('data:text/javascript;base64,'+Buffer.from(c.outputFiles[0].contents).toString('base64'));};
-const {sanitizeFootprint,validateFootprintSemantics,checkFootprintStructure}=await load('../src/footprint-semantics.ts');
+const {sanitizeFootprint,validateFootprintSemantics,checkFootprintStructure,placementFootprint}=await load('../src/footprint-semantics.ts');
 const {parseSexpr,printSexpr}=await load('../../src/sexpr.ts');
 const fixture=await readFile(new URL('../examples/sample-footprint.kicad_mod',import.meta.url),'utf8');
 const accept=(text,name='X')=>{const out=sanitizeFootprint(text,name);validateFootprintSemantics(out);return out;};
@@ -105,6 +105,20 @@ test('the validation worker answers both message shapes',async()=>{
   assert.match(replies.pop().error,/net is not supported/);
   self.onmessage({data:{text:symbol,tool:'eeschema',kind:'other'}});
   assert.equal(replies.pop().ok,false);
+  // A board placement (plugins 0025 §5.4) answers with the footprint to place: sanitized, own name kept.
   self.onmessage({data:{text:fixture,tool:'pcbnew'}});
-  assert.equal(replies.pop().ok,false,'a footprint through the symbol path is still refused');
+  const placed=replies.pop();
+  assert.equal(placed.ok,true);assert.ok(!placed.text.includes('embedded_files')&&!placed.text.includes('(model'));
+  assert.equal(parseSexpr(placed.text)[0][1],parseSexpr(fixture)[0][1]);
+});
+
+test('a footprint to place keeps its Library:Name and passes the same allowlist',()=>{
+  const named=minimal().replace('"R_0603" (version','"Resistor_SMD:R_0603" (version');
+  const out=placementFootprint(named+'');
+  assert.equal(parseSexpr(out)[0][1],'"Resistor_SMD:R_0603"');
+  assert.ok(!placementFootprint(minimal('(model "/abs/x.step")')).includes('model'));
+  for(const name of ['a/b','a\\\\b','a:b:c'])
+    assert.throws(()=>placementFootprint(minimal().replace('"R_0603" (version',`"${name}" (version`)),/invalid footprint name/);
+  assert.throws(()=>placementFootprint(minimal('','(pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "GND"))')),/net is not supported/);
+  assert.throws(()=>placementFootprint('(symbol "x")'),/expected one footprint/);
 });

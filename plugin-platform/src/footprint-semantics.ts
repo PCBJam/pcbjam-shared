@@ -252,6 +252,24 @@ export function sanitizeFootprint(text:string,name:string):string {
   return printSexpr(root);
 }
 
+/**
+ * A footprint a plugin asks to place on the open board (plugins 0025 §5.4): sanitized as for
+ * storing, but it keeps its own name (a board footprint is `Library:Name`), and that name is
+ * checked on its own. Returns the text to place.
+ */
+export function placementFootprint(text:string):string {
+  checkFootprintStructure(text);
+  const roots=parseSexpr(text);
+  if(roots.length!==1||!Array.isArray(roots[0])||roots[0][0]!=='footprint')fail('expected one footprint');
+  const name=quoted(roots[0][1]!,256);
+  if(/[/\\]/.test(name)||(name.match(/:/g)??[]).length>1)fail('invalid footprint name');
+  const clean=sanitizeFootprint(text,'placement');
+  validateFootprintSemantics(clean);
+  const placed=parseSexpr(clean)[0] as Form;
+  placed[1]=roots[0][1]!;
+  return printSexpr(placed);
+}
+
 /** Every form in a SANITIZED footprint must be on the allowlist; throws otherwise. */
 export function validateFootprintSemantics(text:string):void {
   if(new TextEncoder().encode(text).length>512*1024)fail('too large after removing embedded files');

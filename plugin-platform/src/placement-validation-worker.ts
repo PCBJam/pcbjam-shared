@@ -1,8 +1,9 @@
 import { validatePlacementSemantics } from './placement-semantics';
-import { checkFootprintStructure, sanitizeFootprint, validateFootprintSemantics } from './footprint-semantics';
+import { checkFootprintStructure, placementFootprint, sanitizeFootprint, validateFootprintSemantics } from './footprint-semantics';
 // Trusted code only; terminate this worker after one bounded validation.
 // `{text, tool}` validates a symbol placement blob; `{text, tool, kind:'footprint', name}`
-// sanitizes a footprint and answers with the text that may be stored.
+// sanitizes a footprint and answers with the text that may be stored. A pcbnew placement
+// answers with the sanitized footprint to place.
 self.onmessage=(event:MessageEvent)=>{
   try {
     const data=event.data;
@@ -16,6 +17,8 @@ self.onmessage=(event:MessageEvent)=>{
       return;
     }
     if(data.kind!==undefined&&data.kind!=='symbol')throw new Error('Invalid validation request');
+    // A board placement answers with the footprint to place: no 3D models or embedded files.
+    if(data.tool==='pcbnew'){self.postMessage({ok:true,text:placementFootprint(data.text)});return;}
     validatePlacementSemantics(data.text,data.tool);
     self.postMessage({ok:true});
   }catch(error){self.postMessage({ok:false,error:error instanceof Error?error.message:'Invalid import'});}

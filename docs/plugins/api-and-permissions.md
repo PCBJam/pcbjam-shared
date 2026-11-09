@@ -72,6 +72,7 @@ permissions. `context.get()` needs no additional permission.
 | `board.updateFromSchematic({dryRun, deleteUnused?})` | `board:write` | KiCad’s Update PCB from Schematic on the open board. A dry run lists the report and the changes the user must approve; a real run is one undo step, and anything that removes or rewires waits for the user’s approval in the editor’s own dialog: previewed, applied or declined. |
 | `editor.pickPoint({prompt})` | `editor:interact` | The user clicks a point on the canvas, after your prompt: `{x, y}` in mm on the document’s grid, or null when they press Esc. |
 | `editor.openFile({path})` | `project:navigate` | Open another file of this project in the editor after the user confirms: opened or cancelled. |
+| `editor.highlight({ids?, nets?, durationMs?})` | `editor:overlay` | KiCad's own highlight of items and nets for a while, replacing the previous one; empty clears it. Changes nothing. |
 <!-- END GENERATED HOST API -->
 
 ## Permissions
@@ -95,7 +96,7 @@ feature uses: every extra line is a reason to decline.
 | `storage:local` | Store local data for this plugin, account and project | `storage.get`, `storage.set`, `storage.delete`, `storage.list` |
 | `project:export` | Generate export files such as Gerbers, drill files and netlists from the current document on PCBJam's servers | `exports.run`, `exports.runMany`, `exports.readJson`, `exports.bundle` |
 | `ui:open-external` | Open pages of this plugin's approved sites in a new browser tab, after you confirm | `ui.openExternal` |
-| `editor:overlay` | Show guided tours and pointers over the editor, labelled with this plugin's name | `tour.start`, `tour.stop`, `tour.status`, `ui.overlay.show`, `ui.overlay.clear` |
+| `editor:overlay` | Show guided tours and pointers over the editor, labelled with this plugin's name | `tour.start`, `tour.stop`, `tour.status`, `ui.overlay.show`, `ui.overlay.clear`, `editor.highlight` |
 | `library:write-parts` | Save parts this plugin ships into its own team library and place them, confirmed by you | `parts.save` |
 | `board:write` | Change and delete items on your boards; each change is one undo step | `board.edit`, `board.updateFromSchematic` |
 | `schematic:write` | Change and delete items on your schematics; each change is one undo step | `schematic.edit` |

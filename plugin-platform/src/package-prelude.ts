@@ -188,6 +188,7 @@ declare const __clearTimer: (message: string) => void;
             select: (options: unknown) => call('editor.select', options),
             pickPoint: (prompt: string) => call('editor.pickPoint', { prompt }),
             openFile: (path: string) => call('editor.openFile', { path }),
+            highlight: (options: unknown = {}) => call('editor.highlight', options),
         }),
         randomUUID: () => uuid(),
     });
