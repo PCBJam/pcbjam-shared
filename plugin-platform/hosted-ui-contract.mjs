@@ -86,3 +86,54 @@ export function hostedFragment(hash, editors) {
   if (!nonce || !/^[0-9a-f-]{36}$/.test(nonce) || !parent || !editors.includes(parent)) return null;
   return { nonce, parent };
 }
+
+/**
+ * Where a hosted plugin's pages show up in the web app (plugins 0025 §5.2): each entry is a
+ * label and a page on the plugin's own origin. `{userId}` and `{projectId}` are filled in by
+ * the web app, and only where they make sense.
+ */
+export const CONTRIBUTION_KINDS = Object.freeze({
+  adminNav: { placeholders: [] },
+  adminUser: { placeholders: ['{userId}'] },
+  adminProject: { placeholders: ['{projectId}'] },
+  userSettings: { placeholders: [] },
+  projectSettings: { placeholders: ['{projectId}'], sections: ['git'] },
+});
+const contributionFail = (why) => {
+  throw new Error('contributes: ' + why);
+};
+export function validateContributes(input) {
+  if (input === undefined) return undefined;
+  if (!input || typeof input !== 'object' || Array.isArray(input)) contributionFail('an object of kinds');
+  const out = {};
+  for (const [kind, entries] of Object.entries(input)) {
+    const spec = CONTRIBUTION_KINDS[kind];
+    if (!spec) contributionFail(`unknown kind ${kind}`);
+    if (!Array.isArray(entries) || !entries.length || entries.length > 4) contributionFail(`${kind} holds 1-4 entries`);
+    out[kind] = entries.map((e) => {
+      const allowed = spec.sections ? ['section', 'path', 'height'] : ['label', 'path'];
+      if (!e || typeof e !== 'object' || Object.keys(e).some((k) => !allowed.includes(k))) contributionFail(`${kind}: ${allowed.join(', ')}`);
+      if (!spec.sections && (typeof e.label !== 'string' || !e.label.trim() || e.label.length > 40)) contributionFail(`${kind}: a label of 1-40 characters`);
+      if (spec.sections && !spec.sections.includes(e.section)) contributionFail(`${kind}: section is one of ${spec.sections.join(', ')}`);
+      if (spec.sections && e.height !== undefined && !(Number.isInteger(e.height) && e.height >= 40 && e.height <= 2000)) contributionFail(`${kind}: height is 40-2000 pixels`);
+      let bare = typeof e.path === 'string' ? e.path : '';
+      for (const p of spec.placeholders) bare = bare.split(p).join('x');
+      try {
+        backendPath(bare);
+      } catch {
+        contributionFail(`${kind}: an absolute path, with ${spec.placeholders.join(' or ') || 'no placeholders'}`);
+      }
+      if (/[{}]/.test(bare)) contributionFail(`${kind}: only ${spec.placeholders.join(' or ') || 'no placeholders'}`);
+      return spec.sections ? { section: e.section, path: e.path, ...(e.height !== undefined ? { height: e.height } : {}) } : { label: e.label.trim(), path: e.path };
+    });
+  }
+  return out;
+}
+/** A contribution's page for one object: its placeholders filled in (ids of letters, digits, - and _). */
+export function contributionPath(path, values = {}) {
+  return path.replace(/\{(userId|projectId)\}/g, (_, key) => {
+    const v = values[key];
+    if (typeof v !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(v)) throw new Error('contributes: ' + key + ' is missing');
+    return v;
+  });
+}

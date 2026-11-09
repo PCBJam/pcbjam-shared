@@ -69,3 +69,36 @@ test("a hosted page connects only to an editor it trusts", () => {
   assert.equal(hostedFragment(`#${nonce}`, editors), null);
   assert.equal(hostedFragment(`#not-a-nonce&parent=${encodeURIComponent(editors[0])}`, editors), null);
 });
+
+test("contributions: where a hosted plugin's pages show up in the web app", async () => {
+  const { validateContributes, contributionPath } = await import("../hosted-ui-contract.mjs");
+  const ui = { kind: "hosted", origin: ORIGIN, path: "/panel" };
+  const contributes = {
+    adminNav: [{ label: "AI chat", path: "/admin" }],
+    adminUser: [{ label: "AI usage", path: "/admin/users/{userId}" }],
+    adminProject: [{ label: "AI chats", path: "/admin/projects/{projectId}" }],
+    userSettings: [{ label: "AI usage", path: "/settings" }],
+    projectSettings: [{ section: "git", path: "/project/{projectId}/git", height: 120 }],
+  };
+  assert.deepEqual(pkg(manifest(ui, [hostedUiPermission(ORIGIN)]), [], undefined).manifest.contributes, undefined);
+  assert.deepEqual(validatePackage([{ path: "manifest.json", text: JSON.stringify({ ...manifest(ui, [hostedUiPermission(ORIGIN)]), contributes }) }, { path: "main.js", text: "x" }]).manifest.contributes, contributes);
+  // Only with a hosted UI.
+  assert.throws(() => pkg({ ...manifest("ui.html"), contributes }, [{ path: "ui.html", text: "<p>x</p>" }]), /hosted ui/);
+  for (const bad of [
+    { nope: [{ label: "x", path: "/x" }] },
+    { adminNav: [] },
+    { adminNav: [{ label: "", path: "/x" }] },
+    { adminNav: [{ label: "x", path: "relative" }] },
+    { adminNav: [{ label: "x", path: "/users/{userId}" }] },
+    { adminUser: [{ label: "x", path: "/p/{projectId}" }] },
+    { projectSettings: [{ section: "danger", path: "/x" }] },
+    { projectSettings: [{ section: "git", path: "/x", height: 5 }] },
+    { adminNav: [{ label: "x", path: "/x", extra: 1 }] },
+  ])
+    assert.throws(() => validateContributes(bad), /contributes/, JSON.stringify(bad));
+  const id = "0b9e2a4c-1f3d-4e5a-9b6c-7d8e9f0a1b2c";
+  assert.equal(contributionPath("/admin/users/{userId}", { userId: id }), "/admin/users/" + id);
+  assert.equal(contributionPath("/admin/users/{userId}", { userId: "Mfil3GpsHa3ffGtfcYL5yrAOdr5FY90q" }), "/admin/users/Mfil3GpsHa3ffGtfcYL5yrAOdr5FY90q");
+  assert.throws(() => contributionPath("/admin/users/{userId}", { userId: "../x" }), /userId/);
+  assert.throws(() => contributionPath("/admin/users/{userId}", {}), /userId/);
+});

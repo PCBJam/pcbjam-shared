@@ -1,6 +1,6 @@
 import { inflateRawSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
-import { hostedUi, hostedUiPermissions, isHostedUi } from './hosted-ui-contract.mjs';
+import { hostedUi, hostedUiPermissions, isHostedUi, validateContributes } from './hosted-ui-contract.mjs';
 
 export const LIMITS = { archive: 8 * 1024 * 1024, total: 12 * 1024 * 1024, file: 4 * 1024 * 1024, files: 32 };
 export { default as PERMISSIONS } from './api-permissions.json' with { type: 'json' };
@@ -115,7 +115,7 @@ export function validatePackage(input, { legacyDigest = false, allowLocalHostedU
   if (Buffer.byteLength(get('manifest.json') ?? '') > 16384) fail('Manifest exceeds 16 KiB');
   const manifest = JSON.parse(get('manifest.json') ?? fail('Missing manifest.json'));
   if (manifest && typeof manifest === 'object' && manifest.kind === 'remote-provider') return validateProviderPackage(files, manifest, legacyDigest);
-  exact(manifest, ['apiVersion', 'kind', 'id', 'name', 'version', 'description', 'main', 'ui', 'uiSize', 'surfaces', 'permissions', 'endpoints', 'network']);
+  exact(manifest, ['apiVersion', 'kind', 'id', 'name', 'version', 'description', 'main', 'ui', 'uiSize', 'surfaces', 'permissions', 'endpoints', 'network', 'contributes']);
   if (manifest.kind !== undefined && manifest.kind !== 'plugin') fail('Unsupported package kind');
   if (Object.hasOwn(manifest, 'uiSize')) {
     exact(manifest.uiSize, ['width', 'height']);
@@ -132,6 +132,9 @@ export function validatePackage(input, { legacyDigest = false, allowLocalHostedU
   // A hosted UI (plugins 0025 §5.1): the plugin's own origin serves the page; no ui.html.
   const hosted = isHostedUi(manifest.ui) ? hostedUi(manifest.ui, { allowLocalhost: allowLocalHostedUi }) : undefined;
   const hostedPermissions = hosted ? hostedUiPermissions(hosted.origin) : {};
+  // Pages in the web app (plugins 0025 §5.2) come from the hosted UI's origin.
+  const contributes = validateContributes(manifest.contributes);
+  if (contributes && !hosted) fail('contributes needs a hosted ui: its pages come from that site');
   if (hosted) {
     if (manifest.main !== 'main.js' || !get('main.js')) fail('main.js is required');
     if (get('ui.html') !== undefined) fail('A hosted UI has no ui.html: its page comes from ui.origin');
@@ -150,7 +153,7 @@ export function validatePackage(input, { legacyDigest = false, allowLocalHostedU
   if (hosted && Object.keys(hostedPermissions).some(p => !manifest.permissions.includes(p))) fail('A hosted UI requires its hosted:<hostname> permission');
   if (!hosted && /<script\b[^>]*\bsrc\s*=|<link\b[^>]*\bhref\s*=/i.test(get('ui.html'))) fail('Bundle scripts and styles inline in ui.html; remote/module imports are not supported');
   const policyDigest = createHash('sha256').update(JSON.stringify({ apiVersion: 1, permissions: [...manifest.permissions].sort(), ...(endpoints?{backendPolicyVersion:1,endpoints}: {}), ...(network ? { networkPolicyVersion: 1, network } : {}), ...(hosted ? { hostedUiPolicyVersion: 1, hostedUi: hosted } : {}) })).digest('hex');
-  return { ...release(files, legacyDigest), manifest: hosted ? { ...manifest, ui: hosted } : manifest, policyDigest, validationVersion: hosted ? 6 : network ? 5 : endpoints ? 3 : 2 };
+  return { ...release(files, legacyDigest), manifest: hosted ? { ...manifest, ui: hosted, ...(contributes ? { contributes } : {}) } : manifest, policyDigest, validationVersion: hosted ? 6 : network ? 5 : endpoints ? 3 : 2 };
 }
 
 function identity(manifest) {

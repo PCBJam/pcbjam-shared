@@ -1,5 +1,5 @@
 import type {BackendEndpoint} from './backend-contract.mjs';
-import type {HostedUi} from './hosted-ui-contract.mjs';
+import type {Contributes, HostedUi} from './hosted-ui-contract.mjs';
 export interface PluginManifest {
   apiVersion: 1; kind?: 'plugin'; id: string; name: string; version: string; description: string;
   main: 'main.js';
@@ -8,6 +8,8 @@ export interface PluginManifest {
   /** HTTPS sites the Worker may call directly (plugins 0022 M3); each needs its `direct:<hostname>` permission. */
   network?: string[];
   uiSize?: {width: number; height: number};
+  /** Where its hosted pages show up in the web app (plugins 0025 §5.2); needs a hosted ui. */
+  contributes?: Contributes;
 }
 /** Manifest-only package whose UI is the provider's own KiCad 10 remote-symbol panel page. */
 export interface RemoteProviderManifest {

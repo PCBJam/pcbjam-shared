@@ -15,3 +15,16 @@ export function hostedUiPolicyText(ui: HostedUi): string;
 export function hostedUiUrl(ui: HostedUi): string;
 export function wellKnownProves(body: string, challengeHash: string): boolean;
 export function hostedFragment(hash: string, editors: readonly string[]): { nonce: string; parent: string } | null;
+export type ContributionKind = 'adminNav' | 'adminUser' | 'adminProject' | 'userSettings' | 'projectSettings';
+export interface LabeledContribution { label: string; path: string }
+export interface SectionContribution { section: 'git'; path: string; height?: number }
+export interface Contributes {
+  adminNav?: LabeledContribution[];
+  adminUser?: LabeledContribution[];
+  adminProject?: LabeledContribution[];
+  userSettings?: LabeledContribution[];
+  projectSettings?: SectionContribution[];
+}
+export const CONTRIBUTION_KINDS: Readonly<Record<ContributionKind, { placeholders: string[]; sections?: string[] }>>;
+export function validateContributes(input: unknown): Contributes | undefined;
+export function contributionPath(path: string, values?: { userId?: string; projectId?: string }): string;
