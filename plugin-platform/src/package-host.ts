@@ -1,5 +1,6 @@
 import {backendPermissions, validateBackendRequest, validateUploadRequest, BACKEND_LIMITS, type BackendEndpoint} from '../backend-contract.mjs';
 import { sitePermission, sitesSegment } from '../network-contract.mjs';
+import { hostedUiUrl, isHostedUi, type HostedUi } from '../hosted-ui-contract.mjs';
 const runtimeAsset = (name: string) => new URL(name, import.meta.url).href;
 import { METHODS, LIMITS, LEASED_READS, SAVED_HTML_PREFIX, EXPORT_KINDS, EXPORT_LIMITS, externalUrlAllowed, pngBytes, boundedJSON, type Method, type DocumentAdapter, type PointerStep, type PartSaveRequest } from './package-api';
 import { storageCall } from './package-storage';
@@ -184,6 +185,10 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
     let uiReadyTimer: ReturnType<typeof setTimeout> | undefined;
     let poll: ReturnType<typeof setInterval> | undefined;
     const nonce = crypto.randomUUID(), documentHandle = crypto.randomUUID();
+    // A hosted UI (plugins 0025 §5.1) is framed from its own origin; a packaged one is an opaque document.
+    const manifestUi = (options.plugin.manifest as unknown as { ui?: unknown }).ui;
+    const hostedPage: HostedUi | undefined = isHostedUi(manifestUi) ? manifestUi : undefined;
+    const uiPageOrigin = hostedPage ? new URL(hostedPage.origin).origin : 'null';
     const binding = options.storageBinding?.() ?? null;
     let activation: {id:string;grants:string[];userId:string;pluginId:string;storageEpoch:number;uiOrigin:string;placementEnabled:boolean;editsEnabled?:boolean;digest:string;manifest:unknown;startup?:{main:string;uiUrl:string}} | undefined;
     let grants=options.plugin.manifest.permissions;
@@ -336,7 +341,7 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
     };
     const fail = (message: string) => { dispose(); options.onDisconnected(message); };
     function handshake(event: MessageEvent) {
-        if (closed || offered || event.source !== frame?.contentWindow || event.origin !== 'null' || event.data?.type !== 'plugin-ui-ready' || event.data?.nonce !== nonce || event.data?.version !== 1)
+        if (closed || offered || event.source !== frame?.contentWindow || event.origin !== uiPageOrigin || event.data?.type !== 'plugin-ui-ready' || event.data?.nonce !== nonce || event.data?.version !== 1)
             return;
         offered = true;
         frame!.contentWindow!.postMessage({ type: 'plugin-connect', version: 1, nonce }, '*', [uiChannel.port2]);
@@ -654,6 +659,9 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
         frame = document.createElement('iframe');
         frame.title = pkg.manifest.name + ' plugin';
         frame.sandbox.add('allow-scripts');
+        // A hosted UI (plugins 0025 §5.1) is its own origin's page: it keeps that origin (its
+        // storage, its connections to its own backend), and may submit forms and open links.
+        if (hostedPage) frame.sandbox.add('allow-same-origin', 'allow-forms', 'allow-popups');
         frame.referrerPolicy = 'no-referrer';
         frame.style.cssText = 'border:0;width:100%;height:100%;display:block;color-scheme:dark';
         frame.addEventListener('load', () => { if (++loads > 1)
@@ -687,7 +695,15 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
                 fail((error as Error).message);
             }
         };
-        if(served) {
+        if(hostedPage) {
+            // The approved page named in the consented manifest; never a ticket or the UI origin.
+            const url=new URL(hostedUiUrl(hostedPage));
+            if(url.origin===location.origin||url.origin===options.uiOrigin)throw new Error('Invalid plugin UI origin');
+            if(activation?.startup?.uiUrl!==undefined&&activation.startup.uiUrl!==url.href)throw new Error('Plugin UI page changed');
+            // Its page can't be told our origin by our UI server: it reads it here, and checks it
+            // against the editors it trusts (hosted-ui-sdk.ts).
+            frame.src=url.href+'#'+nonce+'&parent='+encodeURIComponent(location.origin);
+        } else if(served) {
             // The published page for this runtime and digest, checked like a ticket's.
             const origin=options.hashServing!.uiOrigin, url=new URL(origin+'/release/'+platformConfiguration()!.runtimeVersion+'/'+pkg.digest);
             if(url.origin!==origin||url.origin===location.origin||!/^\/release\/[a-f0-9]{64}\/[a-f0-9]{64}$/.test(url.pathname))throw new Error('Invalid plugin UI origin');

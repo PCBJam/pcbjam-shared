@@ -196,6 +196,27 @@ redirects, with size, time and rate limits the plugin cannot change. Without
 the user's consent to a site, or with direct requests off for the account,
 the plugin gets the Worker that can reach nothing.
 
+## A UI on the plugin's own site
+
+A hosted UI is framed from the plugin's own origin, with
+`allow-scripts allow-same-origin allow-forms allow-popups`: it keeps that origin, so it
+can reach its own backend and keep its own storage. What it can't do:
+
+- **Reach the editor directly.** It talks over the same MessagePort a packaged UI gets,
+  to the plugin's logic in QuickJS, which alone calls host methods, each checked
+  against the user's grants. Its connection is accepted only from the approved origin,
+  with the one-use nonce.
+- **Run before review.** The origin and path are part of the consented policy digest,
+  and the page's review row must be approved (with proven control of the site, by DNS
+  or by the well-known document) before activation starts it. The editor frames the
+  approved page only, and never on the editor's or the UI server's origin.
+- **Be one of ours.** A PCBJam host, or any of the platform's own origins, is refused.
+
+The well-known proof is read by the egress service: one GET of one fixed path, a JSON
+document of at most 16 KiB, no redirects, nothing sent. Unlike plugin traffic, it may
+reach `workers.dev`, where nobody can publish DNS records. PCBJam's own hosts and the
+configured blocked hosts stay refused.
+
 ## Edits go through KiCad
 
 `pcbjam.board.edit()` and `pcbjam.schematic.edit()` (preview) hand KiCad item text to the

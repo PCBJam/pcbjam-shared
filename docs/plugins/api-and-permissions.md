@@ -810,6 +810,54 @@ const parts = JSON.parse(response.text);
 Use [backend requests](#backend-requests) instead when your server sends no
 CORS headers, needs to know who the user is, or holds a secret.
 
+## A UI on your own site
+
+*Preview: available once PCBJam turns hosted UIs on for your account.*
+
+Instead of a packaged `ui.html`, your plugin's interface can be a page on your own
+site. The editor frames it, and the page runs whatever it needs: a full React bundle,
+its own connections to your backend (a WebSocket included), its own storage. Your
+logic (`main.js`) still runs in PCBJam's sandbox and is the only thing that calls the
+editor.
+
+```json
+{
+  "main": "main.js",
+  "ui": { "kind": "hosted", "origin": "https://plugin.your-domain.example", "path": "/panel" },
+  "permissions": ["ui:custom", "ui:project-data", "hosted:plugin.your-domain.example"]
+}
+```
+
+```ts
+import { connectPcbjamUI } from '@pcbjam/plugin-platform/src/hosted-ui-sdk.ts';
+// The editors your page trusts; it refuses to connect to anything else.
+const pcbjamUI = connectPcbjamUI({ editors: ['https://editor.pcbjam.com'] });
+await pcbjamUI.ready;
+const result = await pcbjamUI.call('my-command', { x: 1 });
+```
+
+- **The package** holds `manifest.json` and `main.js`, and no `ui.html`.
+- **The site:** an `https://` origin with a public hostname, no port and no path; a
+  Cloudflare `workers.dev` host is fine, a PCBJam host is not. `path` is the page the
+  editor frames (default `/`). The user sees the site at install, as "Show a page from
+  https://plugin.your-domain.example inside the editor", and moving the page to another
+  origin or path needs a new release, a new review and fresh consent.
+- **Review:** PCBJam approves the page before anyone can run it. You prove you control
+  the site with the DNS TXT record the review gives you, or, where you can't add DNS
+  records (`workers.dev`), by serving `{"pcbjam-plugin": ["<challenge>"]}` at
+  `/.well-known/pcbjam-plugin.json`.
+- **Headers your page must send:**
+  - `Cross-Origin-Embedder-Policy: require-corp` and
+    `Cross-Origin-Resource-Policy: cross-origin`, or the editor (cross-origin isolated)
+    can't show it;
+  - `Content-Security-Policy: frame-ancestors <the editors>`, so no other site can frame
+    it.
+- **The connection:** the editor opens your page with `#<nonce>&parent=<editor origin>`.
+  `connectPcbjamUI` answers only an editor in your list, and the calls work as the
+  packaged UI's `pcbjamUI.call`, with the same limits.
+- **Local development:** where the editor runs on `http://localhost`, a hosted page on
+  `http://localhost:<port>` is accepted, and its review needs no proof.
+
 ## Edit the design
 
 *Preview: available once PCBJam turns plugin edits on for your account.*

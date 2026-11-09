@@ -1,5 +1,6 @@
 import { inflateRawSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
+import { hostedUi, hostedUiPermissions, isHostedUi } from './hosted-ui-contract.mjs';
 
 export const LIMITS = { archive: 8 * 1024 * 1024, total: 12 * 1024 * 1024, file: 4 * 1024 * 1024, files: 32 };
 export { default as PERMISSIONS } from './api-permissions.json' with { type: 'json' };
@@ -84,7 +85,7 @@ export function readZip(bytes) {
 function exact(object, keys) {
   if (!object || typeof object !== 'object' || Array.isArray(object) || Object.keys(object).some(k => !keys.includes(k))) fail('Unknown manifest field');
 }
-export function validatePackage(input, { legacyDigest = false } = {}) {
+export function validatePackage(input, { legacyDigest = false, allowLocalHostedUi = false } = {}) {
   if (!Array.isArray(input) || !input.length || input.length > LIMITS.files) fail('Package must contain 1–32 files');
   let files = input.map(file => {
     exact(file, ['path', 'text']); validPath(file.path);
@@ -128,18 +129,28 @@ export function validatePackage(input, { legacyDigest = false } = {}) {
   const network = validateNetwork(manifest.network);
   const requestedDirectPermissions = directPermissions(network);
   identity(manifest);
-  if (manifest.main !== 'main.js' || manifest.ui !== 'ui.html' || !get('main.js') || !get('ui.html')) fail('main.js and ui.html are required');
-  if (Buffer.byteLength(get('main.js')) > 1024 * 1024 || Buffer.byteLength(get('ui.html')) > 512 * 1024) fail('Logic/UI entry exceeds its limit');
-  for (const [key, allowed] of [['surfaces', ['editor:eeschema', 'editor:pcbnew']], ['permissions', [...Object.keys(PERMISSIONS), ...Object.keys(requestedBackendPermissions), ...Object.keys(requestedDirectPermissions)]]]) {
+  // A hosted UI (plugins 0025 §5.1): the plugin's own origin serves the page; no ui.html.
+  const hosted = isHostedUi(manifest.ui) ? hostedUi(manifest.ui, { allowLocalhost: allowLocalHostedUi }) : undefined;
+  const hostedPermissions = hosted ? hostedUiPermissions(hosted.origin) : {};
+  if (hosted) {
+    if (manifest.main !== 'main.js' || !get('main.js')) fail('main.js is required');
+    if (get('ui.html') !== undefined) fail('A hosted UI has no ui.html: its page comes from ui.origin');
+    if (Buffer.byteLength(get('main.js')) > 1024 * 1024) fail('Logic entry exceeds its limit');
+  } else {
+    if (manifest.main !== 'main.js' || manifest.ui !== 'ui.html' || !get('main.js') || !get('ui.html')) fail('main.js and ui.html are required');
+    if (Buffer.byteLength(get('main.js')) > 1024 * 1024 || Buffer.byteLength(get('ui.html')) > 512 * 1024) fail('Logic/UI entry exceeds its limit');
+  }
+  for (const [key, allowed] of [['surfaces', ['editor:eeschema', 'editor:pcbnew']], ['permissions', [...Object.keys(PERMISSIONS), ...Object.keys(requestedBackendPermissions), ...Object.keys(requestedDirectPermissions), ...Object.keys(hostedPermissions)]]]) {
     const values = manifest[key];
     if (!Array.isArray(values) || !values.length || values.length > allowed.length || new Set(values).size !== values.length || values.some(v => !allowed.includes(v))) fail(`Unsupported ${key}`);
   }
   if(Object.keys(requestedBackendPermissions).some(p=>!manifest.permissions.includes(p))) fail('Backend declarations require their network and identity permissions');
   if (Object.keys(requestedDirectPermissions).some(p => !manifest.permissions.includes(p))) fail('Each network site requires its direct:<hostname> permission');
   if (!manifest.permissions.includes('ui:custom') || !manifest.permissions.includes('ui:project-data')) fail('Custom UI and data disclosure permissions are required');
-  if (/<script\b[^>]*\bsrc\s*=|<link\b[^>]*\bhref\s*=/i.test(get('ui.html'))) fail('Bundle scripts and styles inline in ui.html; remote/module imports are not supported');
-  const policyDigest = createHash('sha256').update(JSON.stringify({ apiVersion: 1, permissions: [...manifest.permissions].sort(), ...(endpoints?{backendPolicyVersion:1,endpoints}: {}), ...(network ? { networkPolicyVersion: 1, network } : {}) })).digest('hex');
-  return { ...release(files, legacyDigest), manifest, policyDigest, validationVersion: network ? 5 : endpoints ? 3 : 2 };
+  if (hosted && Object.keys(hostedPermissions).some(p => !manifest.permissions.includes(p))) fail('A hosted UI requires its hosted:<hostname> permission');
+  if (!hosted && /<script\b[^>]*\bsrc\s*=|<link\b[^>]*\bhref\s*=/i.test(get('ui.html'))) fail('Bundle scripts and styles inline in ui.html; remote/module imports are not supported');
+  const policyDigest = createHash('sha256').update(JSON.stringify({ apiVersion: 1, permissions: [...manifest.permissions].sort(), ...(endpoints?{backendPolicyVersion:1,endpoints}: {}), ...(network ? { networkPolicyVersion: 1, network } : {}), ...(hosted ? { hostedUiPolicyVersion: 1, hostedUi: hosted } : {}) })).digest('hex');
+  return { ...release(files, legacyDigest), manifest: hosted ? { ...manifest, ui: hosted } : manifest, policyDigest, validationVersion: hosted ? 6 : network ? 5 : endpoints ? 3 : 2 };
 }
 
 function identity(manifest) {

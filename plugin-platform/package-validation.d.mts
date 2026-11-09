@@ -1,7 +1,10 @@
 import type {BackendEndpoint} from './backend-contract.mjs';
+import type {HostedUi} from './hosted-ui-contract.mjs';
 export interface PluginManifest {
   apiVersion: 1; kind?: 'plugin'; id: string; name: string; version: string; description: string;
-  main: 'main.js'; ui: 'ui.html'; surfaces: string[]; permissions: string[]; endpoints?:Record<string,BackendEndpoint>;
+  main: 'main.js';
+  /** The packaged ui.html, or a page on the plugin's own origin (plugins 0025 §5.1). */
+  ui: 'ui.html' | HostedUi; surfaces: string[]; permissions: string[]; endpoints?:Record<string,BackendEndpoint>;
   /** HTTPS sites the Worker may call directly (plugins 0022 M3); each needs its `direct:<hostname>` permission. */
   network?: string[];
   uiSize?: {width: number; height: number};
@@ -27,4 +30,4 @@ export const PERMISSIONS: Record<string, string>;
 export const PACKAGE_KINDS: readonly ['plugin', 'remote-provider'];
 export const PROVIDER_PERMISSIONS: readonly ['provider:embed', 'provider:download', 'editor:place-items'];
 export function readZip(bytes: Buffer): {path: string; text: string}[];
-export function validatePackage(input: unknown, options?: {legacyDigest?: boolean}): ValidatedPackage;
+export function validatePackage(input: unknown, options?: {legacyDigest?: boolean; allowLocalHostedUi?: boolean}): ValidatedPackage;
