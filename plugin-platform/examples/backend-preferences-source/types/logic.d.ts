@@ -59,7 +59,7 @@ type PCBJamTourCond =
 type PCBJamTour = {id:string;title?:string;editor:'eeschema'|'pcbnew';closable?:boolean;
   steps:(Omit<PCBJamPointer,'target'> & {id:string;target?:PCBJamTarget;celebrate?:'rainbow';when?:PCBJamTourCond;until:PCBJamTourCond})[]};
 // BEGIN GENERATED HOST METHODS
-type PCBJamHostMethod = "http.request" | "http.upload" | "net.fetch" | "ui.openExternal" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "board.geometryStart" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "exports.run" | "exports.runMany" | "exports.readJson" | "exports.bundle" | "files.saveBundle" | "editor.requestPlacement" | "board.edit" | "schematic.edit" | "tour.start" | "tour.stop" | "tour.status" | "ui.overlay.show" | "ui.overlay.clear" | "parts.save" | "schematic.symbols" | "schematic.connectivity";
+type PCBJamHostMethod = "http.request" | "http.upload" | "net.fetch" | "ui.openExternal" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "board.geometryStart" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "exports.run" | "exports.runMany" | "exports.readJson" | "exports.bundle" | "files.saveBundle" | "editor.requestPlacement" | "board.edit" | "schematic.edit" | "tour.start" | "tour.stop" | "tour.status" | "ui.overlay.show" | "ui.overlay.clear" | "parts.save" | "schematic.symbols" | "schematic.connectivity" | "board.updateFromSchematic" | "editor.pickPoint" | "editor.openFile";
 // END GENERATED HOST METHODS
 /** Plugin logic only, and only while a command is being handled: at most 32 pending, 60 s each,
  *  all cancelled when the command settles. An exception thrown from a callback stops the plugin. */
@@ -67,6 +67,8 @@ declare function setTimeout(callback:(...args:any[])=>unknown,ms?:number,...args
 declare function clearTimeout(id:number):void;
 /** A plugin edit's outcome (plugins 0023): the item ids it added, changed and removed, or the user said no. */
 type PCBJamEditResult={status:'applied';added:string[];changed:string[];removed:string[]}|{status:'cancelled'};
+/** One line of KiCad's Update PCB report, as its dialog lists it. */
+type PCBJamUpdateLine={severity:'error'|'warning'|'action'|'info';text:string};
 declare const pcbjam: {
   /** An HTTPS request straight from your plugin to a site its manifest declares in `network` (with its
    *  `direct:<hostname>` permission, which the user accepts at install). The site must answer CORS for the
@@ -200,6 +202,14 @@ declare const pcbjam: {
      *  tracks/vias and zone fills. Millimetres, KiCad axes (Y down), degrees. Fetched in slices like
      *  documents.export(): rejects if the document changes; pass `onRecords` to process batches without keeping them. */
     geometry(options:PCBJamDocumentRef & {include?:('tracks'|'zones')[]},onRecords?:(records:PCBJamGeometryRecord[])=>unknown|Promise<unknown>):Promise<{revision:number;board:PCBJamGeometryRecord|null;footprints:PCBJamGeometryRecord[];drawings:PCBJamGeometryDrawing[];tracks:PCBJamJSON[];zones:PCBJamGeometryRecord[];count:number}>;
+    /** PCB editor only, needs `board:write`. KiCad's Update PCB from Schematic on the open board. `dryRun` answers
+     *  what it would change. Otherwise removals and rewires wait for the user's approval in the editor (`declined` if
+     *  they say no); the run is one undo step. Rejects with BUSY while another update runs or waits. */
+    updateFromSchematic(options:{dryRun:boolean;deleteUnused?:boolean}):Promise<
+      | {status:'previewed';report:PCBJamUpdateLine[];needsApproval:string[]}
+      | {status:'applied';report:PCBJamUpdateLine[];added:string[];approved:string[]}
+      | {status:'declined';needsApproval:string[]}
+      | {error:string;code:string}>;
   };
   editor:{
     /** Confirms native tool handoff, not successful parsing/placement/saving. */
@@ -208,6 +218,11 @@ declare const pcbjam: {
      *  `editor:select`. `held` items are selected by a collaborator right now and were left alone; `missing`
      *  ids are not in the document. Rejects while the user has a tool running. */
     select(options:{document:string;ids:string[]}):Promise<{selected:string[];held:string[];missing:string[]}>;
+    /** The user's next click on the canvas, in mm (snapped to the grid unless Alt is held); null if they cancel.
+     *  Needs `editor:interact`. */
+    pickPoint(prompt:string):Promise<{x:number;y:number}|null>;
+    /** Asks the user to open another file of this project in the editor. Needs `project:navigate`. */
+    openFile(path:string):Promise<{status:'opened'|'cancelled'}>;
   };
   randomUUID():string;
 };

@@ -15,5 +15,7 @@
   "editor:overlay": "Show guided tours and pointers over the editor, labelled with this plugin's name",
   "library:write-parts": "Save parts this plugin ships into its own team library and place them, confirmed by you",
   "board:write": "Change and delete items on your boards; each change is one undo step",
-  "schematic:write": "Change and delete items on your schematics; each change is one undo step"
+  "schematic:write": "Change and delete items on your schematics; each change is one undo step",
+  "editor:interact": "Ask you to click a point on the canvas",
+  "project:navigate": "Open another file of this project in the editor, after you confirm"
 }

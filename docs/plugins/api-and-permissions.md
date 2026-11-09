@@ -69,6 +69,9 @@ permissions. `context.get()` needs no additional permission.
 | `parts.save({displayName, symbol?, footprint?, place})` | `library:write-parts` | Save a symbol and/or footprint the plugin ships into its own team library after the user confirms; optionally place the symbol. saved (library, lib ids) or cancelled. |
 | `schematic.symbols()` | `documents:read` | Schematic editor: placed symbols on the shown sheet with uuid, libId, ref, value, footprint, angle, mirror and position (x, y). |
 | `schematic.connectivity()` | `documents:read` | Schematic editor: nets with a pin on the shown sheet, each pin with uuid, ref, libId, pin, name and noConnect. |
+| `board.updateFromSchematic({dryRun, deleteUnused?})` | `board:write` | KiCad’s Update PCB from Schematic on the open board. A dry run lists the report and the changes the user must approve; a real run is one undo step, and anything that removes or rewires waits for the user’s approval in the editor’s own dialog: previewed, applied or declined. |
+| `editor.pickPoint({prompt})` | `editor:interact` | The user clicks a point on the canvas, after your prompt: `{x, y}` in mm on the document’s grid, or null when they press Esc. |
+| `editor.openFile({path})` | `project:navigate` | Open another file of this project in the editor after the user confirms: opened or cancelled. |
 <!-- END GENERATED HOST API -->
 
 ## Permissions
@@ -94,8 +97,10 @@ feature uses: every extra line is a reason to decline.
 | `ui:open-external` | Open pages of this plugin's approved sites in a new browser tab, after you confirm | `ui.openExternal` |
 | `editor:overlay` | Show guided tours and pointers over the editor, labelled with this plugin's name | `tour.start`, `tour.stop`, `tour.status`, `ui.overlay.show`, `ui.overlay.clear` |
 | `library:write-parts` | Save parts this plugin ships into its own team library and place them, confirmed by you | `parts.save` |
-| `board:write` | Change and delete items on your boards; each change is one undo step | `board.edit` |
+| `board:write` | Change and delete items on your boards; each change is one undo step | `board.edit`, `board.updateFromSchematic` |
 | `schematic:write` | Change and delete items on your schematics; each change is one undo step | `schematic.edit` |
+| `editor:interact` | Ask you to click a point on the canvas | `editor.pickPoint` |
+| `project:navigate` | Open another file of this project in the editor, after you confirm | `editor.openFile` |
 <!-- END GENERATED PERMISSIONS -->
 
 `network:<name>` and `backend:identity:<name>` are declared per backend; see

@@ -67,6 +67,13 @@ export interface PackageHostOptions {
     /** A plugin edit (plugins 0023) as one native commit. The editor confirms large edits, calls the
      *  authorization hook right before the native step, and resolves once the commit landed. */
     editItems?(proposal: PluginEditProposal, signal: AbortSignal): Promise<PluginEditResult>;
+    /** KiCad's Update PCB on the open board (plugins 0025 §5.4). The editor asks the user, in its
+     *  own dialog, before a run that removes or rewires; the plugin can't approve it. */
+    updatePcb?(request: { dryRun: boolean; deleteUnused: boolean }, signal: AbortSignal): Promise<unknown>;
+    /** The user's next click on the canvas, in mm; null when they cancel. */
+    pickPoint?(prompt: string, signal: AbortSignal): Promise<{ x: number; y: number } | null>;
+    /** Open another file of the project after the user confirms. */
+    openFile?(path: string, signal: AbortSignal): Promise<{ status: 'opened' | 'cancelled' }>;
     onDisconnected(message: string): void;
     documents?: DocumentAdapter;
     /** Stable trusted account/project binding, never supplied by a plugin. */
@@ -127,7 +134,7 @@ export interface PackageHostOptions {
     network?: boolean;
 }
 /** With localChecks, these still ask the server on every call: they write to the project or a team library. */
-const SERVER_CHECKED: ReadonlySet<string> = new Set(['editor.requestPlacement', 'parts.save', 'board.edit', 'schematic.edit']);
+const SERVER_CHECKED: ReadonlySet<string> = new Set(['editor.requestPlacement', 'parts.save', 'board.edit', 'schematic.edit', 'board.updateFromSchematic']);
 /** Methods whose server route names the activation. */
 const needsActivation = (method: string) => method.startsWith('http.') || method.startsWith('exports.') || method === 'files.saveBundle';
 /** With localChecks, how often the account and activation are re-checked (also when the tab is shown again). */
@@ -286,6 +293,12 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             return !!options.sheet && options.context().tool === 'eeschema';
         if (method === 'context.get' || method.startsWith('files.'))
             return true;
+        if (method === 'board.updateFromSchematic')
+            return !!options.updatePcb && !options.context().readOnly && options.context().tool === 'pcbnew';
+        if (method === 'editor.pickPoint')
+            return !!options.pickPoint;
+        if (method === 'editor.openFile')
+            return !!options.openFile && !!options.documents;
         if (method === 'editor.requestPlacement')
             return !options.context().readOnly && options.context().canPlaceItems && (!platformConfiguration()||(activation?.placementEnabled ?? (served && options.hashServing!.placementEnabled))===true);
         if (method.startsWith('storage.'))
@@ -569,6 +582,16 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             case 'ui.overlay.clear':
                 options.tours!.clearPointer();
                 return null;
+            case 'board.updateFromSchematic':
+                return options.updatePcb!({ dryRun: params.dryRun, deleteUnused: params.deleteUnused === true }, signal);
+            case 'editor.pickPoint':
+                return options.pickPoint!(params.prompt, signal);
+            case 'editor.openFile': {
+                // Only a file of this project, as its catalog names it.
+                if (!options.documents!.catalog().some(f => f.name === params.path))
+                    throw new Error('No such file in this project');
+                return options.openFile!(params.path, signal);
+            }
             case 'parts.save': {
                 if (params.place && options.context().tool !== 'eeschema')
                     throw new Error('Placing a part needs the schematic editor');

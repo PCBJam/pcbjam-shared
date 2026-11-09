@@ -159,6 +159,8 @@ declare const __clearTimer: (message: string) => void;
         board: Object.freeze({
             // Create, change and delete board items as one undoable commit (plugins 0023).
             edit: ({ label, upsert = [], remove = [] }: any = {}) => call('board.edit', { label, upsert, remove }),
+            // KiCad's Update PCB from Schematic; removals and rewires wait for the user (plugins 0025 §5.4).
+            updateFromSchematic: ({ dryRun = false, deleteUnused }: any = {}) => call('board.updateFromSchematic', deleteUnused === undefined ? { dryRun } : { dryRun, deleteUnused }),
             // The open PCB as shapes the engine computed. Records arrive as they are produced; with
             // onRecords nothing is retained.
             geometry: async (options: any = {}, onRecords?: (records: unknown[]) => unknown) => {
@@ -181,7 +183,12 @@ declare const __clearTimer: (message: string) => void;
                 return result;
             },
         }),
-        editor: Object.freeze({ requestPlacement: (proposal: unknown) => call('editor.requestPlacement', proposal), select: (options: unknown) => call('editor.select', options) }),
+        editor: Object.freeze({
+            requestPlacement: (proposal: unknown) => call('editor.requestPlacement', proposal),
+            select: (options: unknown) => call('editor.select', options),
+            pickPoint: (prompt: string) => call('editor.pickPoint', { prompt }),
+            openFile: (path: string) => call('editor.openFile', { path }),
+        }),
         randomUUID: () => uuid(),
     });
     // setTimeout/clearTimeout exist so logic can pause between steps. They work only while a

@@ -136,6 +136,14 @@ export const METHODS = {
     // The shown schematic sheet as the engine sees it: placed symbols, and nets with their pins.
     'schematic.symbols': request('documents:read', empty),
     'schematic.connectivity': request('documents:read', empty),
+    // KiCad's Update PCB from Schematic on the open board (plugins 0025 §5.4): a dry run lists the
+    // changes; a real run is one undo step, and anything that removes or rewires waits for the
+    // user's approval in the editor's own dialog, never the plugin's.
+    'board.updateFromSchematic': request('board:write', z.object({ dryRun: z.boolean(), deleteUnused: z.boolean().optional() }).strict()),
+    // The user clicks a point on the canvas (mm, on the document's grid); Esc cancels.
+    'editor.pickPoint': request('editor:interact', z.object({ prompt: z.string().min(1).max(120) }).strict()),
+    // Open another file of this project in the editor, after the user confirms.
+    'editor.openFile': request('project:navigate', z.object({ path: z.string().min(1).max(500) }).strict()),
 } as const;
 export type Method = keyof typeof METHODS;
 export const LIMITS = Object.freeze({ snapshotBytes: 1024 * 1024, pageItems: 100, fileBytes: 4 * 1024 * 1024, exportBytes: 512 * 1024, storageBytes: 256 * 1024, storageValueBytes: 16 * 1024, storageKeys: 64, htmlBytes: 8 * 1024 * 1024, imageBytes: 4 * 1024 * 1024, selectItems: 500,
