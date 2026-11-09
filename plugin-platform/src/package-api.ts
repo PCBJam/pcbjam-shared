@@ -166,6 +166,9 @@ export const LIMITS = Object.freeze({ snapshotBytes: 1024 * 1024, pageItems: 100
     exportSliceMs: 8, exportSliceChars: 256 * 1024, exportTotalChars: 32 * 1024 * 1024,
     // A hosted authorization this recent is reused for LEASED_READS; the revocation poll runs at the same interval.
     readLeaseMs: 2000,
+    // Edits (plugins 0025 §5.3, the P3i measurement): one server check vouches for the next
+    // edits for this long; revoking a plugin reaches an edit in flight within it.
+    editLeaseMs: 2000,
     uiCommandsPerWindow: 20, uiCommandWindowMs: 10000, uiCommandBytes: 64000, commandTimeoutMs: 120000 });
 /**
  * First bytes of every page saved through files.saveHtml. A saved page runs the plugin's code
@@ -194,6 +197,8 @@ export function pngBytes(base64: string): Uint8Array {
  * hosted authorization up to LIMITS.readLeaseMs old. Everything with an effect outside the
  * plugin (files, placement, backends, storage writes) is authorized per call.
  */
+/** Edits a recent server check vouches for (LIMITS.editLeaseMs); the server counts each edit when it lands. */
+export const LEASED_EDITS: ReadonlySet<string> = new Set(['board.edit', 'schematic.edit']);
 export const LEASED_READS: ReadonlySet<string> = new Set(['context.get', 'project.getInfo', 'documents.list', 'documents.getCurrent', 'documents.snapshot', 'documents.poll', 'schematic.symbols', 'schematic.connectivity', 'tour.status',
     'documents.exportStart', 'documents.exportRead', 'board.geometryStart', 'items.list', 'items.get', 'selection.get']);
 /** Bound before stringify/recursive schema work. Return a detached JSON value. */

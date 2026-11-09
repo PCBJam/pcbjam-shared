@@ -3,7 +3,7 @@ import { sitePermission, sitesSegment } from '../network-contract.mjs';
 import { hostedUiUrl, isHostedUi, type HostedUi } from '../hosted-ui-contract.mjs';
 import { effectiveRates } from '../manifest-limits.mjs';
 const runtimeAsset = (name: string) => new URL(name, import.meta.url).href;
-import { METHODS, LIMITS, LEASED_READS, SAVED_HTML_PREFIX, EXPORT_KINDS, EXPORT_LIMITS, externalUrlAllowed, pngBytes, boundedJSON, type Method, type DocumentAdapter, type PointerStep, type PartSaveRequest } from './package-api';
+import { METHODS, LIMITS, LEASED_READS, LEASED_EDITS, SAVED_HTML_PREFIX, EXPORT_KINDS, EXPORT_LIMITS, externalUrlAllowed, pngBytes, boundedJSON, type Method, type DocumentAdapter, type PointerStep, type PartSaveRequest } from './package-api';
 import { storageCall } from './package-storage';
 import { platformConfiguration, platformRequest, platformBytes, verifyText, runtimeAssets, publishedMain } from './package-service';
 export { configurePlatform } from './package-service';
@@ -240,7 +240,8 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             await activated();check();
             const id=activation!.id;
             const permission=(Object.hasOwn(METHODS,method)?METHODS[method as Method].permission:null)??'';
-            if(!fresh&&LEASED_READS.has(method)&&performance.now()-(leases.get(permission)??-Infinity)<LIMITS.readLeaseMs)return;
+            const leaseMs=LEASED_EDITS.has(method)?LIMITS.editLeaseMs:LEASED_READS.has(method)?LIMITS.readLeaseMs:0;
+            if(!fresh&&leaseMs&&performance.now()-(leases.get(permission)??-Infinity)<leaseMs)return;
             // A throttled check is not a denial: wait out the server's one-minute window
             // instead of ending the plugin. Nothing is delivered while unauthorized.
             for(let attempt=0;;attempt++) {
