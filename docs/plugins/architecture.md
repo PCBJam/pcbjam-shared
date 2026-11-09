@@ -2,7 +2,7 @@
 title: Plugin architecture
 description: "How a plugin's UI, logic and PCBJam's trusted host fit together, what keeps them isolated, and why the limits are what they are."
 created: 2026-09-16
-updated: 2026-10-05
+updated: 2026-11-09
 ---
 
 This page is for plugin authors who want to know why a call behaves the way it
@@ -217,6 +217,20 @@ document of at most 16 KiB, no redirects, nothing sent. Unlike plugin traffic, i
 reach `workers.dev`, where nobody can publish DNS records. PCBJam's own hosts and the
 configured blocked hosts stay refused.
 
+**Identity and project keys.** The page learns who the user is only from a token PCBJam
+signs for that page's origin, with the claims the user granted, valid five minutes. A
+page's own server that wants to use PCBJam as the user must hold the private half of the
+key the reviewed manifest declares, and present a fresh credential bound to one identity
+token. The project key it gets is at most what the manifest declares, at most what the user
+can do, for one project and one day, and the user can revoke it. A stolen identity token
+alone gets no key.
+
+**Pages in the web app** (`contributes`) are the same framed page with the same
+connection, but with no logic and no editor: they can ask for context, an identity token
+(without a project) and a size, nothing else. The web app shows admin pages to
+administrators only, but the plugin's server decides on the `role` claim, never on the
+page being shown.
+
 ## Edits go through KiCad
 
 `pcbjam.board.edit()` and `pcbjam.schematic.edit()` (preview) hand KiCad item text to the
@@ -224,8 +238,10 @@ editor, which parses every item with KiCad's own parser and applies them in one 
 commit. That is the same path a user's edit takes: KiCad validates the items, the change is
 one undo step, and the collaboration layer sends it to everyone in the project. The editor
 refuses the whole edit if a collaborator is working on one of the items, and the server
-checks the editor role and the plugin's permission on every call. Plugin code never writes
-the shared document directly.
+checks the editor role and the plugin's permission before it applies. Plugin code never writes
+the shared document directly. The server's check of the role, the grant and the
+budget is held for two seconds per plugin, so a burst of edits is checked once, and every
+edit still counts against the plugin's per-minute edit budget.
 
 ## Installation and lifecycle
 

@@ -2,7 +2,7 @@
 title: API and permissions
 description: "Every host method a plugin can call, the permission each needs, and the limits."
 created: 2026-09-16
-updated: 2026-10-06
+updated: 2026-11-09
 ---
 
 This is the reference for plugin authors: every call your plugin's logic can
@@ -397,8 +397,8 @@ File selection, downloads and placement approval use **PCBJam-owned controls**.
 | Document serialization | 1,048,576 output characters; CPU budget still applies. |
 | Private uploads | 32 retained releases, 64 MiB per account. |
 | Response structure | 100,000 JSON nodes, 48 nesting levels. |
-| Host calls | 40 per 10 seconds per running plugin. Calls over that are **delayed, not rejected**, so a sequential read loop simply slows down. At most 4 calls may be in flight: `await` each one. A fifth is rejected with `Too many pending API calls`. |
-| UI commands | 20 per 10 seconds, 64,000 characters of JSON each (the whole message, command name included), one at a time; exceeding this stops the plugin. Pace them with timers in `ui.html`. |
+| Host calls | 40 per 10 seconds per running plugin (a plugin may ask for more, see [Higher limits](#higher-limits)). Calls over that are **delayed, not rejected**, so a sequential read loop simply slows down. At most 4 calls may be in flight: `await` each one. A fifth is rejected with `Too many pending API calls`. |
+| UI commands | 20 per 10 seconds (more by request, see [Higher limits](#higher-limits)), 64,000 characters of JSON each (the whole message, command name included), one at a time; exceeding this stops the plugin. Pace them with timers in `ui.html`. |
 | Whole-document export | 32 MiB of JSON text; slices of at most 256 KiB after at most 8 ms of copying, each followed by an equal rest. Not counted in the host-call window. |
 | Command duration | 120 seconds from UI command to result, including delayed host calls. |
 | Account request budget | Shared by all your running plugins and tabs. When exhausted, host calls wait for the next minute once, then fail with `error.code === 'RATE_LIMITED'`; the plugin keeps running. |
@@ -870,6 +870,141 @@ const result = await pcbjamUI.call('my-command', { x: 1 });
 - **Local development:** where the editor runs on `http://localhost`, a hosted page on
   `http://localhost:<port>` is accepted, and its review needs no proof.
 
+### Keep the panel open across files
+
+With `"persistent": true` in `ui`, the panel stays open when the person opens another file,
+switches between the schematic and the board, or the document turns read only. The page is
+not reloaded and keeps its connection and its state; your logic gets a handle to the new
+document, and the page gets a `context.changed` event (`pcbjamUI.on('context.changed', …)`)
+with the file name, tool and read-only state. A handle kept from the previous document fails,
+so read `documents.getCurrent()` again after a switch. Without it, the panel restarts with
+each document as before.
+
+```json
+"ui": { "kind": "hosted", "origin": "https://plugin.your-domain.example", "path": "/", "persistent": true }
+```
+
+### Know who the person is
+
+`identity.token()` gives your site a signed token about the person using the plugin, so your
+backend can trust who is calling without its own sign-in. Your page asks your logic for it,
+and sends it to your backend:
+
+```js
+// main.js
+pcbjam.handle('identity', () => pcbjam.identity.token());
+```
+
+```ts
+// your page
+const { token } = await pcbjamUI.call('identity');
+await fetch('/api/thing', { headers: { authorization: `Bearer ${token}` } });
+```
+
+- **The token:** an ES256 JWT with `typ: pcbjam-plugin-identity+jwt`, issued by PCBJam, with
+  your page's origin as `aud` and your plugin's id; valid 5 minutes. Ask for a fresh one
+  rather than storing it.
+- **Verify it** with the public keys at `<issuer>/.well-known/pcbjam-plugin-jwks.json`, the
+  issuer PCBJam gives you at review: check the signature, `iss`, `aud` (your origin) and
+  `exp`.
+- **The claims** are only the ones the person granted:
+
+  | Permission | Claim |
+  |---|---|
+  | `identity:subject` | `sub`: a stable id for the person, different for every plugin |
+  | `identity:account` | `uid`: their PCBJam account id |
+  | `identity:role` | `role`: `admin` or `user` (needs an admin page in `contributes`) |
+  | `identity:entitlements` | `pro` and `limits`: their plan and its limits |
+  | `api:project` | `act`: the editor session, for a [project key](#use-pcbjam-from-your-server) |
+
+- **Where:** the editor's panel, and your pages in the web app (below); a web page's token
+  has no `act`. Tokens are rate limited per person.
+
+### Pages in the web app
+
+A hosted-UI plugin can also add pages to the PCBJam web app with `contributes`. Each entry is a
+page of your site, framed like the panel, with a label and a path:
+
+```json
+"contributes": {
+  "adminNav": [{ "label": "My plugin", "path": "/admin" }],
+  "adminUser": [{ "label": "Usage", "path": "/admin/users/{userId}" }],
+  "adminProject": [{ "label": "Activity", "path": "/admin/projects/{projectId}" }],
+  "userSettings": [{ "label": "My plugin", "path": "/settings" }],
+  "projectSettings": [{ "section": "git", "path": "/projects/{projectId}/git", "height": 200 }]
+}
+```
+
+| Kind | Where it shows |
+|---|---|
+| `adminNav` | A page in the admin area's navigation (administrators only). |
+| `adminUser` | A link on the admin page of a person, with `{userId}` filled in. |
+| `adminProject` | A link on the admin page of a project, with `{projectId}` filled in. |
+| `userSettings` | A page in the person's own settings. |
+| `projectSettings` | A block in a project's settings section (`git`), `height` 40 to 2000 pixels; the page can `resize` itself. |
+
+- Each kind holds 1 to 4 entries; a label is 1 to 40 characters; a path is absolute, with only
+  the placeholders listed.
+- These pages connect with `connectPcbjamUI` like the panel, but have no logic and no editor:
+  `pcbjamUI.call` answers `context` (which page, and the ids), `identity` (a token, as above),
+  `resize` (an embedded block) and `navigate` (another of your pages).
+- An admin page sees that the person is an administrator only through the `role` claim. Check it
+  on your server for every admin request; the web app hides the pages, but that is not
+  access control.
+
+### Higher limits
+
+Any plugin, packaged or hosted, may ask for more than the default rates, up to PCBJam's
+ceilings: a busy panel, say an assistant that edits in bursts. They are reviewed with your permissions.
+
+```json
+"limits": { "uiCommandsPer10s": 120, "hostCallsPer10s": 400 }
+```
+
+| Field | Default | Ceiling |
+|---|---|---|
+| `uiCommandsPer10s` | 20 | 120 |
+| `hostCallsPer10s` | 40 | 400 |
+
+`context.get().limits` reports the rates your plugin got.
+
+### Use PCBJam from your server
+
+With `api:project`, your server can call the PCBJam API as the person, on the project the
+plugin is open in, with a short-lived project key. The manifest declares the most it may get:
+
+```json
+"api": {
+  "access": "write",
+  "paths": ["notes/"],
+  "credentialKey": { "kty": "EC", "crv": "P-256", "x": "…", "y": "…" }
+}
+```
+
+- **`access`:** `read`, or `write`. **`paths`** (optional, with `write`): 1 to 16
+  project-relative files or folders (ending in `/`) that writes are limited to.
+- **`credentialKey`:** the public half of your server's own ES256 key. The private half never
+  leaves your server.
+- **The exchange:** your page gets an identity token in the editor (it carries `act`) and
+  sends it to your server. Your server signs a credential, an ES256 JWT with
+  `typ: pcbjam-plugin-backend+jwt`, `iss` your plugin id, `aud`
+  `<issuer>/api/plugin-platform/v1/api-keys`, `idt` the identity token's `jti`,
+  valid at most 60 seconds, and posts both:
+
+  ```http
+  POST /api/plugin-platform/v1/api-keys
+  {"identityToken": "…", "credential": "…", "access": "write", "paths": ["notes/"]}
+  ```
+
+  The answer is `{key, expiresAt, access, paths?, scope, project, projectId}`. The key works
+  like a personal API key for that one project, for a day, and never for more than the person
+  can do themselves. Ask for less than the manifest declares (`read`, or
+  narrower `paths`) when a task needs less.
+- **Limits:** 5 live keys per person, plugin and project; a sixth exchange revokes the oldest.
+  Ask for a fresh key per session rather than keeping one. The person sees your plugin's keys
+  among their API keys and can revoke them.
+- **Writes with `paths`** go only through `PUT /…/files/<path>` inside those paths.
+
 ## Edit the design
 
 *Preview: available once PCBJam turns plugin edits on for your account.*
@@ -912,8 +1047,8 @@ There is no raw WASM/pointer access, direct Yjs mutation, sibling-document loadi
 change subscription, schematic geometry, user-profile API or OAuth delegation
 signing. Design writes are confirmed symbol placement and, in preview, `board.edit` /
 `schematic.edit`; `editor.select()` changes the selection, not the design.
-The only UI surface is a floating panel in the schematic or PCB editor, plus the
-guided tours and pointers PCBJam draws for you.
+The UI surfaces are a panel in the schematic or PCB editor, the guided tours and
+pointers PCBJam draws for you, and, for a hosted UI, pages in the web app.
 
 ## Next
 

@@ -2,7 +2,7 @@
 title: Build a plugin
 description: "Build, install and share a plugin for PCBJam's schematic and PCB editors, starting from a working example."
 created: 2026-09-16
-updated: 2026-10-06
+updated: 2026-11-09
 slug: plugins
 ---
 
@@ -45,6 +45,12 @@ PCBJam; ask for it there.
 | Remember settings per project | `storage.*` | `storage:local` |
 | Place a symbol in a schematic | `editor.requestPlacement()` | `editor:place-items` |
 | Call your own server | `http.request()` | `network:<name>`, after PCBJam approves the routes |
+| Edit the design: wires, symbols, tracks, footprints (preview) | `schematic.edit()`, `board.edit()` | `schematic:write`, `board:write` |
+| Run Update PCB from Schematic, with the user approving removals | `board.updateFromSchematic()` | `board:write` |
+| Ask the user to click a point, open another file, or highlight nets | `editor.pickPoint()`, `editor.openFile()`, `editor.highlight()` | `editor:interact`, `project:navigate`, `editor:overlay` |
+| Run your whole UI on your own site, open across files (preview) | a hosted `ui`: [A UI on your own site](api-and-permissions.md#a-ui-on-your-own-site) | `hosted:<hostname>` |
+| Let your site know who the user is, or use PCBJam as them on the project | `identity.token()`, a project key | `identity:*`, `api:project` |
+| Add pages to the web app's admin area or settings | `contributes`, with a hosted UI | `identity:role` for admin data |
 | Offer your parts catalog in the schematic editor, KiCad 10 Remote Symbols style | a `remote-provider` package, no code: [Remote Symbols](remote-symbols.md) | `provider:embed`, `provider:download`, `editor:place-items` |
 
 Every call, its arguments and its limits are in
@@ -52,7 +58,8 @@ Every call, its arguments and its limits are in
 
 A plugin can't reach the network except through your approved backend, can't
 read projects that aren't open, can't change the design except by a symbol
-placement the user confirms, and doesn't run while it isn't handling a command.
+placement the user confirms or the edit permissions, and doesn't run while it isn't
+handling a command.
 
 ## Build and install your first plugin
 
@@ -136,11 +143,14 @@ context:
 | `id` | 3–64 lowercase letters, digits or hyphens; starts with a letter. Keep it stable across updates. |
 | `name`, `description` | Name: 1–80 characters. Description: up to 300. |
 | `version` | `major.minor.patch`, e.g. `0.1.0`. Increase it whenever the package contents change. |
-| `main`, `ui` | Exactly `main.js` and `ui.html`. |
+| `main`, `ui` | Exactly `main.js` and `ui.html`; or `ui` names a page on your own site, see [A UI on your own site](api-and-permissions.md#a-ui-on-your-own-site). |
 | `surfaces` | Schematic: `editor:eeschema`. Board: `editor:pcbnew`. Choose one or both. |
 | `permissions` | Both UI permissions are required. Add only the [API permissions](api-and-permissions.md) your feature uses. |
 | `network` (optional) | HTTPS sites your logic calls directly with `pcbjam.net.fetch` (preview). Each needs `direct:<hostname>` in `permissions`. See [Direct requests](api-and-permissions.md#direct-requests). |
 | `uiSize` (optional) | Preferred floating window size: `{ "width": 640, "height": 480 }`. Integer CSS pixels; width 280–4096, height 240–4096. |
+| `contributes` (optional, hosted UI) | Your site's pages in the web app: admin area, a person's or a project's admin page, settings. See [Pages in the web app](api-and-permissions.md#pages-in-the-web-app). |
+| `limits` (optional) | More UI commands or host calls per 10 seconds, up to a ceiling. See [Higher limits](api-and-permissions.md#higher-limits). |
+| `api` (optional, hosted UI) | What your server may do in PCBJam as the user, with `api:project`. See [Use PCBJam from your server](api-and-permissions.md#use-pcbjam-from-your-server). |
 
 `ui:custom` allows your iframe UI and `ui:project-data` allows passing logic
 results into it. Neither lets you read the document. Unknown fields, surfaces
