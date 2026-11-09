@@ -17,5 +17,9 @@
   "board:write": "Change and delete items on your boards; each change is one undo step",
   "schematic:write": "Change and delete items on your schematics; each change is one undo step",
   "editor:interact": "Ask you to click a point on the canvas",
-  "project:navigate": "Open another file of this project in the editor, after you confirm"
+  "project:navigate": "Open another file of this project in the editor, after you confirm",
+  "identity:subject": "Give this plugin's own site a stable ID for you that only this plugin knows",
+  "identity:account": "Give this plugin's own site your PCBJam account ID",
+  "identity:role": "Tell this plugin's own site whether you are a PCBJam administrator",
+  "identity:entitlements": "Tell this plugin's own site your PCBJam plan and its limits"
 }

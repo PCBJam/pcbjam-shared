@@ -72,6 +72,7 @@ permissions. `context.get()` needs no additional permission.
 | `board.updateFromSchematic({dryRun, deleteUnused?})` | `board:write` | KiCad’s Update PCB from Schematic on the open board. A dry run lists the report and the changes the user must approve; a real run is one undo step, and anything that removes or rewires waits for the user’s approval in the editor’s own dialog: previewed, applied or declined. |
 | `editor.pickPoint({prompt})` | `editor:interact` | The user clicks a point on the canvas, after your prompt: `{x, y}` in mm on the document’s grid, or null when they press Esc. |
 | `editor.openFile({path})` | `project:navigate` | Open another file of this project in the editor after the user confirms: opened or cancelled. |
+| `identity.token({audience?})` | None extra | A signed token for this plugin's own site (hosted UI only), valid 5 minutes; each claim needs its identity:* permission. |
 | `editor.highlight({ids?, nets?, durationMs?})` | `editor:overlay` | KiCad's own highlight of items and nets for a while, replacing the previous one; empty clears it. Changes nothing. |
 <!-- END GENERATED HOST API -->
 
@@ -102,6 +103,10 @@ feature uses: every extra line is a reason to decline.
 | `schematic:write` | Change and delete items on your schematics; each change is one undo step | `schematic.edit` |
 | `editor:interact` | Ask you to click a point on the canvas | `editor.pickPoint` |
 | `project:navigate` | Open another file of this project in the editor, after you confirm | `editor.openFile` |
+| `identity:subject` | Give this plugin's own site a stable ID for you that only this plugin knows | — |
+| `identity:account` | Give this plugin's own site your PCBJam account ID | — |
+| `identity:role` | Tell this plugin's own site whether you are a PCBJam administrator | — |
+| `identity:entitlements` | Tell this plugin's own site your PCBJam plan and its limits | — |
 <!-- END GENERATED PERMISSIONS -->
 
 `network:<name>` and `backend:identity:<name>` are declared per backend; see

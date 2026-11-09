@@ -118,3 +118,80 @@ export function createBackendVerifier({
     });
   };
 }
+
+export const IDENTITY_TOKEN_TYPE = "pcbjam-plugin-identity+jwt";
+export const IDENTITY_TOKEN_SECONDS = 300;
+
+/**
+ * A plugin's own site checks the identity token its page sent (plugins 0025 §5.5). Configure
+ * issuer, audience (the hosted UI's origin, exactly as approved) and pluginId from PCBJam's
+ * approval, never from a token. Unlike a signed request, the token is a short bearer credential
+ * (5 minutes): the page may send it on a WebSocket's first frame and again on a reconnect, so it
+ * is not consumed. Resolves with the claims the person granted; absent claims stay undefined.
+ */
+export function createIdentityVerifier({ issuer, audience, pluginId, jwks }) {
+  const origin = new URL(issuer);
+  if (
+    origin.origin !== issuer ||
+    !(
+      origin.protocol === "https:" ||
+      (origin.protocol === "http:" &&
+        ["localhost", "127.0.0.1"].includes(origin.hostname))
+    )
+  )
+    throw new Error("Invalid configured issuer");
+  if (!audience || new URL(audience).origin !== audience || !pluginId)
+    throw new Error("Configure audience (the plugin site's origin) and pluginId");
+  const key =
+    jwks ??
+    createRemoteJWKSet(
+      new URL("/.well-known/pcbjam-plugin-jwks.json", issuer),
+      { timeoutDuration: 5000, cooldownDuration: 30000, cacheMaxAge: 60000 }
+    );
+  return async function verifyIdentity(token) {
+    if (typeof token !== "string" || token.length > 8192 || !/^[A-Za-z0-9_.-]+$/.test(token))
+      throw new Error("Invalid plugin identity");
+    const { payload, protectedHeader } = await jwtVerify(token, key, {
+      algorithms: ["ES256"],
+      issuer,
+      audience,
+      typ: IDENTITY_TOKEN_TYPE,
+      clockTolerance: 5,
+      maxTokenAge: IDENTITY_TOKEN_SECONDS + 5,
+      requiredClaims: ["iss", "aud", "iat", "nbf", "exp", "jti", "plugin_id", "enabled"],
+    });
+    const now = Math.floor(Date.now() / 1000);
+    if (
+      typeof protectedHeader.kid !== "string" ||
+      !protectedHeader.kid ||
+      protectedHeader.jku ||
+      protectedHeader.jwk ||
+      protectedHeader.x5u ||
+      payload.aud !== audience ||
+      payload.plugin_id !== pluginId ||
+      payload.enabled !== true ||
+      typeof payload.jti !== "string" ||
+      !/^[a-f0-9]{48}$/.test(payload.jti) ||
+      !Number.isInteger(payload.iat) ||
+      payload.nbf !== payload.iat ||
+      payload.iat > now + 5 ||
+      payload.exp - payload.iat !== IDENTITY_TOKEN_SECONDS ||
+      (payload.sub !== undefined && !/^ps_[a-f0-9]{48}$/.test(String(payload.sub))) ||
+      (payload.uid !== undefined && (typeof payload.uid !== "string" || !payload.uid || payload.uid.length > 128)) ||
+      (payload.role !== undefined && !["admin", "user"].includes(payload.role)) ||
+      (payload.pro !== undefined && typeof payload.pro !== "boolean") ||
+      (payload.limits !== undefined && (typeof payload.limits !== "object" || payload.limits === null || Array.isArray(payload.limits)))
+    )
+      throw new Error("Plugin identity does not match");
+    return Object.freeze({
+      pluginId,
+      enabled: true,
+      subject: payload.sub,
+      userId: payload.uid,
+      role: payload.role,
+      pro: payload.pro,
+      limits: payload.limits,
+      expiresAt: new Date(payload.exp * 1000),
+    });
+  };
+}

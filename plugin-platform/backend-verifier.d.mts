@@ -23,3 +23,21 @@ export function createBackendVerifier(config: {
   audience: string;
   expiresAt: Date;
 }>;
+export const IDENTITY_TOKEN_TYPE: string;
+export const IDENTITY_TOKEN_SECONDS: number;
+export function createIdentityVerifier(config: {
+  issuer: string;
+  /** The plugin site's origin, exactly as approved. */
+  audience: string;
+  pluginId: string;
+  jwks?: JWTVerifyGetKey;
+}): (token: string) => Promise<{
+  pluginId: string;
+  enabled: true;
+  subject?: string;
+  userId?: string;
+  role?: "admin" | "user";
+  pro?: boolean;
+  limits?: Record<string, unknown>;
+  expiresAt: Date;
+}>;

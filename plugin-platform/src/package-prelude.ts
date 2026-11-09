@@ -190,6 +190,7 @@ declare const __clearTimer: (message: string) => void;
             openFile: (path: string) => call('editor.openFile', { path }),
             highlight: (options: unknown = {}) => call('editor.highlight', options),
         }),
+        identity: Object.freeze({ token: (options: unknown = {}) => call('identity.token', options) }),
         randomUUID: () => uuid(),
     });
     // setTimeout/clearTimeout exist so logic can pause between steps. They work only while a

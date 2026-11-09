@@ -303,6 +303,8 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             return !!options.openFile && !!options.documents;
         if (method === 'editor.highlight')
             return !!options.highlight;
+        if (method === 'identity.token')
+            return hosted() && !!hostedPage;
         if (method === 'editor.requestPlacement')
             return !options.context().readOnly && options.context().canPlaceItems && (!platformConfiguration()||(activation?.placementEnabled ?? (served && options.hashServing!.placementEnabled))===true);
         if (method.startsWith('storage.'))
@@ -590,6 +592,11 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
                 return options.updatePcb!({ dryRun: params.dryRun, deleteUnused: params.deleteUnused === true }, signal);
             case 'editor.pickPoint':
                 return options.pickPoint!(params.prompt, signal);
+            case 'identity.token':
+                // Signed on the server, for the hosted UI's origin only; the server checks it again.
+                if (params.audience !== undefined && params.audience !== uiPageOrigin)
+                    throw new Error('The audience must be this plugin\'s own site');
+                return platformRequest('activations/' + activation!.id + '/identity-token', 'POST', {}, signal);
             case 'editor.highlight':
                 return options.highlight!({ ids: params.ids ?? [], nets: params.nets ?? [], durationMs: params.durationMs ?? 5000 });
             case 'editor.openFile': {

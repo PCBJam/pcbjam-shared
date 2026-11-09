@@ -154,6 +154,10 @@ export function validatePackage(input, { legacyDigest = false, allowLocalHostedU
   if (Object.keys(requestedDirectPermissions).some(p => !manifest.permissions.includes(p))) fail('Each network site requires its direct:<hostname> permission');
   if (!manifest.permissions.includes('ui:custom') || !manifest.permissions.includes('ui:project-data')) fail('Custom UI and data disclosure permissions are required');
   if (hosted && Object.keys(hostedPermissions).some(p => !manifest.permissions.includes(p))) fail('A hosted UI requires its hosted:<hostname> permission');
+  // Identity claims (plugins 0025 §5.5) go only to the plugin's own proven site, so they need a
+  // hosted UI; the admin role only to a plugin with admin pages.
+  if (!hosted && manifest.permissions.some(p => p.startsWith('identity:'))) fail('Identity permissions need a hosted ui');
+  if (manifest.permissions.includes('identity:role') && !['adminNav', 'adminUser', 'adminProject'].some(k => contributes?.[k]?.length)) fail('identity:role needs an admin page in contributes');
   if (!hosted && /<script\b[^>]*\bsrc\s*=|<link\b[^>]*\bhref\s*=/i.test(get('ui.html'))) fail('Bundle scripts and styles inline in ui.html; remote/module imports are not supported');
   const policyDigest = createHash('sha256').update(JSON.stringify({ apiVersion: 1, permissions: [...manifest.permissions].sort(), ...(endpoints?{backendPolicyVersion:1,endpoints}: {}), ...(network ? { networkPolicyVersion: 1, network } : {}), ...(hosted ? { hostedUiPolicyVersion: 1, hostedUi: hosted } : {}), ...(limits ? { limitsPolicyVersion: 1, limits } : {}) })).digest('hex');
   return { ...release(files, legacyDigest), manifest: hosted ? { ...manifest, ui: hosted, ...(contributes ? { contributes } : {}) } : manifest, policyDigest, validationVersion: hosted ? 6 : network ? 5 : endpoints ? 3 : 2 };

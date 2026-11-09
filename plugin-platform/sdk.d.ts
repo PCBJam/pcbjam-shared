@@ -59,7 +59,7 @@ type PCBJamTourCond =
 type PCBJamTour = {id:string;title?:string;editor:'eeschema'|'pcbnew';closable?:boolean;
   steps:(Omit<PCBJamPointer,'target'> & {id:string;target?:PCBJamTarget;celebrate?:'rainbow';when?:PCBJamTourCond;until:PCBJamTourCond})[]};
 // BEGIN GENERATED HOST METHODS
-type PCBJamHostMethod = "http.request" | "http.upload" | "net.fetch" | "ui.openExternal" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "board.geometryStart" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "exports.run" | "exports.runMany" | "exports.readJson" | "exports.bundle" | "files.saveBundle" | "editor.requestPlacement" | "board.edit" | "schematic.edit" | "tour.start" | "tour.stop" | "tour.status" | "ui.overlay.show" | "ui.overlay.clear" | "parts.save" | "schematic.symbols" | "schematic.connectivity" | "board.updateFromSchematic" | "editor.pickPoint" | "editor.openFile" | "editor.highlight";
+type PCBJamHostMethod = "http.request" | "http.upload" | "net.fetch" | "ui.openExternal" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "board.geometryStart" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "exports.run" | "exports.runMany" | "exports.readJson" | "exports.bundle" | "files.saveBundle" | "editor.requestPlacement" | "board.edit" | "schematic.edit" | "tour.start" | "tour.stop" | "tour.status" | "ui.overlay.show" | "ui.overlay.clear" | "parts.save" | "schematic.symbols" | "schematic.connectivity" | "board.updateFromSchematic" | "editor.pickPoint" | "editor.openFile" | "identity.token" | "editor.highlight";
 // END GENERATED HOST METHODS
 /** Plugin logic only, and only while a command is being handled: at most 32 pending, 60 s each,
  *  all cancelled when the command settles. An exception thrown from a callback stops the plugin. */
@@ -227,6 +227,13 @@ declare const pcbjam: {
      *  the first net only), for `durationMs` (500–60000, default 5000). Replaces this plugin's previous highlight;
      *  both lists empty clears it. Needs `editor:overlay`. Changes nothing in the document. */
     highlight(options:{ids?:string[];nets?:string[];durationMs?:number}):Promise<{highlighted:string[];missing:string[];nets:string[];missingNets:string[]}>;
+  };
+  identity:{
+    /** A signed token for this plugin's own site (a hosted UI only), valid 5 minutes. Send it to your backend and
+     *  verify it with `createIdentityVerifier` from `@pcbjam/plugin-platform/backend-verifier.mjs`. Its audience is
+     *  the hosted UI's origin. Claims: `enabled` always; `sub` with `identity:subject`; `uid` with
+     *  `identity:account`; `role` with `identity:role`; `pro` and `limits` with `identity:entitlements`. */
+    token(options?:{audience?:string}):Promise<{token:string;expiresAt:string}>;
   };
   randomUUID():string;
 };

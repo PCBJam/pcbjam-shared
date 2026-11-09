@@ -146,6 +146,9 @@ export const METHODS = {
     'editor.openFile': request('project:navigate', z.object({ path: z.string().min(1).max(500) }).strict()),
     // KiCad's own highlight: these items brightened and these nets highlighted, replacing what
     // the plugin highlighted before, for durationMs (default 5 s); both lists empty clears it.
+    // A short-lived token for this plugin's own site, signed by PCBJam (plugins 0025 §5.5): its
+    // audience is the hosted UI's origin, and each claim needs its identity:* permission.
+    'identity.token': request(null, z.object({ audience: z.string().min(1).max(300).optional() }).strict()),
     'editor.highlight': request('editor:overlay', z.object({
         ids: z.array(id.max(64)).max(500).optional(),
         nets: z.array(z.string().min(1).max(256)).max(32).optional(),

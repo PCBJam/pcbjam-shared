@@ -102,3 +102,14 @@ test("contributions: where a hosted plugin's pages show up in the web app", asyn
   assert.throws(() => contributionPath("/admin/users/{userId}", { userId: "../x" }), /userId/);
   assert.throws(() => contributionPath("/admin/users/{userId}", {}), /userId/);
 });
+
+test("identity permissions need a hosted UI, and the admin role an admin page (plugins 0025 §5.5)", () => {
+  const ui = { kind: "hosted", origin: ORIGIN, path: "/panel" };
+  const claims = ["identity:subject", "identity:account", "identity:entitlements"];
+  assert.deepEqual(pkg(manifest(ui, [hostedUiPermission(ORIGIN), ...claims])).manifest.permissions.slice(-3), claims);
+  // A packaged ui.html has no site of its own to give a token to.
+  assert.throws(() => pkg({ ...manifest("ui.html", ["identity:subject"]) }, [{ path: "ui.html", text: "<p>x</p>" }]), /need a hosted ui/);
+  assert.throws(() => pkg(manifest(ui, [hostedUiPermission(ORIGIN), "identity:role"])), /admin page/);
+  const admin = { ...manifest(ui, [hostedUiPermission(ORIGIN), "identity:role"]), contributes: { adminNav: [{ label: "Usage", path: "/admin" }] } };
+  assert.ok(pkg(admin).manifest.permissions.includes("identity:role"));
+});
