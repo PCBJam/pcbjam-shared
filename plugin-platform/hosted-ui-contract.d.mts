@@ -4,6 +4,8 @@ export interface HostedUi {
   origin: string;
   /** The page the editor frames, absolute. */
   path: string;
+  /** The panel follows the editor across files, tools and read-only changes instead of restarting. */
+  persistent?: true;
 }
 export const HOSTED_UI_WELL_KNOWN: '/.well-known/pcbjam-plugin.json';
 export const HOSTED_UI_HEADERS: Readonly<Record<string, readonly string[]>>;

@@ -10,6 +10,8 @@ export interface PluginManifest {
   uiSize?: {width: number; height: number};
   /** Where its hosted pages show up in the web app (plugins 0025 §5.2); needs a hosted ui. */
   contributes?: Contributes;
+  /** Its own rate limits, within the platform's ceilings (plugins 0025 §5.3). */
+  limits?: {uiCommandsPer10s?: number; hostCallsPer10s?: number};
 }
 /** Manifest-only package whose UI is the provider's own KiCad 10 remote-symbol panel page. */
 export interface RemoteProviderManifest {

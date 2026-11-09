@@ -1,6 +1,7 @@
 import {backendPermissions, validateBackendRequest, validateUploadRequest, BACKEND_LIMITS, type BackendEndpoint} from '../backend-contract.mjs';
 import { sitePermission, sitesSegment } from '../network-contract.mjs';
 import { hostedUiUrl, isHostedUi, type HostedUi } from '../hosted-ui-contract.mjs';
+import { effectiveRates } from '../manifest-limits.mjs';
 const runtimeAsset = (name: string) => new URL(name, import.meta.url).href;
 import { METHODS, LIMITS, LEASED_READS, SAVED_HTML_PREFIX, EXPORT_KINDS, EXPORT_LIMITS, externalUrlAllowed, pngBytes, boundedJSON, type Method, type DocumentAdapter, type PointerStep, type PartSaveRequest } from './package-api';
 import { storageCall } from './package-storage';
@@ -184,7 +185,9 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
     let commandTimer: ReturnType<typeof setTimeout> | undefined;
     let uiReadyTimer: ReturnType<typeof setTimeout> | undefined;
     let poll: ReturnType<typeof setInterval> | undefined;
-    const nonce = crypto.randomUUID(), documentHandle = crypto.randomUUID();
+    const nonce = crypto.randomUUID();
+    // A new handle per document: a persistent panel's references to the previous one fail.
+    let documentHandle = crypto.randomUUID();
     // A hosted UI (plugins 0025 §5.1) is framed from its own origin; a packaged one is an opaque document.
     const manifestUi = (options.plugin.manifest as unknown as { ui?: unknown }).ui;
     const hostedPage: HostedUi | undefined = isHostedUi(manifestUi) ? manifestUi : undefined;
@@ -298,6 +301,8 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
         return revision;
     };
     let uiTimes: number[] = [], hostTimes: number[] = [], pendingHost = 0;
+    // The plugin's own rates within the platform's ceilings (plugins 0025 §5.3), else the defaults.
+    const rates = effectiveRates((options.plugin.manifest as { limits?: { uiCommandsPer10s?: number; hostCallsPer10s?: number } }).limits);
     let exportSession: { id: string; revision: number; cursor: { read(budgetMs: number, maxChars: number): { text: string; done: boolean } | Promise<{ text: string; done: boolean }> }; chars: number; lastEnd: number; lastCost: number } | undefined;
     const sleep = (ms: number) => new Promise<void>((resolve, reject) => {
         const done = () => { clearTimeout(timer); signal.removeEventListener('abort', done); if (signal.aborted) reject(new Error('Plugin stopped')); else resolve(); };
@@ -311,7 +316,7 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
         for (;;) {
             const now = performance.now();
             hostTimes = hostTimes.filter(t => now - t < LIMITS.hostCallWindowMs);
-            if (hostTimes.length < LIMITS.hostCallsPerWindow) { hostTimes.push(now); return; }
+            if (hostTimes.length < rates.hostCallsPer10s) { hostTimes.push(now); return; }
             await sleep(hostTimes[0]! + LIMITS.hostCallWindowMs - now);
         }
     });
@@ -684,7 +689,7 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
                 const now = performance.now();
                 uiTimes = uiTimes.filter(t => now - t < LIMITS.uiCommandWindowMs);
                 uiTimes.push(now);
-                if (uiTimes.length > LIMITS.uiCommandsPerWindow)
+                if (uiTimes.length > rates.uiCommandsPer10s)
                     throw new Error('Plugin UI rate limit exceeded');
                 lastUi = activeId = message.id;
                 commandTimer = setTimeout(() => fail('Plugin action timed out'), LIMITS.commandTimeoutMs);
@@ -791,7 +796,30 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             document.addEventListener('visibilitychange', shown);
             signal.addEventListener('abort', () => document.removeEventListener('visibilitychange', shown), { once: true });
         }
-        return { dispose };
+        /** Push an event to the UI (plugins 0025 §5.3): context, selection or document changes. */
+        const emit = (name: string, data: unknown) => {
+            if (!closed && connected) uiChannel.port1.postMessage({ type: 'event', name, data });
+        };
+        /**
+         * A persistent panel (plugins 0025 §5.3) follows the editor to another file, tool or
+         * read-only state instead of restarting: the new document's reader, a new handle, and a
+         * new activation for that document, then `context.changed` to the UI.
+         */
+        const updateContext = async (next: { documents?: DocumentAdapter }) => {
+            check();
+            if (next.documents) options.documents = next.documents;
+            exportSession = undefined;
+            documentHandle = crypto.randomUUID();
+            if (activation) {
+                const previous = activation;
+                activation = undefined;
+                void platformRequest('activations/' + previous.id, 'DELETE').catch(() => {});
+                await activate(false);
+            }
+            const c = options.context();
+            emit('context.changed', { fileName: c.fileName, tool: c.tool, readOnly: c.readOnly });
+        };
+        return { dispose, updateContext, emit };
     }
     catch (error) {
         dispose();

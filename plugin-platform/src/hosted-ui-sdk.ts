@@ -14,6 +14,8 @@ import { hostedFragment } from '../hosted-ui-contract.mjs';
 export interface PcbjamUI {
   ready: Promise<void>;
   call(command: string, params?: unknown): Promise<unknown>;
+  /** Events the editor pushes (plugins 0025 §5.3): context.changed, selection.changed, document.changed. */
+  on(name: string, listener: (data: unknown) => void): () => void;
 }
 
 export function connectPcbjamUI({ editors }: { editors: readonly string[] }): PcbjamUI {
@@ -22,12 +24,23 @@ export function connectPcbjamUI({ editors }: { editors: readonly string[] }): Pc
   const { nonce, parent: parentOrigin } = opened;
   let port: MessagePort | undefined, id = 0;
   const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
+  const listeners = new Map<string, Set<(data: unknown) => void>>();
   let readyResolve!: () => void;
   const ready = new Promise<void>((resolve) => { readyResolve = resolve; });
   addEventListener('message', (event) => {
     if (port || event.source !== parent || event.origin !== parentOrigin || event.data?.type !== 'plugin-connect' || event.data?.nonce !== nonce || event.data?.version !== 1 || event.ports.length !== 1) return;
     port = event.ports[0]!;
     port.onmessage = (message) => {
+      if (message.data?.type === 'event' && typeof message.data.name === 'string') {
+        for (const listener of listeners.get(message.data.name) ?? []) {
+          try {
+            listener(message.data.data);
+          } catch {
+            // a listener's error stays its own
+          }
+        }
+        return;
+      }
       const entry = pending.get(message.data?.id);
       if (!entry) return;
       pending.delete(message.data.id);
@@ -41,6 +54,11 @@ export function connectPcbjamUI({ editors }: { editors: readonly string[] }): Pc
   parent.postMessage({ type: 'plugin-ui-ready', version: 1, nonce }, parentOrigin);
   return Object.freeze({
     ready,
+    on(name: string, listener: (data: unknown) => void) {
+      if (!listeners.has(name)) listeners.set(name, new Set());
+      listeners.get(name)!.add(listener);
+      return () => void listeners.get(name)?.delete(listener);
+    },
     async call(command: string, params: unknown = {}) {
       await ready;
       if (pending.size) throw new Error('Wait for the current plugin action');

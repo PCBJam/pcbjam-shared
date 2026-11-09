@@ -25,7 +25,8 @@ const LOCAL_ORIGIN = /^http:\/\/(localhost|127\.0\.0\.1)(:\d{2,5})?$/;
 export function hostedUi(value, { allowLocalhost = false } = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail();
   const keys = Object.keys(value);
-  if (keys.some((k) => !['kind', 'origin', 'path'].includes(k)) || value.kind !== 'hosted') fail();
+  if (keys.some((k) => !['kind', 'origin', 'path', 'persistent'].includes(k)) || value.kind !== 'hosted') fail();
+  if (value.persistent !== undefined && value.persistent !== true) fail();
   let origin;
   if (allowLocalhost && typeof value.origin === 'string' && LOCAL_ORIGIN.test(value.origin)) origin = value.origin;
   else {
@@ -45,7 +46,8 @@ export function hostedUi(value, { allowLocalhost = false } = {}) {
       fail();
     }
   }
-  return { kind: 'hosted', origin, path };
+  // persistent (plugins 0025 §5.3): the panel follows the editor across files instead of restarting.
+  return { kind: 'hosted', origin, path, ...(value.persistent ? { persistent: true } : {}) };
 }
 
 export const isHostedUi = (ui) => !!ui && typeof ui === 'object' && ui.kind === 'hosted';

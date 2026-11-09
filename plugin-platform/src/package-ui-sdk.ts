@@ -4,6 +4,8 @@ const parentOrigin = '__PLUGIN_PARENT_ORIGIN__';
 const nonce = location.hash.slice(1);
 let port: MessagePort | undefined, id = 0;
 const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
+// Events the editor pushes (plugins 0025 §5.3): context.changed, selection.changed, document.changed.
+const listeners = new Map<string, Set<(data: unknown) => void>>();
 let readyResolve!: () => void;
 const ready = new Promise<void>(resolve => { readyResolve = resolve; });
 Object.defineProperty(window, 'pcbjamUI', { value: Object.freeze({
@@ -19,11 +21,21 @@ Object.defineProperty(window, 'pcbjamUI', { value: Object.freeze({
       catch (error) { pending.delete(requestId); clearTimeout(timer); reject(error); }
     });
   },
+  /** Call `listener` with each `name` event; returns the unsubscribe. */
+  on(name: string, listener: (data: unknown) => void) {
+    if (!listeners.has(name)) listeners.set(name, new Set());
+    listeners.get(name)!.add(listener);
+    return () => listeners.get(name)?.delete(listener);
+  },
 }) });
 addEventListener('message', event => {
   if (port || event.source !== parent || event.origin !== parentOrigin || event.data?.type !== 'plugin-connect' || event.data?.nonce !== nonce || event.data?.version !== 1 || event.ports.length !== 1) return;
   port = event.ports[0];
   port.onmessage = event => {
+    if (event.data?.type === 'event' && typeof event.data.name === 'string') {
+      for (const listener of listeners.get(event.data.name) ?? []) { try { listener(event.data.data); } catch { /* a listener's error stays its own */ } }
+      return;
+    }
     const entry = pending.get(event.data?.id); if (!entry) return;
     pending.delete(event.data.id); clearTimeout(entry.timer);
     if (event.data.ok) entry.resolve(event.data.result); else entry.reject(new Error(event.data.error ?? 'Plugin failed'));
