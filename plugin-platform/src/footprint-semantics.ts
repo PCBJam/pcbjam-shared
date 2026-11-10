@@ -1,4 +1,5 @@
 import { parseSexpr, printSexpr, type SNode } from '../../src/sexpr';
+import { namesFile, stripFileReferences } from './file-references';
 /**
  * The footprint twin of placement-semantics.ts: an allowlist for a `(footprint …)`
  * that arrives from outside the editor (a remote provider, a plugin) before it is
@@ -81,8 +82,8 @@ function textChildren(node:Form,start:number) {
 function propertyName(node:SNode|undefined){const raw=atom(node);return raw.startsWith('"')?quoted(node,100):(/^[A-Za-z0-9_.-]{1,100}$/.test(raw)?raw:fail('invalid property name'));}
 function property(node:Form) {
   const name=propertyName(node[1]);quoted(node[2]);
-  // Inert labels only; resource-bearing simulation fields are not accepted.
-  if(/^(?:sim\.|simulation|include|model|path|file)/i.test(name))fail('resource-bearing property');
+  // Inert labels and simulation settings; sanitizeFootprint already removed fields that name a file.
+  if(namesFile(name))fail('resource-bearing property');
   textChildren(node,3);
 }
 function stroke(node:Form){for(const child of fields(node,1,['width','type','color'])){
@@ -228,8 +229,8 @@ export function checkFootprintStructure(text:string) {
 }
 
 /**
- * The footprint as it will be stored: `embedded_files` and `model` removed at
- * any depth, `embedded_fonts` forced off, and the name atom set to `name`.
+ * The footprint as it will be stored: `embedded_files`, `model` and fields that name a file
+ * (file-references.ts) removed at any depth, `embedded_fonts` forced off, and the name atom set to `name`.
  * Returns compact text; the provider's bytes are never stored as sent.
  */
 export function sanitizeFootprint(text:string,name:string):string {
@@ -247,7 +248,7 @@ export function sanitizeFootprint(text:string,name:string):string {
     }
     return kept;
   };
-  const root=strip(roots[0]) as Form;
+  const root=strip(stripFileReferences(roots[0])) as Form;
   root[1]='"'+name.replace(/[\\"]/g,c=>'\\'+c)+'"';
   return printSexpr(root);
 }

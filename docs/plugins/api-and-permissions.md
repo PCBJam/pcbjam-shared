@@ -379,8 +379,12 @@ File selection, downloads and placement approval use **PCBJam-owned controls**.
   before the click: treat it like `placed` and do not wait for a second result.
   Show instructions while waiting: approve, then click the canvas or press Esc.
   Normal Undo and collaboration apply. Use the downloadable starter for the
-  clipboard format. Footprint placement, external resources, simulation fields
-  and unresolved inheritance are rejected.
+  clipboard format. Fields that can name a file are removed before placing: a
+  SPICE model library (`Sim.Library` with its `Sim.Name`, `Spice_Lib_File`), unknown
+  `Sim.*` fields, and fields called model, include, path or file; a `Footprint` that
+  is a path is blanked. KiCad's inert simulation fields (`Sim.Device`, `Sim.Type`,
+  `Sim.Pins`, `Sim.Params`) stay. Embedded files and unresolved inheritance are
+  rejected.
 
 ## Limits
 

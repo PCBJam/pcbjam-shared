@@ -37,13 +37,18 @@ test('strips embedded_files and model at any depth and stores compact text',()=>
   assert.ok(!nested.includes('model'));
 });
 
+test('fields that can name a file are removed; inert simulation fields stay',()=>{
+  const prop=(name,value)=>`(property "${name}" "${value}" (at 0 0 0) (layer "F.Fab") (effects (font (size 1 1))))`;
+  const out=accept(minimal([prop('Sim.Device','C'),prop('Model','x'),prop('Sim.Library','/etc/secret.lib'),prop('Sim.Name','M1')].join(' ')));
+  assert.ok(out.includes('Sim.Device'));
+  for(const gone of ['"Model"','Sim.Library','Sim.Name','secret'])assert.ok(!out.includes(gone),gone);
+});
+
 test('rejection corpus',()=>{
   reject(minimal('','(pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "GND"))'),/net is not supported in pad/);
   reject(minimal('(net_tx_pins "1")'),/net_tx_pins is not supported/);
   reject(minimal('(fp_line (start 5000 0) (end 0 0) (layer "F.SilkS") (stroke (width 0.1) (type solid)))'),/out of range/);
   reject(minimal('','(pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (solder_paste_margin -1518.48))'),/out of range/);
-  reject(minimal('(property "Sim.Device" "C" (at 0 0 0) (layer "F.Fab") (effects (font (size 1 1))))'),/resource-bearing/);
-  reject(minimal('(property "Model" "x" (at 0 0 0) (layer "F.Fab") (effects (font (size 1 1))))'),/resource-bearing/);
   reject(minimal('(property "Reference" "twice" (at 0 0 0) (layer "F.Fab") (effects (font (size 1 1))))'),/duplicate property/);
   reject(minimal('(fp_text user "hi" (at 0 0) (layer "F.Fab") (effects (font (face "/usr/share/fonts/x.ttf") (size 1 1))))'),/font face path/);
   reject(minimal('(fp_line (start 0 0) (end 1 1) (layer "F.SilkS") (stroke (width 0.1) (type solid)))'),/layer name|control/);
@@ -92,10 +97,12 @@ test('the validation worker answers both message shapes',async()=>{
   new Function('self',c.outputFiles[0].text)(self);
   const symbol=`(lib_symbols (symbol "t:P" (pin_numbers hide) (pin_names (offset 0) hide) (property "Reference" "R" (at 0 0 90) (effects (font (size 1 1)))) (symbol "P_0_1" (rectangle (start -1 -2) (end 1 2) (stroke (width 0.25) (type default)) (fill (type none)))) (symbol "P_1_1" (pin passive line (at 0 3 270) (length 1) (name "~" (effects (font (size 1 1)))) (number "1" (effects (font (size 1 1))))))))
 (symbol (lib_id "t:P") (at 0 0 0) (unit 1) (uuid "11111111-1111-4111-8111-111111111111") (property "Reference" "R?" (at 2 2 0) (effects (font (size 1 1)))))`;
+  // A symbol comes back as the text to place (fields that name a file removed; none here).
   self.onmessage({data:{text:symbol,tool:'eeschema'}});
-  assert.deepEqual(replies.pop(),{ok:true});
+  const answered=replies.pop();
+  assert.equal(answered.ok,true);assert.ok(answered.text.includes('(lib_id "t:P")'));
   self.onmessage({data:{text:symbol,tool:'eeschema',kind:'symbol'}});
-  assert.deepEqual(replies.pop(),{ok:true});
+  assert.equal(replies.pop().ok,true);
   self.onmessage({data:{text:fixture,tool:'pcbnew',kind:'footprint',name:'BGA96'}});
   const fp=replies.pop();
   assert.equal(fp.ok,true);assert.ok(fp.text.startsWith('(footprint "BGA96"')&&!fp.text.includes('embedded_files'));

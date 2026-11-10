@@ -1,4 +1,5 @@
-import { parseSexpr, type SNode } from '../../src/sexpr';
+import { parseSexpr, printSexpr, type SNode } from '../../src/sexpr';
+import { namesFile, stripFileReferences } from './file-references';
 import { validatePlacementStructure } from './placement-validation';
 
 type Form = SNode[];
@@ -52,8 +53,9 @@ function property(node:Form) {
   // KiCad 9/10 library fields can be private (the symbol's own notes): `(property private "Name" "Value" …)`.
   if(node[1]==='private')node=[node[0],...node.slice(2)];
   const name=quoted(node[1],100),value=quoted(node[2]);
-  // These are inert labels. Resource-bearing simulation fields are not accepted.
-  if(/^(?:sim\.|simulation|include|model|path|file)/i.test(name))fail('resource-bearing property');
+  // Inert labels and simulation settings. A field that can name a file is stripped before this
+  // check (sanitizeSymbolPlacement); one that is still here is refused.
+  if(namesFile(name))fail('resource-bearing property');
   if(name==='Footprint'&&value&&!/^[A-Za-z0-9_.:+ -]+$/.test(value))fail('external footprint reference');
   for(const child of fields(node,3,['at','effects','hide','id','show_name','do_not_autoplace'])){
     if(tag(child)==='at')position(child);
@@ -167,4 +169,13 @@ export function validatePlacementSemantics(text:string,tool:string) {
   }
   for(const required of ['at','unit'])if(!instance.some(n=>Array.isArray(n)&&n[0]===required))fail('missing symbol '+required);
   if(![...units].some(name=>{const match=name.match(/_(\d+)_(\d+)$/)!;return [0,unit].includes(Number(match[1]))&&[0,convert].includes(Number(match[2]));}))fail('instance unit is not defined');
+}
+
+/**
+ * A symbol placement as it will be placed: its file references removed (file-references.ts) and
+ * a Footprint that is a path blanked, rather than refusing the whole part. Checked afterwards
+ * by validatePlacementSemantics.
+ */
+export function sanitizeSymbolPlacement(text:string):string {
+  return parseSexpr(text).map(root=>printSexpr(stripFileReferences(root,{footprints:true}))).join('\n');
 }

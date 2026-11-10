@@ -4,7 +4,7 @@ import {build} from 'esbuild';
 import {readFile} from 'node:fs/promises';
 
 const compiled=await build({entryPoints:[new URL('../src/placement-semantics.ts',import.meta.url).pathname],bundle:true,write:false,format:'esm',platform:'node'});
-const {validatePlacementSemantics:validate}=await import('data:text/javascript;base64,'+Buffer.from(compiled.outputFiles[0].contents).toString('base64'));
+const {validatePlacementSemantics:validate,sanitizeSymbolPlacement:sanitize}=await import('data:text/javascript;base64,'+Buffer.from(compiled.outputFiles[0].contents).toString('base64'));
 
 test('the downloadable importer produces valid base and inherited symbol proposals',async()=>{
   const code=await build({stdin:{contents:`export {readLibrary} from './examples/external-symbol-import-source/src/logic/library'; export {buildPlacement} from './examples/external-symbol-import-source/src/logic/placement';`,resolveDir:new URL('../',import.meta.url).pathname},bundle:true,write:false,format:'esm',platform:'node'});
@@ -74,6 +74,28 @@ test('rejects resource-bearing forms, invalid geometry and ambiguous definitions
   ];
   for(const input of invalid)assert.throws(()=>validate(input,'eeschema'));
   assert.throws(()=>validate(symbol,'pcbnew'));
+});
+test('a placed symbol loses the fields that can name a file, not the whole part',()=>{
+  const ref='(property "Reference" "R" (at 0 0 90) (effects (font (size 1.27 1.27))))';
+  const sim=(name,value)=>`(property "${name}" "${value}" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))`;
+  // An LED from a current library: its pin mapping is inert and stays; it places.
+  const led=symbol.replace(ref,ref+' '+sim('Sim.Pins','1=K 2=A')+' '+sim('Sim.Device','D'));
+  assert.equal(sanitize(led),sanitize(sanitize(led)));
+  validate(sanitize(led),'eeschema');
+  assert.match(sanitize(led),/Sim\.Pins/);
+  // A model from a library file: the library and the model name in it go; the rest places.
+  const modelled=symbol.replace(ref,ref+' '+sim('Sim.Library','${KIPRJMOD}/../secret.lib')+' '+sim('Sim.Name','Q2N')+' '+sim('Sim.Type','NPN')
+    +' (property private "Spice_Lib_File" "/etc/x" (at 0 0 0))'+' '+sim('Sim.Model','file:///private/file'));
+  assert.throws(()=>validate(modelled,'eeschema'),/resource-bearing/);
+  const clean=sanitize(modelled);
+  validate(clean,'eeschema');
+  for(const gone of ['Sim.Library','Sim.Name','Spice_Lib_File','Sim.Model','secret.lib','/etc/x'])assert.ok(!clean.includes(gone),gone);
+  assert.match(clean,/Sim\.Type/);
+  // A Footprint that is a path: blanked, so the part places with no footprint.
+  const pathed=symbol.replace('(lib_id "test:Part") (at 0 0 0)','(lib_id "test:Part") (at 0 0 0) (property "Footprint" "${KIPRJMOD}/x.pretty:Y" (at 0 0 0))');
+  assert.throws(()=>validate(pathed,'eeschema'),/external footprint/);
+  validate(sanitize(pathed),'eeschema');
+  assert.match(sanitize(pathed),/\(property "Footprint" ""/);
 });
 test('bounds input size, nesting and forms before parsing',()=>{
   for(const input of ['('.repeat(49)+')'.repeat(49),'()'.repeat(12001),'x'.repeat(512*1024+1),symbol+'\0'])assert.throws(()=>validate(input,'eeschema'));
