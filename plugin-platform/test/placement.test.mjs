@@ -40,6 +40,20 @@ test('accepts self-contained symbols, current and legacy visibility syntax',()=>
   validate(symbol.replace('(pin_numbers hide)','(pin_numbers hide) (duplicate_pin_numbers_are_jumpers no) (embedded_fonts no)'),'eeschema');
   assert.throws(()=>validate(symbol.replace('(pin_numbers hide)','(pin_numbers hide) (embedded_fonts "x")'),'eeschema'),/Unsupported import/);
   assert.throws(()=>validate(symbol.replace('(pin_numbers hide)','(pin_numbers hide) (duplicate_pin_numbers_are_jumpers)'),'eeschema'),/Unsupported import/);
+  // KiCad 10's `in_pos_files` (the part in position files), on the definition: the AI chat's
+  // click placement of a current library's Device:R was refused without it.
+  validate(symbol.replace('(pin_numbers hide)','(pin_numbers hide) (in_pos_files yes)'),'eeschema');
+  assert.throws(()=>validate(symbol.replace('(pin_numbers hide)','(pin_numbers hide) (in_pos_files maybe)'),'eeschema'),/Unsupported import/);
+  // The rest of KiCad 10's sheet syntax, as a sheet's lib_symbols carry it once KiCad saved it:
+  // flags with yes|no, private library fields, hidden pins, local power symbols.
+  const ref='(property "Reference" "R" (at 0 0 90) (effects (font (size 1.27 1.27))))';
+  validate(symbol.replace(ref,'(property "Reference" "R" (at 0 0 90) (show_name no) (do_not_autoplace no) (effects (font (size 1.27 1.27) (italic yes) (bold no))))'),'eeschema');
+  validate(symbol.replace(ref,ref+' (property private "KLC_S3.3" "notes" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))'),'eeschema');
+  validate(symbol.replace('(length 1) (name','(length 1) (hide yes) (name'),'eeschema');
+  validate(symbol.replace('(pin_numbers hide)','(pin_numbers hide) (power global)'),'eeschema');
+  assert.throws(()=>validate(symbol.replace('(pin_numbers hide)','(pin_numbers hide) (power somewhere)'),'eeschema'),/Unsupported import/);
+  assert.throws(()=>validate(symbol.replace(ref,'(property "Reference" "R" (at 0 0 90) (show_name maybe) (effects (font (size 1.27 1.27))))'),'eeschema'),/Unsupported import/);
+  assert.throws(()=>validate(symbol.replace(ref,ref+' (property private "Reference" "R" (at 0 0 0))'),'eeschema'),/duplicate property/);
 });
 test('rejects resource-bearing forms, invalid geometry and ambiguous definitions',()=>{
   const invalid=[

@@ -40,13 +40,17 @@ function effects(node:Form) {
     if(tag(child)==='font')for(const value of fields(child,1,['size','thickness','bold','italic'])){
       if(tag(value)==='size')coordinate(value,2,0.001,100);
       else if(tag(value)==='thickness')coordinate(value,1,0,10);
-      else exact(value,0);
+      // bold, italic: a bare flag, or yes|no (KiCad 9/10).
+      else if(value.length===1)exact(value,0);
+      else enumeration(value,['yes','no']);
     }
     else if(tag(child)==='hide')enumeration(child,['yes','no']);
     else {if(child.length>4)fail('invalid text justification');for(const v of child.slice(1))if(!['left','right','top','bottom','mirror'].includes(atom(v)))fail('invalid text justification');}
   }
 }
 function property(node:Form) {
+  // KiCad 9/10 library fields can be private (the symbol's own notes): `(property private "Name" "Value" …)`.
+  if(node[1]==='private')node=[node[0],...node.slice(2)];
   const name=quoted(node[1],100),value=quoted(node[2]);
   // These are inert labels. Resource-bearing simulation fields are not accepted.
   if(/^(?:sim\.|simulation|include|model|path|file)/i.test(name))fail('resource-bearing property');
@@ -56,7 +60,9 @@ function property(node:Form) {
     else if(tag(child)==='effects')effects(child);
     else if(tag(child)==='id'){exact(child,1);number(child[1],0,1000,true);}
     else if(tag(child)==='hide')enumeration(child,['yes','no']);
-    else exact(child,0);
+    // show_name, do_not_autoplace: a bare flag (KiCad 8), or yes|no (KiCad 10).
+    else if(child.length===1)exact(child,0);
+    else enumeration(child,['yes','no']);
   }
 }
 function stroke(node:Form){for(const child of fields(node,1,['width','type'])){
@@ -89,7 +95,11 @@ function pin(node:Form) {
   if(!['input','output','bidirectional','tri_state','passive','free','unspecified','power_in','power_out','open_collector','open_emitter','no_connect'].includes(atom(node[1])))fail('invalid pin type');
   if(!['line','inverted','clock','inverted_clock','input_low','clock_low','output_low','edge_clock_high','non_logic'].includes(atom(node[2])))fail('invalid pin shape');
   let rest=node.slice(3);if(rest[0]==='hide')rest=rest.slice(1);
-  const children=fields(['pin',...rest],1,['at','length','name','number']);
+  // A hidden pin: the legacy bare `hide`, or `(hide yes)` (KiCad 9/10).
+  const children=fields(['pin',...rest],1,['at','length','name','number','hide']).filter(child=>{
+    if(tag(child)!=='hide')return true;
+    enumeration(child,['yes','no']);return false;
+  });
   if(children.length!==4)fail('pin geometry and labels are required');
   for(const child of children){
     if(tag(child)==='at')position(child);
@@ -100,15 +110,16 @@ function pin(node:Form) {
 function uniqueProperties(node:Form) {
   const names=new Set<string>();
   for(const child of node)if(Array.isArray(child)&&child[0]==='property'){
-    const name=quoted(child[1],100);if(names.has(name))fail('duplicate property');names.add(name);
+    const name=quoted(child[1]==='private'?child[2]:child[1],100);if(names.has(name))fail('duplicate property');names.add(name);
   }
 }
 function definition(node:Form) {
   const name=quoted(node[1],256).split(':').at(-1)!;
   uniqueProperties(node);
   const units=new Set<string>();
-  // KiCad 9/10 add two more yes|no flags per symbol; both fall through to the enumeration check.
-  for(const child of fields(node,2,['symbol','property','pin_names','pin_numbers','exclude_from_sim','in_bom','on_board','power','duplicate_pin_numbers_are_jumpers','embedded_fonts'],['symbol','property'])) {
+  // KiCad 9/10 add more yes|no flags per symbol (10's `in_pos_files`: listed in position files);
+  // they fall through to the enumeration check.
+  for(const child of fields(node,2,['symbol','property','pin_names','pin_numbers','exclude_from_sim','in_bom','on_board','in_pos_files','power','duplicate_pin_numbers_are_jumpers','embedded_fonts'],['symbol','property'])) {
     switch(tag(child)){
       case 'symbol':
         {const unitName=quoted(child[1],256),match=unitName.match(/^(.+)_(\d+)_(\d+)$/);
@@ -117,7 +128,8 @@ function definition(node:Form) {
         for(const drawing of fields(child,2,['arc','circle','rectangle','polyline','bezier','text','pin'],['arc','circle','rectangle','polyline','bezier','text','pin']))tag(drawing)==='pin'?pin(drawing):shape(drawing);
         break;
       case 'property':property(child);break;
-      case 'power':exact(child,0);break;
+      // A bare flag (KiCad ≤ 9), or global|local (KiCad 10's local power symbols).
+      case 'power':if(child.length===1)exact(child,0);else enumeration(child,['global','local']);break;
       case 'pin_names':case 'pin_numbers':
         // KiCad emits both the legacy bare `hide` atom and `(hide yes)`.
         {const options=child.map((part,index)=>index>0&&part==='hide'?['hide','yes']:part);
@@ -142,7 +154,7 @@ export function validatePlacementSemantics(text:string,tool:string) {
   const instance=roots[1]!;
   uniqueProperties(instance);
   let unit=1,convert=1;
-  for(const child of fields(instance,1,['lib_id','at','unit','convert','exclude_from_sim','in_bom','on_board','dnp','uuid','property','mirror'],['property'])) {
+  for(const child of fields(instance,1,['lib_id','at','unit','convert','exclude_from_sim','in_bom','on_board','in_pos_files','dnp','uuid','property','mirror'],['property'])) {
     switch(tag(child)){
       case 'lib_id':case 'uuid':exact(child,1);quoted(child[1],256);break;
       case 'at':position(child);break;
