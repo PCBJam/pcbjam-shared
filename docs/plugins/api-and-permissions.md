@@ -858,7 +858,8 @@ const result = await pcbjamUI.call('my-command', { x: 1 });
   the site with the DNS TXT record the review gives you, or, where you can't add DNS
   records (`workers.dev`), by serving `{"pcbjam-plugin": ["<challenge>"]}` at
   `/.well-known/pcbjam-plugin.json`.
-- **Headers your page must send:**
+- **Headers your page must send** (the review reads them from your page and refuses it,
+  naming the header, when one is missing):
   - `Cross-Origin-Embedder-Policy: require-corp` and
     `Cross-Origin-Resource-Policy: cross-origin`, or the editor (cross-origin isolated)
     can't show it;

@@ -77,6 +77,12 @@ export interface PackageHostOptions {
     /** KiCad's highlight of items and nets for a while; an empty request clears it. */
     highlight?(request: { ids: string[]; nets: string[]; durationMs: number }): Promise<{ highlighted: string[]; missing: string[]; nets: string[]; missingNets: string[] }>;
     onDisconnected(message: string): void;
+    /**
+     * A hosted page on localhost (the dev stack, plugins 0025 §12) reloaded itself after its
+     * server restarted: the editor starts the plugin again with a fresh handshake instead of
+     * stopping it. Unset, or on any other origin, a second page load stops the plugin.
+     */
+    onPageReloaded?(): void;
     documents?: DocumentAdapter;
     /** Stable trusted account/project binding, never supplied by a plugin. */
     storageBinding?(): string | null;
@@ -722,8 +728,13 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
         if (hostedPage) frame.sandbox.add('allow-same-origin', 'allow-forms', 'allow-popups');
         frame.referrerPolicy = 'no-referrer';
         frame.style.cssText = 'border:0;width:100%;height:100%;display:block;color-scheme:dark';
-        frame.addEventListener('load', () => { if (++loads > 1)
-            fail('Plugin navigation stopped this instance'); });
+        frame.addEventListener('load', () => {
+            if (++loads <= 1) return;
+            // The page's one-use handshake is spent and it may have gone anywhere: never reconnect it.
+            // A dev page restarts instead, from the approved URL with a fresh nonce.
+            if (hostedPage && options.onPageReloaded && ['localhost', '127.0.0.1'].includes(new URL(hostedUiUrl(hostedPage)).hostname)) { dispose(); options.onPageReloaded(); return; }
+            fail('Plugin navigation stopped this instance');
+        });
         window.addEventListener('message', handshake);
         uiReadyTimer = setTimeout(() => fail('Plugin UI did not connect'), 10000);
         uiChannel.port1.onmessage = event => {
