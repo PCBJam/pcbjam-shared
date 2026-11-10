@@ -417,7 +417,10 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
                 methods: Object.keys(METHODS).filter(name => available(name) && (!METHODS[name as Method].permission || grants.includes(METHODS[name as Method].permission!))), limits: LIMITS };
             case 'project.getInfo': {
                 const info = options.documents!.projectInfo();
-                return { id: info.id, scope: info.scope, name: info.name, readOnly: context.readOnly };
+                // The tab's working copy when it isn't the project's default (plugins 0025): id and label only.
+                const copy = info.copy && typeof info.copy.id === 'string' && typeof info.copy.label === 'string'
+                    ? { copy: { id: info.copy.id.slice(0, 100), label: info.copy.label.slice(0, 200) } } : {};
+                return { id: info.id, scope: info.scope, name: info.name, readOnly: context.readOnly, ...copy };
             }
             case 'documents.list': {
                 const files = options.documents!.catalog();
@@ -589,8 +592,21 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             case 'ui.overlay.clear':
                 options.tours!.clearPointer();
                 return null;
-            case 'board.updateFromSchematic':
-                return options.updatePcb!({ dryRun: params.dryRun, deleteUnused: params.deleteUnused === true }, signal);
+            case 'board.updateFromSchematic': {
+                const result = await options.updatePcb!({ dryRun: params.dryRun, deleteUnused: params.deleteUnused === true }, signal) as
+                    { status?: string; added?: unknown[]; report?: Array<{ severity?: string; text?: string }> } | null;
+                // An applied run is a plugin edit like board.edit (plugins 0023): history names the plugin.
+                // KiCad names the new footprints by reference, so the record holds counts only; its report
+                // says "Remove …" in a dry run and "Removed …" once applied.
+                if (result?.status === 'applied' && activation) {
+                    const actions = (result.report ?? []).filter(line => line.severity === 'action' && line.text?.trim()).map(line => line.text!);
+                    const added = Math.min(result.added?.length ?? 0, 2000), removed = Math.min(actions.filter(text => /^Remov(e|ed)\b/.test(text)).length, 2000);
+                    void platformRequest('activations/' + activation.id + '/operations', 'POST', {
+                        method, label: 'Update PCB from Schematic', added, removed, changed: Math.min(Math.max(actions.length - added - removed, 0), 2000), items: [],
+                    }).catch(() => { });
+                }
+                return result;
+            }
             case 'editor.pickPoint':
                 return options.pickPoint!(params.prompt, signal);
             case 'identity.token':

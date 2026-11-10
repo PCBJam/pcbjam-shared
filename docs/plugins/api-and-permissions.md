@@ -2,7 +2,7 @@
 title: API and permissions
 description: "Every host method a plugin can call, the permission each needs, and the limits."
 created: 2026-09-16
-updated: 2026-11-09
+updated: 2026-11-10
 ---
 
 This is the reference for plugin authors: every call your plugin's logic can
@@ -31,7 +31,7 @@ permissions. `context.get()` needs no additional permission.
 | `net.fetch(url, {method?, headers?, body?})` | `direct:<hostname>` per declared site | An HTTPS request straight from the plugin to a site declared in `network`: no cookies, referrer, cache or redirects; GET/POST, up to 1 MiB back. The site must answer CORS. |
 | `ui.openExternal(url)` | `ui:open-external` | Open an https page of one of the plugin’s approved endpoint sites in a new tab after the user confirms; opened or cancelled. |
 | `context.get()` | None extra | Editor name, read-only state, supported host methods and limits. |
-| `project.getInfo()` | `project:read-info` | Current project ID, scope, name and editor read-only state. |
+| `project.getInfo()` | `project:read-info` | Current project ID, scope, name and editor read-only state; `copy` ({id, label}) when the tab shows a working copy other than the project's default. |
 | `documents.list({cursor?, limit?})` | `project:read-info` | Paged project design-file names; defaults cursor 0, limit 50. |
 | `documents.getCurrent()` | `documents:read` | Current document handle, name, revision and read-only state. |
 | `documents.snapshot(ref)` | `documents:read` | Bounded canonical content at an exact document revision. |
@@ -867,6 +867,9 @@ const result = await pcbjamUI.call('my-command', { x: 1 });
 - **The connection:** the editor opens your page with `#<nonce>&parent=<editor origin>`.
   `connectPcbjamUI` answers only an editor in your list, and the calls work as the
   packaged UI's `pcbjamUI.call`, with the same limits.
+- **Links to PCBJam:** a relative link stays on your site. `pcbjamUI.editorOrigin` is the
+  editor that framed the page; build links to PCBJam pages on it, and open the project's
+  files in the editor with `editor.openFile` from your logic instead.
 - **Local development:** where the editor runs on `http://localhost`, a hosted page on
   `http://localhost:<port>` is accepted, and its review needs no proof.
 

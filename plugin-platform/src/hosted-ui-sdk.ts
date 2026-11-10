@@ -16,6 +16,8 @@ export interface PcbjamUI {
   call(command: string, params?: unknown): Promise<unknown>;
   /** Events the editor pushes (plugins 0025 §5.3): context.changed, selection.changed, document.changed. */
   on(name: string, listener: (data: unknown) => void): () => void;
+  /** The editor that framed this page (one of `editors`): where links to PCBJam pages go. */
+  editorOrigin: string;
 }
 
 export function connectPcbjamUI({ editors }: { editors: readonly string[] }): PcbjamUI {
@@ -54,6 +56,7 @@ export function connectPcbjamUI({ editors }: { editors: readonly string[] }): Pc
   parent.postMessage({ type: 'plugin-ui-ready', version: 1, nonce }, parentOrigin);
   return Object.freeze({
     ready,
+    editorOrigin: parentOrigin,
     on(name: string, listener: (data: unknown) => void) {
       if (!listeners.has(name)) listeners.set(name, new Set());
       listeners.get(name)!.add(listener);

@@ -248,6 +248,8 @@ export interface DocumentAdapter {
         id: string;
         scope: string;
         name: string;
+        /** The tab's working copy, when it isn't the project's default. */
+        copy?: { id: string; label: string };
     };
     catalog(): Array<{
         name: string;
