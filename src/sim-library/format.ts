@@ -47,10 +47,15 @@ export interface PartAnalog {
   params?: Record<string, string>;
 }
 
-/** A value the user sets while the simulation runs. `source` is a voltage source in the subcircuit. */
+/**
+ * A value the user sets while the simulation runs. `source` is a voltage source in the
+ * subcircuit. Three kinds: held down (a push button), a value in a range (a knob), and one
+ * that stays where it was put (a switch).
+ */
 export type PartInput =
   | { name: string; type: "momentary"; source: string; released: number; held: number }
-  | { name: string; type: "range"; source: string; min: number; max: number; default: number };
+  | { name: string; type: "range"; source: string; min: number; max: number; default: number }
+  | { name: string; type: "toggle"; source: string; off: number; on: number; default: "off" | "on" };
 
 /** A value the overlay shows: the current through a voltage source in the subcircuit. */
 export interface PartSignal {
