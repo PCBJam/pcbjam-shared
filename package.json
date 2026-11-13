@@ -10,7 +10,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./lib-index": "./src/lib-index.ts"
+    "./lib-index": "./src/lib-index.ts",
+    "./sim-library": "./src/sim-library/index.ts"
   },
   "files": ["src"],
   "scripts": {
