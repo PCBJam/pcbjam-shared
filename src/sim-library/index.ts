@@ -11,6 +11,7 @@ export {
   FIELD_PART, FIELD_SETTINGS, matchSymbols, resolvePins,
   type Candidate, type Match, type MatchOptions, type PinResult, type SchematicSymbol,
 } from "./match.js";
+export { readEditorSymbols, type EditorSchematic, type EditorSymbol } from "./editor.js";
 export { analogParams, formatSettings, parseSettings, resolveSettings, settingAllows, type ResolvedSettings } from "./settings.js";
 export {
   CODE_MODEL_LINE_MAX, codeModelLines, findSource, hasElement, subcircuits, withExternalSources, type Subcircuit,
