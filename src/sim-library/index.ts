@@ -1,6 +1,7 @@
 // The simulation library, as the app reads it (simulation 0004): the format of a part and of
 // a published snapshot, the client that downloads one, the matcher that says which part a
-// schematic symbol gets, and the rules for a placed part's settings.
+// schematic symbol gets, the rules for a placed part's settings, and the step that writes the
+// circuit a simulator runs from KiCad's netlist and the matched parts.
 //
 // Pure and isomorphic: no editor, no DOM beyond fetch and crypto.subtle. The parts themselves
 // and the step that publishes them are not here.
@@ -11,7 +12,15 @@ export {
   FIELD_PART, FIELD_SETTINGS, matchSymbols, resolvePins,
   type Candidate, type Match, type MatchOptions, type PinResult, type SchematicSymbol,
 } from "./match.js";
-export { readEditorSymbols, type EditorSchematic, type EditorSymbol } from "./editor.js";
+export {
+  readEditorNetlist, readEditorSymbols,
+  type EditorNetlist, type EditorSchematic, type EditorSymbol, type NetlistItem, type NetlistLine, type NetlistMessage,
+} from "./editor.js";
+export {
+  LIVE_TRAN, buildDeck, kicadModels, prepareRun,
+  type BuildOptions, type Deck, type DeckCodePart, type DeckFile, type DeckInput, type DeckSignal, type PlacedPart,
+  type PrepareOptions, type PreparedRun,
+} from "./netlist.js";
 export { analogParams, formatSettings, parseSettings, resolveSettings, settingAllows, type ResolvedSettings } from "./settings.js";
 export {
   CODE_MODEL_LINE_MAX, codeModelLines, findSource, hasElement, subcircuits, withExternalSources, type Subcircuit,
