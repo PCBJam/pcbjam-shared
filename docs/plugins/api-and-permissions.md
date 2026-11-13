@@ -84,8 +84,8 @@ feature uses: every extra line is a reason to decline.
 <!-- BEGIN GENERATED PERMISSIONS -->
 | Permission | Shown to the user as | Calls it unlocks |
 |---|---|---|
-| `ui:custom` | Run a custom interface in a sandboxed iframe | — |
-| `ui:project-data` | Disclose plugin results to its custom interface | — |
+| `ui:custom` | Show its own panel in the editor | — |
+| `ui:project-data` | Show its results in that panel | — |
 | `files:choose` | Read local files you explicitly choose for this plugin | `files.choose`, `files.readText`, `files.close` |
 | `files:save` | Request a text, image or ZIP file download, confirmed by you | `files.save`, `files.saveImage`, `files.saveBundle` |
 | `files:save-html` | Request a web page download, confirmed by you; the page contains this plugin's code, which runs when you open the file | `files.saveHtml` |
