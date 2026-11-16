@@ -169,7 +169,9 @@ export const LIMITS = Object.freeze({ snapshotBytes: 1024 * 1024, pageItems: 100
     // Edits (plugins 0025 §5.3, the P3i measurement): one server check vouches for the next
     // edits for this long; revoking a plugin reaches an edit in flight within it.
     editLeaseMs: 2000,
-    uiCommandsPerWindow: 20, uiCommandWindowMs: 10000, uiCommandBytes: 64000, commandTimeoutMs: 120000 });
+    // A UI command carries one edit to the logic at most (a hosted chat's tidy of a whole sheet was
+    // 52 KB, and over 64 KB the host stopped the plugin), so it may be as big as an edit may.
+    uiCommandsPerWindow: 20, uiCommandWindowMs: 10000, uiCommandBytes: EDIT_LIMITS.totalBytes + 64 * 1024, commandTimeoutMs: 120000 });
 /**
  * First bytes of every page saved through files.saveHtml. A saved page runs the plugin's code
  * outside PCBJam, with the user's design inside it; this keeps it from loading or sending anything.

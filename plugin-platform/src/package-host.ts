@@ -143,6 +143,12 @@ export interface PackageHostOptions {
 }
 /** With localChecks, these still ask the server on every call: they write to the project or a team library. */
 const SERVER_CHECKED: ReadonlySet<string> = new Set(['editor.requestPlacement', 'parts.save', 'board.edit', 'schematic.edit', 'board.updateFromSchematic']);
+/**
+ * Host calls that may wait on the person (a file picker, a click to place, a card to confirm). The
+ * UI command's timeout stops a plugin that runs away, not a person who takes their time: it stands
+ * still while one of these waits, and starts again in full once the person has answered.
+ */
+const ASKS_PERSON: ReadonlySet<string> = new Set(['files.choose', 'editor.requestPlacement', 'editor.openFile', 'parts.save', 'board.edit', 'schematic.edit', 'board.updateFromSchematic']);
 /** Methods whose server route names the activation. */
 const needsActivation = (method: string) => method.startsWith('http.') || method.startsWith('exports.') || method === 'files.saveBundle' || method === 'identity.token';
 /** With localChecks, how often the account and activation are re-checked (also when the tab is shown again). */
@@ -198,6 +204,12 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
     let worker: Worker | undefined, frame: HTMLIFrameElement | undefined, closed = false, connected = false;
     let offered = false, loads = 0, lastUi = 0, lastHost = 0, activeId = 0;
     let commandTimer: ReturnType<typeof setTimeout> | undefined;
+    /** Host calls in flight that wait on the person; the command timer stands still while there are any. */
+    let askingPerson = 0;
+    const startCommandTimer = () => {
+        clearTimeout(commandTimer);
+        commandTimer = setTimeout(() => fail('Plugin action timed out'), LIMITS.commandTimeoutMs);
+    };
     let uiReadyTimer: ReturnType<typeof setTimeout> | undefined;
     let poll: ReturnType<typeof setInterval> | undefined;
     const nonce = crypto.randomUUID();
@@ -748,7 +760,12 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             }
             try {
                 exact(message, ['id', 'command', 'params']);
-                if (!connected || activeId || !Number.isSafeInteger(message.id) || message.id <= lastUi || typeof message.command !== 'string' || !/^[a-z][a-zA-Z0-9.:-]{0,63}$/.test(message.command) || JSON.stringify(message).length > LIMITS.uiCommandBytes)
+                // Each refusal named: a stopped plugin's last line is all its author gets.
+                if (activeId)
+                    throw new Error('Invalid plugin UI request: another UI command is still running');
+                if (JSON.stringify(message).length > LIMITS.uiCommandBytes)
+                    throw new Error('Invalid plugin UI request: over ' + LIMITS.uiCommandBytes + ' characters');
+                if (!connected || !Number.isSafeInteger(message.id) || message.id <= lastUi || typeof message.command !== 'string' || !/^[a-z][a-zA-Z0-9.:-]{0,63}$/.test(message.command))
                     throw new Error('Invalid plugin UI request');
                 const now = performance.now();
                 uiTimes = uiTimes.filter(t => now - t < LIMITS.uiCommandWindowMs);
@@ -756,7 +773,7 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
                 if (uiTimes.length > rates.uiCommandsPer10s)
                     throw new Error('Plugin UI rate limit exceeded');
                 lastUi = activeId = message.id;
-                commandTimer = setTimeout(() => fail('Plugin action timed out'), LIMITS.commandTimeoutMs);
+                startCommandTimer();
                 // The UI loads while the Worker boots; a command waits for the runtime.
                 void ready.then(() => { if (!closed) channel.port1.postMessage({ type: 'command', ...message }); }, () => { });
             }
@@ -832,7 +849,10 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
                 return;
             }
             // Export slices are bounded by their own time budget and rest period, not by the call window.
-            void (message.method === 'documents.exportRead' ? Promise.resolve() : pace()).then(() => callHost(message.method, message.params)).then(async result => {
+            const asks = ASKS_PERSON.has(message.method);
+            if (asks && askingPerson++ === 0) clearTimeout(commandTimer);
+            const answered = () => { if (asks && --askingPerson === 0 && activeId && !closed) startCommandTimer(); };
+            void (message.method === 'documents.exportRead' ? Promise.resolve() : pace()).then(() => callHost(message.method, message.params)).finally(answered).then(async result => {
                 if(activation)await authorize(message.method);
                 if (!closed) {
                     check();

@@ -402,9 +402,9 @@ File selection, downloads and placement approval use **PCBJam-owned controls**.
 | Private uploads | 32 retained releases, 64 MiB per account. |
 | Response structure | 100,000 JSON nodes, 48 nesting levels. |
 | Host calls | 40 per 10 seconds per running plugin (a plugin may ask for more, see [Higher limits](#higher-limits)). Calls over that are **delayed, not rejected**, so a sequential read loop simply slows down. At most 4 calls may be in flight: `await` each one. A fifth is rejected with `Too many pending API calls`. |
-| UI commands | 20 per 10 seconds (more by request, see [Higher limits](#higher-limits)), 64,000 characters of JSON each (the whole message, command name included), one at a time; exceeding this stops the plugin. Pace them with timers in `ui.html`. |
+| UI commands | 20 per 10 seconds (more by request, see [Higher limits](#higher-limits)), 4,259,840 characters of JSON each (the whole message, command name included: room for one edit at its largest, 4 MiB, and 64 KiB more), one at a time; exceeding this stops the plugin. Pace them with timers in `ui.html`. |
 | Whole-document export | 32 MiB of JSON text; slices of at most 256 KiB after at most 8 ms of copying, each followed by an equal rest. Not counted in the host-call window. |
-| Command duration | 120 seconds from UI command to result, including delayed host calls. |
+| Command duration | 120 seconds from UI command to result, including delayed host calls. The time the person takes to answer (a file picker, a click to place, a card that confirms an edit, Update PCB, opening a file, saving a part) does not count: the 120 seconds start again once they have answered. |
 | Account request budget | Shared by all your running plugins and tabs. When exhausted, host calls wait for the next minute once, then fail with `error.code === 'RATE_LIMITED'`; the plugin keeps running. |
 
 The same numbers are in `(await pcbjam.context.get()).limits`:
@@ -421,7 +421,7 @@ The same numbers are in `(await pcbjam.context.get()).limits`:
 | `selectItems` | Items per `editor.select()` call (500). |
 | `hostCallsPerWindow`, `hostCallWindowMs`, `pendingHostCalls` | 40 host calls per 10 s (then delayed), at most 4 in flight. |
 | `readLeaseMs` | How long an access check is reused for plain reads (2 s). |
-| `uiCommandsPerWindow`, `uiCommandWindowMs`, `uiCommandBytes` | 20 UI commands per 10 s, 64,000 characters each. |
+| `uiCommandsPerWindow`, `uiCommandWindowMs`, `uiCommandBytes` | 20 UI commands per 10 s, 4,259,840 characters each. |
 | `commandTimeoutMs` | 120 s from UI command to result. |
 
 Plugin logic has `setTimeout` and `clearTimeout` (no `setInterval`), for pausing
