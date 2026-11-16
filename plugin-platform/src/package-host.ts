@@ -144,7 +144,7 @@ export interface PackageHostOptions {
 /** With localChecks, these still ask the server on every call: they write to the project or a team library. */
 const SERVER_CHECKED: ReadonlySet<string> = new Set(['editor.requestPlacement', 'parts.save', 'board.edit', 'schematic.edit', 'board.updateFromSchematic']);
 /** Methods whose server route names the activation. */
-const needsActivation = (method: string) => method.startsWith('http.') || method.startsWith('exports.') || method === 'files.saveBundle';
+const needsActivation = (method: string) => method.startsWith('http.') || method.startsWith('exports.') || method === 'files.saveBundle' || method === 'identity.token';
 /** With localChecks, how often the account and activation are re-checked (also when the tab is shown again). */
 const REVOCATION_CHECK_MS = 30000;
 async function api(path: string, method = 'GET', data?: unknown) {
