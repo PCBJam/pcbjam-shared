@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CODE_MODEL_LINE_MAX, LEFT_OUT_TIE, LIVE_TRAN, buildDeck, kicadModels, matchSymbols, openLibrary, prepareRun, readEditorNetlist, readEditorSymbols,
   unusableLines,
-  type EditorNetlist, type LoadedPart, type PartManifest,
+  type EditorNetlist, type LoadedPart, type PartManifest, type SchematicSymbol,
 } from "../src/sim-library/index.js";
 import { BUTTON, BUTTON_MODEL, LED, LED_MODEL, POT, POT_MODEL, makeSnapshot, serve } from "./sim-library-fixtures.js";
 
@@ -340,6 +340,52 @@ describe("from the library and the schematic to the circuit", () => {
     expect(picked.deck.slice(0, 2)).toEqual([".title KiCad schematic", ".include \"parts/push-button/model.lib\""]);
     expect(picked.deck).toContain("D2 GND Net-_D1-A_ red");
     expect(picked.deck).toContain("XR2 /_CS Net-_D1-A_ T_BUTTON");
+  });
+});
+
+// A symbol with two pins whose reference starts with R, C or L is a resistor, a capacitor or
+// a coil to KiCad, whatever it is. Its line has the symbol's Value where the number belongs.
+describe("a resistor, capacitor or coil that KiCad made out of the reference alone", () => {
+  const two = (a: string, b: string) => ({ "1": { name: "", node: a }, "2": { name: "", node: b } });
+  const sym = (ref: string, libId: string, value: string, fields: Record<string, string> = {}): SchematicSymbol =>
+    ({ ref, uuid: `uuid-${ref}`, libId, value, sheet: "/", fields: { Value: value, ...fields }, pins: two("+5V", "GND") });
+  const SYMBOLS = [
+    sym("R1", "Device:R", "330"), sym("R2", "Device:R", "R"), sym("C1", "Device:C", "100nF"), sym("L1", "Device:L", ".5m"),
+    sym("LS1", "Device:Speaker_Ultrasound", "Speaker_Ultrasound"), sym("RV1", "Device:Varistor", "Varistor"), sym("CB1", "Device:CircuitBreaker_1P", "CircuitBreaker_1P"),
+    sym("R3", "Device:R", "{2*k}"), sym("R4", "Device:R", "DNP", { "Sim.Device": "R", "Sim.Params": "r=DNP" }),
+  ];
+  const netlist = readEditorNetlist({
+    ok: true, messages: [],
+    items: [
+      ...["R1", "R2", "R3", "R4", "RV1"].map((ref) => ({ device: "R", name: ref, ref, type: "" })),
+      ...["C1", "CB1"].map((ref) => ({ device: "C", name: ref, ref, type: "" })),
+      ...["L1", "LS1"].map((ref) => ({ device: "L", name: ref, ref, type: "" })),
+    ],
+    lines: [
+      { text: ".title KiCad schematic" },
+      ...SYMBOLS.map((s) => ({ kind: "item", ref: s.ref, text: `${s.ref} +5V GND ${s.value}` })),
+      { text: ".end" },
+    ],
+  });
+
+  it("is found when its Value is no number", () => {
+    expect([...unusableLines(netlist, SYMBOLS)].sort()).toEqual([["CB1", "no-value"], ["LS1", "no-value"], ["R2", "no-value"], ["RV1", "no-value"]]);
+    // a number with its unit, a number that starts with its point, a formula: all run;
+    // and so does the line of a model the user chose on the symbol, whatever it says
+    expect([...kicadModels(netlist, SYMBOLS)].sort()).toEqual(["C1", "L1", "R1", "R3", "R4"]);
+  });
+
+  it("is not looked for without the symbols", () => {
+    expect([...unusableLines(netlist)]).toEqual([]);
+  });
+
+  it("is left out of the circuit, and the rest runs", () => {
+    const plan = matchSymbols({ parts: [] }, SYMBOLS, { kicadModels: kicadModels(netlist, SYMBOLS) });
+    expect(plan.filter((m) => m.status === "none").map((m) => m.ref).sort()).toEqual(["CB1", "LS1", "R2", "RV1"]);
+    const run = buildDeck({ symbols: SYMBOLS, netlist, plan, parts: new Map(), live: false });
+    expect(run.errors).toEqual([]);
+    expect(run.notSimulated).toEqual(["CB1", "LS1", "R2", "RV1"]);
+    expect(run.deck.filter((l) => /^(R|C|L)[A-Z]*\d/.test(l))).toEqual(["R1 +5V GND 330", "C1 +5V GND 100nF", "L1 +5V GND .5m", "R3 +5V GND {2*k}", "R4 +5V GND DNP"]);
   });
 });
 

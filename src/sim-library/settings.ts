@@ -40,9 +40,11 @@ export function settingAllows(setting: PartSetting, value: string): boolean {
 /**
  * What the symbol's Value says this setting is, or null: the Value itself when it is an
  * allowed value, else the first of the setting's `valueForms` that matches and gives one.
+ * `whole: false` leaves the first way out: another setting of the part has taken the Value
+ * as it is.
  */
-export function settingFromValue(setting: PartSetting, text: string): string | null {
-  if (settingAllows(setting, text)) return text;
+export function settingFromValue(setting: PartSetting, text: string, whole = true): string | null {
+  if (whole && settingAllows(setting, text)) return text;
   for (const form of setting.valueForms ?? []) {
     let m: RegExpExecArray | null;
     try { m = new RegExp(form.match).exec(text); } catch { continue; }
@@ -66,17 +68,23 @@ export interface ResolvedSettings {
  * says its Value is that setting and the Value is allowed, or one of the setting's
  * `valueForms` reads an allowed value out of it), the settings field. A value the part does
  * not allow is dropped with a note; it never reaches the netlist.
+ *
+ * The Value as it is stands for one setting, the first that allows it: a lamp's "12" is its
+ * 12 V, and not its 12 A too. The forms can read several settings out of one Value ("12V
+ * 100mA").
  */
 export function resolveSettings(manifest: Pick<PartManifest, "settings">, sym: { ref: string; value: string; fields: Record<string, string> }): ResolvedSettings {
   const given = parseSettings(sym.fields[FIELD_SETTINGS] ?? "");
   const values: ResolvedSettings["values"] = {};
   const notes: string[] = [];
   const settings = manifest.settings ?? [];
+  let taken = false; // the Value as it is has been one setting's value
   for (const s of settings) {
     let value = s.default;
     let from: "default" | "value" | "field" = "default";
-    const said = s.fromValue ? settingFromValue(s, sym.value) : null;
+    const said = s.fromValue ? settingFromValue(s, sym.value, !taken) : null;
     if (said !== null) { value = said; from = "value"; }
+    if (said !== null && said === sym.value) taken = true;
     const asked = given[s.name];
     if (asked !== undefined) {
       if (settingAllows(s, asked)) { value = asked; from = "field"; }

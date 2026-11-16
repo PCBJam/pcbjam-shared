@@ -35,6 +35,20 @@ describe("the settings of a placed part", () => {
     // without fromValue the forms are not looked at
     expect(resolveSettings({ settings: [{ ...volts, fromValue: false }] }, sym("BZX84C5V1")).values.voltage).toEqual({ value: "5.1", from: "default" });
   });
+  it("give the Value as it is to one setting only, the first that allows it", () => {
+    // a lamp: both of its settings can come from the Value, and both would allow a bare "12"
+    const lamp = { settings: [
+      { name: "voltage", default: "6", accept: "^[0-9]+$", fromValue: true, valueForms: [{ match: "([0-9]+) ?V", value: "$1" }] },
+      { name: "current", default: "100m", accept: "^[0-9]+m?$", fromValue: true, valueForms: [{ match: "([0-9]+) ?mA", value: "$1m" }] },
+    ] };
+    const of = (value: string) => Object.fromEntries(Object.entries(resolveSettings(lamp, { ref: "LA1", value, fields: {} }).values).map(([k, v]) => [k, `${v.value} (${v.from})`]));
+    expect(of("12")).toEqual({ voltage: "12 (value)", current: "100m (default)" });
+    // written out, the Value says both
+    expect(of("12V 50mA")).toEqual({ voltage: "12 (value)", current: "50m (value)" });
+    // a Value only the second setting allows is the second one's
+    expect(of("20m")).toEqual({ voltage: "6 (default)", current: "20m (value)" });
+  });
+
   it("take the settings field last", () => {
     expect(resolveSettings(pot, sym("47k", "resistance=1k")).values.resistance).toEqual({ value: "1k", from: "field" });
   });
