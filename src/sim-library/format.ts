@@ -24,6 +24,13 @@ export interface PartFit {
   symbol?: string;
   value?: string;
   pins?: PinStyle;
+  /**
+   * Where the part's overlay sits on this symbol: a point of the symbol's own drawing (mm,
+   * Y up) that the overlay's places are measured from. Left out: the symbol's origin. For a
+   * part that fits symbols which draw the same thing at different spots (the digit of a
+   * 7-segment display).
+   */
+  origin?: [number, number];
 }
 
 /** Something the user may change on a placed part. Its value goes into the SPICE deck. */
@@ -36,7 +43,11 @@ export interface PartSetting {
   options?: string[];
   /** ... or as a pattern the whole value must match. One of the two is required. */
   accept?: string;
-  /** The symbol's Value field sets this setting when it passes the rule above. */
+  /**
+   * The symbol's Value field sets this setting when it passes the rule above. When several
+   * settings say so, the Value as it is goes to the first that allows it; the others can
+   * only be read out of it by their `valueForms`.
+   */
   fromValue?: boolean;
   /**
    * Other ways the symbol's Value can say this setting, tried in order when the Value itself
@@ -95,6 +106,15 @@ export interface DigitalEmulator {
 
 export type PartDigital = DigitalWasm | DigitalEmulator;
 
+/**
+ * A contact that moves, as a line of the symbol's own drawing (x0, y0, x1, y1 in mm, Y up):
+ * where it is while the input is off (a button: released) and while it is on (held).
+ */
+export interface OverlayLine {
+  off: [number, number, number, number];
+  on: [number, number, number, number];
+}
+
 /** One widget on the schematic. Other keys are the widget's own options; "$name" reads a setting. */
 export interface OverlayEntry {
   widget: string;
@@ -102,6 +122,11 @@ export interface OverlayEntry {
   input?: string;
   signal?: string;
   signals?: string[];
+  /**
+   * A zone only (press-zone, toggle-zone): the contacts that move with it. The zone draws
+   * each where it is now, so a changeover switch shows which way it is thrown.
+   */
+  lines?: OverlayLine[];
   [option: string]: unknown;
 }
 

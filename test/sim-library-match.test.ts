@@ -45,6 +45,16 @@ describe("rule 3: the library has a line for exactly this symbol", () => {
   it("matches by symbol, pins by name", () => {
     expect(one(sym("Device:LED", "green", LED))).toMatchObject({ status: "matched", rule: 3, partId: "led", pinMap: ["2", "1"] });
   });
+  it("passes on where the part's overlay sits on this symbol, when the line says so", () => {
+    // two symbols draw the same digit at different heights: each line names its place
+    const digit = part("digit", [{ symbol: "Display:Low", origin: [-0.25, -2.9] }, { symbol: "Display:High", origin: [-0.25, 0.25] }, { symbol: "Display:Plain" }]);
+    const at = (libId: string, fields?: Record<string, string>) => one(sym(libId, "", { "1": "", "2": "" }, fields), undefined, { parts: [digit] });
+    expect(at("Display:Low")).toMatchObject({ status: "matched", rule: 3, origin: [-0.25, -2.9] });
+    expect(at("Display:High")).toMatchObject({ status: "matched", origin: [-0.25, 0.25] });
+    expect(at("Display:Plain")).not.toHaveProperty("origin");
+    // the same when the user named the part on the symbol
+    expect(at("Display:High", { [FIELD_PART]: "digit" })).toMatchObject({ status: "matched", rule: 1, origin: [-0.25, 0.25] });
+  });
   it("beats the line KiCad writes for a stock symbol", () => {
     const led = sym("Device:LED", "red", LED);
     expect(one(led, { kicadModels: new Set([led.ref]) })).toMatchObject({ status: "matched", partId: "led" });

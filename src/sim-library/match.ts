@@ -42,7 +42,7 @@ export interface Candidate { partId: string; title: string; fits?: boolean; reas
 
 export type Match = Base & (
   /** The part is used. pinMap[i] is the symbol pin number the part's pin i goes to. */
-  | { status: "matched"; rule: 1 | 3; partId: string; pinMap: string[]; unusedPins: string[] }
+  | { status: "matched"; rule: 1 | 3; partId: string; pinMap: string[]; unusedPins: string[]; origin?: [number, number] }
   /** The user switched simulation off for this symbol. */
   | { status: "off"; rule: 1 }
   /** A part was found and cannot be used; `reason` says why in plain words. */
@@ -97,6 +97,9 @@ export function resolvePins(part: Pick<IndexPart, "pins">, fit: PartFit | undefi
   return { ok: true, map, unused: numbers.filter((k) => !used.has(k)) };
 }
 
+/** Where the part's overlay sits on the symbol, when the "fits" line says so. */
+const originOf = (fit: PartFit): { origin?: [number, number] } => (fit.origin ? { origin: fit.origin } : {});
+
 function matchOne(byId: Map<string, IndexPart>, parts: IndexPart[], sym: SchematicSymbol, override: string | undefined, hasKicadModel: boolean): Match {
   const base: Base = { ref: sym.ref, uuid: sym.uuid, sheet: sym.sheet, libId: sym.libId, value: sym.value };
   const named = (override !== undefined ? override : sym.fields[FIELD_PART] ?? "").trim();
@@ -110,7 +113,7 @@ function matchOne(byId: Map<string, IndexPart>, parts: IndexPart[], sym: Schemat
     let reason = "the part lists no symbol it fits";
     for (const fit of fits) {
       const r = resolvePins(part, fit, sym);
-      if (r.ok) return { ...base, status: "matched", rule: 1, partId: part.id, pinMap: r.map, unusedPins: r.unused };
+      if (r.ok) return { ...base, status: "matched", rule: 1, partId: part.id, pinMap: r.map, unusedPins: r.unused, ...originOf(fit) };
       reason = r.reason;
     }
     return { ...base, status: "error", rule: 1, partId: part.id, reason: `"${named}" does not fit this symbol: ${reason}` };
@@ -135,7 +138,7 @@ function matchOne(byId: Map<string, IndexPart>, parts: IndexPart[], sym: Schemat
       return { ...base, status: "choice", rule: 3, candidates: ids.map((id) => ({ partId: id, title: byId.get(id)?.title ?? id })) };
     const r = resolvePins(first.part, first.fit, sym);
     if (!r.ok) return { ...base, status: "error", rule: 3, partId: first.part.id, reason: `"${first.part.id}" does not fit this symbol: ${r.reason}` };
-    return { ...base, status: "matched", rule: 3, partId: first.part.id, pinMap: r.map, unusedPins: r.unused };
+    return { ...base, status: "matched", rule: 3, partId: first.part.id, pinMap: r.map, unusedPins: r.unused, ...originOf(first.fit) };
   }
 
   const maybe: Candidate[] = [];                                      // rule 4

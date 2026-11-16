@@ -42,7 +42,9 @@ export type Unusable =
   /** KiCad has no model for the symbol: its line is a placeholder. */
   | "no-model"
   /** KiCad's line names a model that nothing in the netlist defines. */
-  | "undefined-model";
+  | "undefined-model"
+  /** KiCad took the symbol for a resistor, a capacitor or a coil, and its Value is no number. */
+  | "no-value";
 
 const statements = (text: string): string[] => text.replace(/\r?\n\+/g, " ").split(/\r?\n/);
 
@@ -53,6 +55,12 @@ const statements = (text: string): string[] => text.replace(/\r?\n\+/g, " ").spl
  *     writes a raw line that names the symbol's Value as the model ("D1 a k red",
  *     "Q1 c b e NPN"), and reports its device as "SPICE". When nothing defines that model,
  *     ngspice refuses the whole circuit because of this one line.
+ *   - KiCad's guess. A symbol with two pins whose reference starts with R, C or L is a
+ *     resistor, a capacitor or a coil to KiCad, with the symbol's Value as its value. A
+ *     speaker "LS1" with the Value "Speaker", a varistor "RV1", a resistor that has no
+ *     value yet ("R") get a line no simulator reads ("LS1 a b Speaker"), and ngspice
+ *     refuses the whole circuit because of it. A model the user chose on the symbol
+ *     (the field Sim.Device) is theirs and stays.
  * A raw line the user asked for (the symbol's own field Sim.Device says SPICE) is theirs and
  * stays. So does a fallback line when the netlist includes a file: the model can be in
  * there. Without `symbols` only the placeholders are found.
@@ -60,11 +68,20 @@ const statements = (text: string): string[] => text.replace(/\r?\n\+/g, " ").spl
 export function unusableLines(netlist: Pick<EditorNetlist, "items" | "lines">, symbols: Pick<SchematicSymbol, "ref" | "fields">[] = []): Map<string, Unusable> {
   const out = new Map<string, Unusable>();
   const fallback = new Set<string>();
+  const guessed = new Set<string>();
   const asked = new Map(symbols.map((s) => [s.ref, (s.fields["Sim.Device"] ?? "").trim().toUpperCase()]));
   for (const item of netlist.items) {
     if (item.off) continue;
     if (item.device === "") out.set(item.ref, "no-model");
     else if (item.device === "SPICE" && asked.has(item.ref) && asked.get(item.ref) !== "SPICE") fallback.add(item.ref);
+    else if (/^[RCL]$/.test(item.device) && asked.get(item.ref) === "") guessed.add(item.ref);
+  }
+  // KiCad's guess: the value, the word after the two nodes, has to start as a number does
+  // ("10k", "4.7uF", ".5"), or be a formula
+  for (const line of netlist.lines) {
+    if (line.kind !== "item" || line.ref === undefined || !guessed.has(line.ref)) continue;
+    const value = statements(line.text).join(" ").trim().split(/\s+/)[3] ?? "";
+    if (!/^(?:[+-]?(?:\d|\.\d)|[{'])/.test(value)) out.set(line.ref, "no-value");
   }
   if (!fallback.size) return out;
 
@@ -151,6 +168,8 @@ export interface PlacedPart {
   connected: string[];
   /** Every setting of the part with its value and where the value came from. */
   settings: ResolvedSettings["values"];
+  /** Where the part's overlay sits on this symbol, when its "fits" line says so (see PartFit). */
+  origin?: [number, number];
   /**
    * Only for a part with code: its place in the call order of a time step (1, 2, 3, ...).
    * The same number is how the engine and the part's own program tell two placed parts
@@ -293,6 +312,7 @@ export function buildDeck({ symbols, excluded = [], netlist, plan, parts, live =
       // KiCad calls a net with nothing else on it "unconnected-..."
       connected: man.pins.filter((_, i) => !/^unconnected-/i.test(nodes[i] ?? "unconnected-")),
       settings: settings.values, number,
+      ...(m.origin ? { origin: m.origin } : {}),
     });
   }
 
