@@ -38,6 +38,13 @@ export interface PartSetting {
   accept?: string;
   /** The symbol's Value field sets this setting when it passes the rule above. */
   fromValue?: boolean;
+  /**
+   * Other ways the symbol's Value can say this setting, tried in order when the Value itself
+   * is not an allowed value: a pattern over the Value, and the setting's value it stands for
+   * ("$1", "$2" are the pattern's groups). For a Zener diode "BZX84C5V1" stands for 5.1.
+   * Only with `fromValue`.
+   */
+  valueForms?: { match: string; value: string }[];
 }
 
 export interface PartAnalog {
