@@ -113,6 +113,11 @@ export interface PartManifest {
   description?: string;
   fits: PartFit[];
   pins: string[];
+  /**
+   * The pins on which this part is a source of power (a battery: both). A supply wire on
+   * such a pin has its power from the part, so it is not powered by its name.
+   */
+  supplies?: string[];
   settings?: PartSetting[];
   analog: PartAnalog;
   digital?: PartDigital;

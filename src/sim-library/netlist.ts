@@ -12,6 +12,8 @@
 //   - ties the nets of every symbol without a line (left out, switched off or excluded) to
 //     ground through a very large resistor, so that a net which only that symbol held still
 //     has a voltage,
+//   - gives a supply wire whose name states a voltage (+5V) a source, when no source of
+//     the schematic sits on it (supplies.ts),
 //   - includes the model file of every part that is used.
 // The nodes come from the editor's pin-to-net table (kicadSimSymbols). Which of KiCad's
 // lines belongs to which symbol comes from the editor too (kicadSimNetlist): nothing here
@@ -22,6 +24,7 @@ import type { PartDigital, PartInput } from "./format.js";
 import { matchSymbols, type Match, type SchematicSymbol } from "./match.js";
 import { analogParams, resolveSettings, type ResolvedSettings } from "./settings.js";
 import { CODE_MODEL_LINE_MAX, codeModelLines, withExternalSources } from "./spice-text.js";
+import { powerByName, supplyLines, type AssumedSource, type Power } from "./supplies.js";
 
 /**
  * What ties a net of a left-out symbol to ground: large enough to carry nothing that matters
@@ -170,6 +173,8 @@ export interface Deck {
    * out of the circuit, and the rest runs without them.
    */
   notSimulated: string[];
+  /** The supply wires the circuit powers by their names, and the ones whose names state no voltage. */
+  power: Power;
   /** What the user should know. It does not stop the run. */
   notes: string[];
   /** What stops the run. Empty: the circuit can go to the simulator. */
@@ -229,6 +234,10 @@ export function buildDeck({ symbols, excluded = [], netlist, plan, parts, live =
   const codeParts: DeckCodePart[] = [];
   const placed: PlacedPart[] = [];
   const used = new Set<string>();
+  /** The nets a source sits on: no power by name for them. */
+  const driven = new Set<string>();
+  /** The sources that run with their part's own voltage. */
+  const assumed: AssumedSource[] = [];
   let order = 0;
   for (const { m, sym } of matched) {
     if (items.get(m.ref)?.off) {
@@ -250,6 +259,18 @@ export function buildDeck({ symbols, excluded = [], netlist, plan, parts, live =
     if (man.digital) params.push(`${man.digital.orderParam}=${number}`);
     const name = `X${m.ref}`;
     lines.push(`${name} ${nodes.join(" ")} ${man.analog.subckt}${params.length ? " " + params.join(" ") : ""}`);
+    // A source (a battery): the wires on its supply pins have their power from it. When the
+    // symbol's Value does not say its voltage, it runs with the part's own, and the run says so.
+    for (const pin of man.supplies ?? []) {
+      const node = nodes[man.pins.indexOf(pin)];
+      if (node !== undefined) driven.add(node);
+    }
+    if (man.supplies?.length) {
+      for (const s of man.settings ?? []) {
+        const got = settings.values[s.name];
+        if (s.fromValue && got?.from === "default") assumed.push({ ref: m.ref, label: s.label ?? s.name, value: got.value, unit: s.unit ?? "" });
+      }
+    }
 
     if (!used.has(m.partId)) {
       used.add(m.partId);
@@ -296,17 +317,33 @@ export function buildDeck({ symbols, excluded = [], netlist, plan, parts, live =
       if (pin.node && !/^(0|gnd)$/i.test(pin.node) && !/^unconnected-/i.test(pin.node)) ties.add(pin.node);
   const tied = [...ties].sort(natural).map((node, i) => `Rpj_left_${i + 1} ${node} 0 ${LEFT_OUT_TIE}`);
 
-  const deck = [title, ...files.map((f) => `.include "${f.path}"`), ...kept.flatMap((t) => t.split("\n")), ...lines, ...tied];
+  // 4. Power. A real schematic draws no source: its supply wires are only named. A wire
+  // whose name states a voltage gets a source of ours, unless a source of the schematic
+  // sits on it: a voltage source KiCad wrote a line for, or a library part that is one.
+  for (const l of keptLines) {
+    if (l.kind !== "item") continue;
+    for (const statement of statements(l.text)) {
+      const words = statement.trim().split(/\s+/);
+      if (/^v/i.test(words[0] ?? "")) for (const node of words.slice(1, 3)) driven.add(node);
+    }
+  }
+  const nets = [...symbols, ...excluded].flatMap((s) => Object.values(s.pins).flatMap((p) => (p.node ? [p.node] : [])));
+  const power: Power = { ...powerByName(nets, driven), assumed };
+
+  const deck = [
+    title, ...files.map((f) => `.include "${f.path}"`), ...kept.flatMap((t) => t.split("\n")),
+    ...lines, ...tied, ...supplyLines(power.byName),
+  ];
   if (live) deck.push(LIVE_TRAN);
   deck.push(".end");
 
-  // 4. the simulator does not take a code-model line of any length
+  // 5. the simulator does not take a code-model line of any length
   for (const [where, text] of [["the circuit", deck.join("\n")], ...files.map((f) => [f.path, f.text])] as [string, string][])
     for (const l of codeModelLines(text))
       if (l.pieces > CODE_MODEL_LINE_MAX)
         errors.push(`${where}: the line of ${l.name} is too long for the simulator (${l.pieces} pieces, at most ${CODE_MODEL_LINE_MAX})`);
 
-  return { deck, files, inputs, signals, codeParts, placed, notSimulated, notes, errors };
+  return { deck, files, inputs, signals, codeParts, placed, notSimulated, power, notes, errors };
 }
 
 export interface PrepareOptions {

@@ -157,6 +157,9 @@ describe("the circuit that runs", () => {
       "D2 GND Net-_D1-A_ red",
       "R11 /Key_1/MID GND 330",
       "R12 /Key_2/MID GND 330",
+      // nothing in the schematic powers the wire +5V: its name does
+      "Vpj_supply_1 pj_supply_1 0 DC 5",
+      "Rpj_supply_1 pj_supply_1 +5V 10m",
       LIVE_TRAN,
       ".end",
     ]);
@@ -189,6 +192,8 @@ describe("the circuit that runs", () => {
       "XD2 Net-_D1-A_ GND T_LED",
       "XR2 /_CS Net-_D1-A_ T_BUTTON",
       "XU1 unconnected-_U1A-A-Pad1_ unconnected-_U1A-B-Pad2_ unconnected-_U1B-C-Pad3_ unconnected-_U1B-D-Pad4_ T_CHIP ORDER=1",
+      "Vpj_supply_1 pj_supply_1 0 DC 5",
+      "Rpj_supply_1 pj_supply_1 +5V 10m",
       LIVE_TRAN,
       ".end",
     ]);
@@ -429,7 +434,9 @@ describe("the nets of a symbol that has no line", () => {
     expect(notSimulated).toEqual(["U1", "U2"]);
     // not the ground net, not a net with this pin alone; the lines stand before the analysis
     expect(ties(deck)).toEqual([`Rpj_left_1 /A 0 ${LEFT_OUT_TIE}`, `Rpj_left_2 /B 0 ${LEFT_OUT_TIE}`]);
-    expect(deck.slice(-4)).toEqual([`Rpj_left_1 /A 0 1g`, `Rpj_left_2 /B 0 1g`, LIVE_TRAN, ".end"]);
+    expect(deck.slice(-6)).toEqual([
+      `Rpj_left_1 /A 0 1g`, `Rpj_left_2 /B 0 1g`, "Vpj_supply_1 pj_supply_1 0 DC 5", "Rpj_supply_1 pj_supply_1 +5V 10m", LIVE_TRAN, ".end",
+    ]);
   });
 
   it("are left alone when every symbol with a net has its line", () => {

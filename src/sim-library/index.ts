@@ -23,5 +23,8 @@ export {
 } from "./netlist.js";
 export { analogParams, formatSettings, parseSettings, resolveSettings, settingAllows, settingFromValue, type ResolvedSettings } from "./settings.js";
 export {
+  SUPPLY_OHMS, isSupplyWithoutVolts, namedVolts, powerByName, supplyLines, type AssumedSource, type NamedSupply, type Power,
+} from "./supplies.js";
+export {
   CODE_MODEL_LINE_MAX, codeModelLines, findSource, hasElement, subcircuits, withExternalSources, type Subcircuit,
 } from "./spice-text.js";
