@@ -17,11 +17,11 @@ export {
   type EditorNetlist, type EditorSchematic, type EditorSymbol, type NetlistItem, type NetlistLine, type NetlistMessage,
 } from "./editor.js";
 export {
-  LIVE_TRAN, buildDeck, kicadModels, prepareRun,
+  LEFT_OUT_TIE, LIVE_TRAN, buildDeck, kicadModels, prepareRun, unusableLines,
   type BuildOptions, type Deck, type DeckCodePart, type DeckFile, type DeckInput, type DeckSignal, type PlacedPart,
-  type PrepareOptions, type PreparedRun,
+  type PrepareOptions, type PreparedRun, type Unusable,
 } from "./netlist.js";
-export { analogParams, formatSettings, parseSettings, resolveSettings, settingAllows, type ResolvedSettings } from "./settings.js";
+export { analogParams, formatSettings, parseSettings, resolveSettings, settingAllows, settingFromValue, type ResolvedSettings } from "./settings.js";
 export {
   CODE_MODEL_LINE_MAX, codeModelLines, findSource, hasElement, subcircuits, withExternalSources, type Subcircuit,
 } from "./spice-text.js";

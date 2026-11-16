@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  CODE_MODEL_LINE_MAX, LIVE_TRAN, buildDeck, kicadModels, matchSymbols, openLibrary, prepareRun, readEditorNetlist, readEditorSymbols,
+  CODE_MODEL_LINE_MAX, LEFT_OUT_TIE, LIVE_TRAN, buildDeck, kicadModels, matchSymbols, openLibrary, prepareRun, readEditorNetlist, readEditorSymbols,
+  unusableLines,
   type EditorNetlist, type LoadedPart, type PartManifest,
 } from "../src/sim-library/index.js";
 import { BUTTON, BUTTON_MODEL, LED, LED_MODEL, POT, POT_MODEL, makeSnapshot, serve } from "./sim-library-fixtures.js";
@@ -117,7 +118,7 @@ describe("reading the editor's netlist", () => {
   it("says which symbols KiCad writes a real line for", () => {
     // not U1: KiCad has no model for it, its line is a placeholder
     expect([...kicadModels(readEditorNetlist(NETLIST))].sort()).toEqual(["D1", "D2", "D3", "R1", "R11", "R12", "R2"]);
-    expect([...kicadModels({ items: [{ ref: "R1", name: "R1", device: "R", type: "", off: true }] })]).toEqual([]);
+    expect([...kicadModels({ lines: [], items: [{ ref: "R1", name: "R1", device: "R", type: "", off: true }] })]).toEqual([]);
   });
 
   it("reads the messages, and an unknown severity as an error", () => {
@@ -334,5 +335,115 @@ describe("from the library and the schematic to the circuit", () => {
     expect(picked.deck.slice(0, 2)).toEqual([".title KiCad schematic", ".include \"parts/push-button/model.lib\""]);
     expect(picked.deck).toContain("D2 GND Net-_D1-A_ red");
     expect(picked.deck).toContain("XR2 /_CS Net-_D1-A_ T_BUTTON");
+  });
+});
+
+// A stock LED or transistor: KiCad has no model for it and writes a line that names the
+// symbol's Value as the model. Nothing defines "red", and ngspice refuses the whole circuit
+// because of that one line.
+describe("a line that names a model nothing defines", () => {
+  /** The test project without D3 and its model file: nothing is included. */
+  const plain = (change: (n: { lines: { text: string; ref?: string; kind?: string }[]; items: { ref: string }[] }) => void = () => {}): EditorNetlist => {
+    const raw = JSON.parse(NETLIST);
+    raw.lines = raw.lines.filter((l: { text: string; ref?: string }) => !l.text.startsWith(".include") && l.ref !== "D3");
+    raw.items = raw.items.filter((i: { ref: string }) => i.ref !== "D3");
+    change(raw);
+    return readEditorNetlist(raw);
+  };
+  const symbols = () => read().symbols.filter((s) => s.ref !== "D3");
+
+  it("is found, next to the placeholders", () => {
+    expect([...unusableLines(plain(), symbols())].sort()).toEqual([["D2", "undefined-model"], ["U1", "no-model"]]);
+    // D1 has a model KiCad wrote itself; the resistors need none
+    expect([...kicadModels(plain(), symbols())].sort()).toEqual(["D1", "R1", "R11", "R12", "R2"]);
+  });
+
+  it("is not looked for without the symbols: only the placeholders are sure then", () => {
+    expect([...unusableLines(plain())]).toEqual([["U1", "no-model"]]);
+    expect([...kicadModels(plain())].sort()).toEqual(["D1", "D2", "R1", "R11", "R12", "R2"]);
+  });
+
+  it("stays when a text on the sheet defines the model", () => {
+    const withModel = plain((n) => n.lines.splice(1, 0, { text: ".param k=1\n.model RED D(is=1e-18\n+ n=2)" }));
+    expect([...unusableLines(withModel, symbols())]).toEqual([["U1", "no-model"]]);
+    const withSubckt = plain((n) => n.lines.splice(1, 0, { text: ".subckt red k a\nR1 k a 1k\n.ends" }));
+    expect([...unusableLines(withSubckt, symbols())]).toEqual([["U1", "no-model"]]);
+  });
+
+  it("stays when the netlist includes a file: the model can be in there", () => {
+    const n = plain((raw) => raw.lines.splice(1, 0, { text: ".include \"/home/kicad/documents/p/models.lib\"" }));
+    expect([...unusableLines(n, symbols())]).toEqual([["U1", "no-model"]]);
+    // the whole test project: D3's model file is included
+    expect([...unusableLines(readEditorNetlist(NETLIST), read().symbols)]).toEqual([["U1", "no-model"]]);
+  });
+
+  it("stays when the user asked for a raw SPICE line on the symbol", () => {
+    const asked = symbols().map((s) => (s.ref === "D2" ? { ...s, fields: { ...s.fields, "Sim.Device": "SPICE", "Sim.Params": "type=\"D\" model=\"red\"" } } : s));
+    expect([...unusableLines(plain(), asked)]).toEqual([["U1", "no-model"]]);
+  });
+
+  it("is left out of the circuit, and the rest runs", () => {
+    const syms = symbols();
+    const netlist = plain();
+    const plan = matchSymbols(INDEX, syms, { overrides: { [UUID("D2")]: "off" }, kicadModels: kicadModels(netlist, syms) });
+    const { deck, notSimulated, errors } = buildDeck({ symbols: syms, netlist, plan, parts: PARTS });
+    expect(notSimulated).toEqual(["D2", "U1"]);
+    expect(errors).toEqual([]);
+    expect(deck.some((l) => /^D2 /.test(l))).toBe(false);
+    expect(deck.some((l) => /^U1 /.test(l))).toBe(false);
+    expect(deck).toContain("D1 Net-_D1-A_ GND __D1");
+    expect(deck).toContain("R2 /_CS Net-_D1-A_ 39");
+  });
+
+  it("is not left out when a library part takes the symbol", async () => {
+    // D2 is "Device:D" with the Value "red": the tests' LED part fits it
+    const run = await prepareRun({ library: { index: INDEX as never, loadPart: async (id) => PARTS.get(id)! }, symbols: symbols(), netlist: plain() });
+    expect(run.notSimulated).toEqual(["U1"]);
+    expect(run.placed.map((p) => p.ref)).toEqual(["D2"]);
+    expect(run.deck.some((l) => /^XD2 /.test(l))).toBe(true);
+  });
+});
+
+describe("the nets of a symbol that has no line", () => {
+  const ties = (deck: string[]) => deck.filter((l) => /^Rpj_left_/.test(l));
+  /** The test project with a chip U2 that nothing models, between the nets /A, /B and ground. */
+  const withChip = () => {
+    const { symbols, netlist } = read();
+    const chip = { ...symbols.find((s) => s.ref === "U1")!, ref: "U2", uuid: "aaaaaaaa-0000-0000-0000-00000000000a",
+      pins: { "1": { name: "A", node: "/B" }, "2": { name: "B", node: "/A" }, "3": { name: "G", node: "GND" }, "4": { name: "N", node: "unconnected-_U2-N-Pad4_" } } };
+    const raw = JSON.parse(NETLIST);
+    raw.lines.splice(raw.lines.length - 1, 0, { kind: "item", ref: "U2", text: "U2 __U2" }, { kind: "item", ref: "R20", text: "R20 /A /B 1k" });
+    raw.items.push({ device: "", name: "U2", ref: "U2", type: "" }, { device: "R", name: "R20", ref: "R20", type: "" });
+    const resistor = { ...symbols.find((s) => s.ref === "R1")!, ref: "R20", uuid: "aaaaaaaa-0000-0000-0000-00000000000b",
+      pins: { "1": { name: "", node: "/A" }, "2": { name: "", node: "/B" } } };
+    return { symbols: [...symbols, chip, resistor], netlist: readEditorNetlist(raw) };
+  };
+  const deckOf = (symbols: ReturnType<typeof read>["symbols"], netlist: EditorNetlist, more: Partial<Parameters<typeof buildDeck>[0]> = {}) => {
+    const plan = matchSymbols(INDEX, symbols, { overrides: { [UUID("D2")]: "off" }, kicadModels: kicadModels(netlist, symbols) });
+    return buildDeck({ symbols, netlist, plan, parts: PARTS, ...more });
+  };
+
+  it("get a path to ground each, so the simulator finds a voltage for them", () => {
+    const { symbols, netlist } = withChip();
+    const { deck, notSimulated } = deckOf(symbols, netlist);
+    expect(notSimulated).toEqual(["U1", "U2"]);
+    // not the ground net, not a net with this pin alone; the lines stand before the analysis
+    expect(ties(deck)).toEqual([`Rpj_left_1 /A 0 ${LEFT_OUT_TIE}`, `Rpj_left_2 /B 0 ${LEFT_OUT_TIE}`]);
+    expect(deck.slice(-4)).toEqual([`Rpj_left_1 /A 0 1g`, `Rpj_left_2 /B 0 1g`, LIVE_TRAN, ".end"]);
+  });
+
+  it("are left alone when every symbol with a net has its line", () => {
+    // U1 is left out, but each of its pins is alone on its net
+    expect(ties(build({ D2: "off" }).deck)).toEqual([]);
+  });
+
+  it("are tied as well for a symbol excluded from simulation or switched off in KiCad", () => {
+    const { symbols, netlist } = read();
+    const excluded = readEditorSymbols(SYMBOLS).excluded;
+    expect(excluded.map((s) => s.ref)).toEqual(["R3"]);
+    expect(ties(deckOf(symbols, netlist, { excluded }).deck)).toEqual([`Rpj_left_1 Net-_D1-A_ 0 ${LEFT_OUT_TIE}`]);
+
+    const off: EditorNetlist = { ...netlist, lines: netlist.lines.filter((l) => l.ref !== "R11"), items: netlist.items.map((i) => (i.ref === "R11" ? { ...i, off: true } : i)) };
+    expect(ties(deckOf(symbols, off).deck)).toEqual([`Rpj_left_1 /Key_1/MID 0 ${LEFT_OUT_TIE}`]);
   });
 });

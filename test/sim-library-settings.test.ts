@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FIELD_SETTINGS, analogParams, formatSettings, parseSettings, resolveSettings } from "../src/sim-library/index.js";
+import { FIELD_SETTINGS, analogParams, formatSettings, parseSettings, resolveSettings, settingFromValue, type PartSetting } from "../src/sim-library/index.js";
 import { LED as led, POT as pot } from "./sim-library-fixtures.js";
 const sym = (value: string, settings?: string): { ref: string; value: string; fields: Record<string, string> } =>
   ({ ref: "RV1", value, fields: settings === undefined ? {} : { [FIELD_SETTINGS]: settings } });
@@ -12,6 +12,28 @@ describe("the settings of a placed part", () => {
     expect(resolveSettings(pot, sym("47k")).values.resistance).toEqual({ value: "47k", from: "value" });
     expect(resolveSettings(led, sym("green")).values.color).toEqual({ value: "green", from: "value" });
     expect(resolveSettings(led, sym("LTST-C150")).values.color).toEqual({ value: "red", from: "default" });
+  });
+  it("read the setting out of a Value written another way, when the part gives the forms", () => {
+    const volts: PartSetting = {
+      name: "voltage", default: "5.1", accept: "^[0-9]+(\\.[0-9]+)?$", fromValue: true,
+      valueForms: [{ match: "([0-9]+)V([0-9]+)", value: "$1.$2" }, { match: "^ZD([0-9]+)$", value: "$1" }, { match: "^bad(", value: "1" }, { match: "^X(.*)$", value: "$1" }],
+    };
+    // the Value itself, when it is allowed, before any form
+    expect(settingFromValue(volts, "12")).toBe("12");
+    // the first form that matches and gives an allowed value
+    expect(settingFromValue(volts, "BZX84C5V1")).toBe("5.1");
+    expect(settingFromValue(volts, "ZD12")).toBe("12");
+    // a form whose value the part does not allow gives nothing; a broken pattern is passed over
+    expect(settingFromValue(volts, "Xabc")).toBeNull();
+    expect(settingFromValue(volts, "X; .include")).toBeNull();
+    expect(settingFromValue(volts, "1N4148")).toBeNull();
+    // in a placed part: from the Value, and the settings field still wins
+    const part = { settings: [volts] };
+    expect(resolveSettings(part, sym("BZX84C5V1")).values.voltage).toEqual({ value: "5.1", from: "value" });
+    expect(resolveSettings(part, sym("1N4148")).values.voltage).toEqual({ value: "5.1", from: "default" });
+    expect(resolveSettings(part, sym("BZX84C5V1", "voltage=9")).values.voltage).toEqual({ value: "9", from: "field" });
+    // without fromValue the forms are not looked at
+    expect(resolveSettings({ settings: [{ ...volts, fromValue: false }] }, sym("BZX84C5V1")).values.voltage).toEqual({ value: "5.1", from: "default" });
   });
   it("take the settings field last", () => {
     expect(resolveSettings(pot, sym("47k", "resistance=1k")).values.resistance).toEqual({ value: "1k", from: "field" });

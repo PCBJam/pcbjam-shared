@@ -2,11 +2,16 @@
 //
 // KiCad writes one line per symbol. For what it can simulate by itself (a resistor, a
 // source, a symbol with its own model) the line is real. For a symbol it has no model for,
-// the line is a placeholder that no simulator takes. This step
+// the line is one no simulator runs: a placeholder, or a line that names a model nothing
+// defines (unusableLines() below). This step
 //   - drops KiCad's lines of every symbol that got a library part,
-//   - drops the placeholders (and says which symbols they were),
+//   - drops the lines no simulator runs (and says which symbols they were): one symbol
+//     without a model does not stop the rest of the circuit,
 //   - writes one line per placed library part:
 //       X<ref> <one node per pin of the part> <subcircuit> <parameters>
+//   - ties the nets of every symbol without a line (left out, switched off or excluded) to
+//     ground through a very large resistor, so that a net which only that symbol held still
+//     has a voltage,
 //   - includes the model file of every part that is used.
 // The nodes come from the editor's pin-to-net table (kicadSimSymbols). Which of KiCad's
 // lines belongs to which symbol comes from the editor too (kicadSimNetlist): nothing here
@@ -18,18 +23,76 @@ import { matchSymbols, type Match, type SchematicSymbol } from "./match.js";
 import { analogParams, resolveSettings, type ResolvedSettings } from "./settings.js";
 import { CODE_MODEL_LINE_MAX, codeModelLines, withExternalSources } from "./spice-text.js";
 
+/**
+ * What ties a net of a left-out symbol to ground: large enough to carry nothing that matters
+ * (5 nA at 5 V), small enough for the solver to see it.
+ */
+export const LEFT_OUT_TIE = "1g";
+
 /** "Run until stopped": a transient analysis with a step ceiling of 1 ms and no end in sight. */
 export const LIVE_TRAN = ".tran 1m 100000 0 1m";
 
 const natural = (a: string, b: string): number => a.localeCompare(b, "en", { numeric: true });
 
+/** Why KiCad's line of a symbol cannot run. */
+export type Unusable =
+  /** KiCad has no model for the symbol: its line is a placeholder. */
+  | "no-model"
+  /** KiCad's line names a model that nothing in the netlist defines. */
+  | "undefined-model";
+
+const statements = (text: string): string[] => text.replace(/\r?\n\+/g, " ").split(/\r?\n/);
+
 /**
- * The references KiCad itself writes a real SPICE line for (not a placeholder). This is what
- * the matcher wants as `kicadModels`. A real line is not a promise that the symbol simulates:
- * for a stock LED or transistor KiCad names a model that nothing defines.
+ * The symbols whose KiCad line no simulator runs, by reference:
+ *   - a placeholder: KiCad has no model for the symbol;
+ *   - KiCad's fallback. For a symbol it cannot model (a stock LED, a stock transistor) KiCad
+ *     writes a raw line that names the symbol's Value as the model ("D1 a k red",
+ *     "Q1 c b e NPN"), and reports its device as "SPICE". When nothing defines that model,
+ *     ngspice refuses the whole circuit because of this one line.
+ * A raw line the user asked for (the symbol's own field Sim.Device says SPICE) is theirs and
+ * stays. So does a fallback line when the netlist includes a file: the model can be in
+ * there. Without `symbols` only the placeholders are found.
  */
-export function kicadModels(netlist: Pick<EditorNetlist, "items">): Set<string> {
-  return new Set(netlist.items.filter((i) => !i.off && i.device !== "").map((i) => i.ref));
+export function unusableLines(netlist: Pick<EditorNetlist, "items" | "lines">, symbols: Pick<SchematicSymbol, "ref" | "fields">[] = []): Map<string, Unusable> {
+  const out = new Map<string, Unusable>();
+  const fallback = new Set<string>();
+  const asked = new Map(symbols.map((s) => [s.ref, (s.fields["Sim.Device"] ?? "").trim().toUpperCase()]));
+  for (const item of netlist.items) {
+    if (item.off) continue;
+    if (item.device === "") out.set(item.ref, "no-model");
+    else if (item.device === "SPICE" && asked.has(item.ref) && asked.get(item.ref) !== "SPICE") fallback.add(item.ref);
+  }
+  if (!fallback.size) return out;
+
+  // what the netlist itself defines, and whether it reads files we do not see here
+  const defined = new Set<string>();
+  let includes = false;
+  for (const line of netlist.lines) {
+    if (line.kind === "item") continue;
+    for (const text of statements(line.text)) {
+      const def = /^\s*\.(model|subckt)\s+(\S+)/i.exec(text);
+      if (def?.[2]) defined.add(def[2].toLowerCase());
+      else if (/^\s*\.(include|inc|lib)\b/i.test(text)) includes = true;
+    }
+  }
+  if (includes) return out;
+  for (const line of netlist.lines) {
+    if (line.kind !== "item" || line.ref === undefined || !fallback.has(line.ref)) continue;
+    const words = statements(line.text).join(" ").trim().split(/\s+/).slice(1);
+    if (!words.some((w) => defined.has(w.toLowerCase()))) out.set(line.ref, "undefined-model");
+  }
+  return out;
+}
+
+/**
+ * The references KiCad itself writes a SPICE line for that a simulator can run. This is what
+ * the matcher wants as `kicadModels`. With `symbols`, the lines that name a model nothing
+ * defines are left out too (see unusableLines).
+ */
+export function kicadModels(netlist: Pick<EditorNetlist, "items" | "lines">, symbols: Pick<SchematicSymbol, "ref" | "fields">[] = []): Set<string> {
+  const unusable = unusableLines(netlist, symbols);
+  return new Set(netlist.items.filter((i) => !i.off && !unusable.has(i.ref)).map((i) => i.ref));
 }
 
 /** A model file the circuit includes. The engine puts `text` where `path` says before it loads the circuit. */
@@ -102,7 +165,10 @@ export interface Deck {
   signals: DeckSignal[];
   codeParts: DeckCodePart[];
   placed: PlacedPart[];
-  /** Symbols that neither the library nor KiCad has a model for. They are left out of the circuit. */
+  /**
+   * Symbols that neither the library nor KiCad has a model for, by reference. They are left
+   * out of the circuit, and the rest runs without them.
+   */
   notSimulated: string[];
   /** What the user should know. It does not stop the run. */
   notes: string[];
@@ -113,6 +179,8 @@ export interface Deck {
 export interface BuildOptions {
   /** The symbols that take part, as the editor reported them. */
   symbols: SchematicSymbol[];
+  /** The symbols KiCad excludes from simulation. They have no line; their nets are tied to ground like those of a left-out symbol. */
+  excluded?: Pick<SchematicSymbol, "pins">[];
   /** KiCad's netlist of the same schematic. */
   netlist: EditorNetlist;
   /** matchSymbols() of exactly these symbols: `plan[i]` is about `symbols[i]`. */
@@ -134,7 +202,7 @@ function initialValue(input: PartInput): number {
   return input.default === "on" ? input.on : input.off;
 }
 
-export function buildDeck({ symbols, netlist, plan, parts, live = true, modelPath = (id, file) => `/sim-library/${id}/${file}` }: BuildOptions): Deck {
+export function buildDeck({ symbols, excluded = [], netlist, plan, parts, live = true, modelPath = (id, file) => `/sim-library/${id}/${file}` }: BuildOptions): Deck {
   if (plan.length !== symbols.length) throw new Error("the plan is not about these symbols");
   const errors: string[] = [];
   const notes: string[] = [];
@@ -207,20 +275,32 @@ export function buildDeck({ symbols, netlist, plan, parts, live = true, modelPat
     });
   }
 
-  // 2. KiCad's netlist without the lines we replace and without the placeholders
+  // 2. KiCad's netlist without the lines we replace and without the lines no simulator runs
   const mine = new Set(placed.map((p) => p.ref));
-  const placeholders = new Set(netlist.items.filter((i) => !i.off && i.device === "").map((i) => i.ref));
-  const notSimulated = [...placeholders].filter((ref) => !mine.has(ref)).sort(natural);
-  const kept = netlist.lines.filter((l) => l.ref === undefined || !(mine.has(l.ref) || placeholders.has(l.ref))).map((l) => l.text);
+  const unusable = unusableLines(netlist, symbols);
+  const notSimulated = [...unusable.keys()].filter((ref) => !mine.has(ref)).sort(natural);
+  const keptLines = netlist.lines.filter((l) => l.ref === undefined || !(mine.has(l.ref) || unusable.has(l.ref)));
+  const kept = keptLines.map((l) => l.text);
   if (/^\.end\s*$/i.test(kept[kept.length - 1] ?? "")) kept.pop();
   // The first line of a SPICE circuit is its title, whatever it says.
   const title = kept.shift() ?? ".title KiCad schematic";
 
-  const deck = [title, ...files.map((f) => `.include "${f.path}"`), ...kept.flatMap((t) => t.split("\n")), ...lines];
+  // 3. A symbol without a line (left out, switched off or excluded in KiCad) leaves the nets
+  // of its pins behind. A net that nothing else holds (a resistor between two chips that are
+  // both left out) has no path to ground, and the simulator finds no voltage for it. Each of
+  // those nets gets a path. A net with this pin alone ("unconnected-...") is in no line.
+  const hasLine = new Set([...mine, ...keptLines.flatMap((l) => (l.kind === "item" && l.ref !== undefined ? [l.ref] : []))]);
+  const ties = new Set<string>();
+  for (const sym of [...symbols.filter((s) => !hasLine.has(s.ref)), ...excluded])
+    for (const pin of Object.values(sym.pins))
+      if (pin.node && !/^(0|gnd)$/i.test(pin.node) && !/^unconnected-/i.test(pin.node)) ties.add(pin.node);
+  const tied = [...ties].sort(natural).map((node, i) => `Rpj_left_${i + 1} ${node} 0 ${LEFT_OUT_TIE}`);
+
+  const deck = [title, ...files.map((f) => `.include "${f.path}"`), ...kept.flatMap((t) => t.split("\n")), ...lines, ...tied];
   if (live) deck.push(LIVE_TRAN);
   deck.push(".end");
 
-  // 3. the simulator does not take a code-model line of any length
+  // 4. the simulator does not take a code-model line of any length
   for (const [where, text] of [["the circuit", deck.join("\n")], ...files.map((f) => [f.path, f.text])] as [string, string][])
     for (const l of codeModelLines(text))
       if (l.pieces > CODE_MODEL_LINE_MAX)
@@ -232,6 +312,8 @@ export function buildDeck({ symbols, netlist, plan, parts, live = true, modelPat
 export interface PrepareOptions {
   library: Pick<SimLibrary, "index" | "loadPart">;
   symbols: SchematicSymbol[];
+  /** The symbols KiCad excludes from simulation (see BuildOptions). */
+  excluded?: Pick<SchematicSymbol, "pins">[];
   netlist: EditorNetlist;
   /** Symbol uuid -> part id or "off": a pick that is not written on the symbol (yet). */
   overrides?: Record<string, string>;
@@ -247,10 +329,10 @@ export interface PreparedRun extends Deck {
 }
 
 /** The whole way from an open library and a schematic to a circuit: match, load the parts, build. */
-export async function prepareRun({ library, symbols, netlist, overrides, live, modelPath }: PrepareOptions): Promise<PreparedRun> {
-  const plan = matchSymbols(library.index, symbols, { overrides, kicadModels: kicadModels(netlist) });
+export async function prepareRun({ library, symbols, excluded, netlist, overrides, live, modelPath }: PrepareOptions): Promise<PreparedRun> {
+  const plan = matchSymbols(library.index, symbols, { overrides, kicadModels: kicadModels(netlist, symbols) });
   const ids = [...new Set(plan.flatMap((m) => (m.status === "matched" ? [m.partId] : [])))];
   const loaded = await Promise.all(ids.map((id) => library.loadPart(id)));
   const parts = new Map(loaded.map((p) => [p.id, p]));
-  return { plan, parts, ...buildDeck({ symbols, netlist, plan, parts, live, modelPath }) };
+  return { plan, parts, ...buildDeck({ symbols, excluded, netlist, plan, parts, live, modelPath }) };
 }
