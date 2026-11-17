@@ -52,6 +52,20 @@ describe("the settings of a placed part", () => {
   it("take the settings field last", () => {
     expect(resolveSettings(pot, sym("47k", "resistance=1k")).values.resistance).toEqual({ value: "1k", from: "field" });
   });
+  it("take what the part's line says this symbol has, over the default and under the rest", () => {
+    // one op-amp part for many types: the line of each symbol says how close its output gets to the supply
+    const amp = { settings: [{ name: "high", default: "0.05", accept: "^[0-9]+(\\.[0-9]+)?$" }, { name: "low", default: "0.05", accept: "^[0-9]+(\\.[0-9]+)?$" }] };
+    const of = (set?: Record<string, string>, field?: string) =>
+      Object.fromEntries(Object.entries(resolveSettings(amp, sym("LM358", field), set).values).map(([k, v]) => [k, `${v.value} (${v.from})`]));
+    expect(of()).toEqual({ high: "0.05 (default)", low: "0.05 (default)" });
+    expect(of({ high: "1.5" })).toEqual({ high: "1.5 (symbol)", low: "0.05 (default)" });
+    expect(of({ high: "1.5", low: "0.02" }, "high=0.2")).toEqual({ high: "0.2 (field)", low: "0.02 (symbol)" });
+    // a value the part does not allow is no value, and a name the part does not have is nothing
+    expect(of({ high: "lots", gain: "5" })).toEqual({ high: "0.05 (default)", low: "0.05 (default)" });
+    // the symbol's Value still comes after it
+    expect(resolveSettings(pot, sym("47k"), { resistance: "1k" }).values.resistance).toEqual({ value: "47k", from: "value" });
+    expect(resolveSettings(pot, sym("RV"), { resistance: "1k" }).values.resistance).toEqual({ value: "1k", from: "symbol" });
+  });
   it("drop a value the part does not allow, and say so", () => {
     expect(resolveSettings(pot, sym("47k", "resistance=lots"))).toEqual({
       values: { resistance: { value: "47k", from: "value" } },

@@ -58,22 +58,23 @@ export function settingFromValue(setting: PartSetting, text: string, whole = tru
 
 export interface ResolvedSettings {
   /** Every setting of the part with its value and where the value came from. */
-  values: Record<string, { value: string; from: "default" | "value" | "field" }>;
+  values: Record<string, { value: string; from: "default" | "symbol" | "value" | "field" }>;
   /** What was dropped and why, in plain words, for the user. */
   notes: string[];
 }
 
 /**
- * Where a value comes from, last wins: the part's default, the symbol's Value (when the part
- * says its Value is that setting and the Value is allowed, or one of the setting's
- * `valueForms` reads an allowed value out of it), the settings field. A value the part does
- * not allow is dropped with a note; it never reaches the netlist.
+ * Where a value comes from, last wins: the part's default, what the part's "fits" line says
+ * this symbol has (`set`), the symbol's Value (when the part says its Value is that setting
+ * and the Value is allowed, or one of the setting's `valueForms` reads an allowed value out
+ * of it), the settings field. A value the part does not allow is dropped with a note; it
+ * never reaches the netlist.
  *
  * The Value as it is stands for one setting, the first that allows it: a lamp's "12" is its
  * 12 V, and not its 12 A too. The forms can read several settings out of one Value ("12V
  * 100mA").
  */
-export function resolveSettings(manifest: Pick<PartManifest, "settings">, sym: { ref: string; value: string; fields: Record<string, string> }): ResolvedSettings {
+export function resolveSettings(manifest: Pick<PartManifest, "settings">, sym: { ref: string; value: string; fields: Record<string, string> }, set: Record<string, string> = {}): ResolvedSettings {
   const given = parseSettings(sym.fields[FIELD_SETTINGS] ?? "");
   const values: ResolvedSettings["values"] = {};
   const notes: string[] = [];
@@ -81,7 +82,9 @@ export function resolveSettings(manifest: Pick<PartManifest, "settings">, sym: {
   let taken = false; // the Value as it is has been one setting's value
   for (const s of settings) {
     let value = s.default;
-    let from: "default" | "value" | "field" = "default";
+    let from: "default" | "symbol" | "value" | "field" = "default";
+    const fitted = set[s.name];
+    if (fitted !== undefined && settingAllows(s, fitted)) { value = fitted; from = "symbol"; }
     const said = s.fromValue ? settingFromValue(s, sym.value, !taken) : null;
     if (said !== null) { value = said; from = "value"; }
     if (said !== null && said === sym.value) taken = true;

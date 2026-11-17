@@ -73,6 +73,29 @@ describe("rule 3: the library has a line for exactly this symbol", () => {
   it("refuses a symbol whose pins do not line up", () => {
     expect(one(sym("Device:R_Potentiometer", "10k", { "1": "1", "2": "2" }))).toMatchObject({ status: "error", rule: 3, reason: "\"potentiometer\" does not fit this symbol: the symbol has no pin for 3" });
   });
+  it("leaves open the pins of a unit that is not placed, when the part says a symbol may lack them", () => {
+    // a dual op-amp: two halves and a unit with the supply pins. KiCad lists the pins of the placed units only.
+    const table = { INP1: "3", INN1: "2", OUT1: "1", INP2: "5", INN2: "6", OUT2: "7", VP: "8", VN: "4" };
+    const dual: IndexPart = { ...part("opamp-dual", [{ symbol: "Amp:Dual", pins: table }], Object.keys(table)), mayLack: Object.keys(table) };
+    const idx = { parts: [dual] };
+    const all = { "1": "", "2": "-", "3": "+", "4": "V-", "5": "+", "6": "-", "7": "", "8": "V+" };
+    expect(one(sym("Amp:Dual", "LM358", all), undefined, idx)).toMatchObject({ status: "matched", pinMap: ["3", "2", "1", "5", "6", "7", "8", "4"], unusedPins: [] });
+    // the second half is not on the sheet: its pins keep their numbers and stay open
+    const { "5": _5, "6": _6, "7": _7, ...firstHalf } = all;
+    expect(one(sym("Amp:Dual", "LM358", firstHalf), undefined, idx)).toMatchObject({ status: "matched", pinMap: ["3", "2", "1", "5", "6", "7", "8", "4"], unusedPins: [] });
+    // a symbol with none of the part's pins is still refused
+    expect(one(sym("Amp:Dual", "LM358", { A: "", B: "" }), undefined, idx)).toMatchObject({ status: "error", reason: "\"opamp-dual\" does not fit this symbol: the symbol has none of the part's pins" });
+    // and a part that does not say so is refused as before
+    const strict = { parts: [{ ...dual, mayLack: ["INP2", "INN2"] }] };
+    expect(one(sym("Amp:Dual", "LM358", firstHalf), undefined, strict)).toMatchObject({ status: "error", reason: "\"opamp-dual\" does not fit this symbol: the symbol has no pin for OUT2" });
+  });
+  it("passes on the settings a line says this symbol has", () => {
+    const amp = part("opamp", [{ symbol: "Amp:Classic", set: { high: "1.5", low: "1.5" } }, { symbol: "Amp:Plain" }]);
+    const at = (libId: string, fields?: Record<string, string>) => one(sym(libId, "", { "1": "", "2": "" }, fields), undefined, { parts: [amp] });
+    expect(at("Amp:Classic")).toMatchObject({ status: "matched", rule: 3, set: { high: "1.5", low: "1.5" } });
+    expect(at("Amp:Plain")).not.toHaveProperty("set");
+    expect(at("Amp:Classic", { [FIELD_PART]: "opamp" })).toMatchObject({ status: "matched", rule: 1, set: { high: "1.5", low: "1.5" } });
+  });
 });
 
 describe("rule 4: only the value is known", () => {

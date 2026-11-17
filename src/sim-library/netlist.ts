@@ -13,7 +13,8 @@
 //     ground through a very large resistor, so that a net which only that symbol held still
 //     has a voltage,
 //   - gives a supply wire whose name states a voltage (+5V) a source, when no source of
-//     the schematic sits on it (supplies.ts),
+//     the schematic sits on it (supplies.ts). A regulator of the library is such a source
+//     when a source of the schematic reaches its input,
 //   - includes the model file of every part that is used.
 // The nodes come from the editor's pin-to-net table (kicadSimSymbols). Which of KiCad's
 // lines belongs to which symbol comes from the editor too (kicadSimNetlist): nothing here
@@ -24,7 +25,7 @@ import type { PartDigital, PartInput } from "./format.js";
 import { matchSymbols, type Match, type SchematicSymbol } from "./match.js";
 import { analogParams, resolveSettings, type ResolvedSettings } from "./settings.js";
 import { CODE_MODEL_LINE_MAX, codeModelLines, withExternalSources } from "./spice-text.js";
-import { powerByName, supplyLines, type AssumedSource, type Power } from "./supplies.js";
+import { fedParts, powerByName, supplyLines, type AssumedSource, type Passing, type Power, type Unpowered } from "./supplies.js";
 
 /**
  * What ties a net of a left-out symbol to ground: large enough to carry nothing that matters
@@ -34,6 +35,9 @@ export const LEFT_OUT_TIE = "1g";
 
 /** "Run until stopped": a transient analysis with a step ceiling of 1 ms and no end in sight. */
 export const LIVE_TRAN = ".tran 1m 100000 0 1m";
+
+/** What a live run starts with when one of its parts asks for Gear's method (PartAnalog.method). */
+export const LIVE_GEAR = ".options method=gear";
 
 const natural = (a: string, b: string): number => a.localeCompare(b, "en", { numeric: true });
 
@@ -257,6 +261,14 @@ export function buildDeck({ symbols, excluded = [], netlist, plan, parts, live =
   const driven = new Set<string>();
   /** The sources that run with their part's own voltage. */
   const assumed: AssumedSource[] = [];
+  /** The parts with nothing connected to a pin they take their power through. */
+  const noPower: Unpowered[] = [];
+  /** The parts that pass power on (regulators): a source only when one reaches their input. */
+  const passing: Passing[] = [];
+  /** The nets each simulated part that is not a chip joins: power on one reaches the others. */
+  const links: string[][] = [];
+  /** A part asks for Gear's method. */
+  let gear = false;
   let order = 0;
   for (const { m, sym } of matched) {
     if (items.get(m.ref)?.off) {
@@ -269,10 +281,17 @@ export function buildDeck({ symbols, excluded = [], netlist, plan, parts, live =
       continue;
     }
     const man = part.manifest;
-    const settings = resolveSettings(man, sym);
+    const settings = resolveSettings(man, sym, m.set);
     notes.push(...settings.notes);
     // A pin without a net gets a node of its own, named the way KiCad names a net with one pin.
     const nodes = m.pinMap.map((n) => sym.pins[n]?.node ?? `unconnected-${m.ref}-${n}`);
+    // A chip without its supply does nothing, and looks like a part that is broken.
+    const open = (man.powered ?? []).flatMap((pin) => {
+      const i = man.pins.indexOf(pin);
+      return i >= 0 && /^unconnected-/i.test(nodes[i] ?? "unconnected-") ? [m.pinMap[i] ?? pin] : [];
+    });
+    if (open.length) noPower.push({ ref: m.ref, pins: open.sort(natural) });
+    if (man.analog.method === "gear") gear = true;
     const params = Object.entries(analogParams(man, settings)).map(([k, v]) => `${k}=${v}`);
     const number = man.digital ? ++order : 0;
     if (man.digital) params.push(`${man.digital.orderParam}=${number}`);
@@ -280,9 +299,20 @@ export function buildDeck({ symbols, excluded = [], netlist, plan, parts, live =
     lines.push(`${name} ${nodes.join(" ")} ${man.analog.subckt}${params.length ? " " + params.join(" ") : ""}`);
     // A source (a battery): the wires on its supply pins have their power from it. When the
     // symbol's Value does not say its voltage, it runs with the part's own, and the run says so.
-    for (const pin of man.supplies ?? []) {
+    // A part that passes power on (a regulator) is a source only when one reaches its input.
+    const netsOf = (pins: readonly string[]): string[] => pins.flatMap((pin) => {
       const node = nodes[man.pins.indexOf(pin)];
-      if (node !== undefined) driven.add(node);
+      return node === undefined ? [] : [node];
+    });
+    if (man.supplies?.length && man.suppliesFrom?.length) {
+      const pins = man.suppliesFrom.flatMap((pin) => {
+        const i = man.pins.indexOf(pin);
+        return i >= 0 ? [m.pinMap[i] ?? pin] : [];
+      });
+      passing.push({ ref: m.ref, pins: pins.sort(natural), from: netsOf(man.suppliesFrom), to: netsOf(man.supplies) });
+    } else {
+      for (const node of netsOf(man.supplies ?? [])) driven.add(node);
+      if (!man.powered?.length) links.push(nodes);
     }
     if (man.supplies?.length) {
       for (const s of man.settings ?? []) {
@@ -345,16 +375,22 @@ export function buildDeck({ symbols, excluded = [], netlist, plan, parts, live =
     for (const statement of statements(l.text)) {
       const words = statement.trim().split(/\s+/);
       if (/^v/i.test(words[0] ?? "")) for (const node of words.slice(1, 3)) driven.add(node);
+      // what KiCad wrote a line for and power passes through: a resistor, a coil, a diode
+      // (two nodes), a transistor (three)
+      else if (/^[rld]/i.test(words[0] ?? "")) links.push(words.slice(1, 3));
+      else if (/^[qmj]/i.test(words[0] ?? "")) links.push(words.slice(1, 4));
     }
   }
   const nets = [...symbols, ...excluded].flatMap((s) => Object.values(s.pins).flatMap((p) => (p.node ? [p.node] : [])));
-  const power: Power = { ...powerByName(nets, driven), assumed };
+  const { fed, unfed } = fedParts(nets, driven, links, passing);
+  for (const p of passing) if (fed.has(p.ref)) for (const node of p.to) driven.add(node);
+  const power: Power = { ...powerByName(nets, driven), assumed, noPower, unfed };
 
   const deck = [
     title, ...files.map((f) => `.include "${f.path}"`), ...kept.flatMap((t) => t.split("\n")),
     ...lines, ...tied, ...supplyLines(power.byName),
   ];
-  if (live) deck.push(LIVE_TRAN);
+  if (live) deck.push(...(gear ? [LIVE_GEAR] : []), LIVE_TRAN);
   deck.push(".end");
 
   // 5. the simulator does not take a code-model line of any length

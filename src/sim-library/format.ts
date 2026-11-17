@@ -31,6 +31,13 @@ export interface PartFit {
    * 7-segment display).
    */
   origin?: [number, number];
+  /**
+   * The part's settings as this symbol has them: { setting: value }. One part stands for
+   * a family of types, and the symbol's name says which (an op-amp: how close its output
+   * gets to the supply). It comes after the part's default and before the symbol's Value
+   * and the settings field.
+   */
+  set?: Record<string, string>;
 }
 
 /** Something the user may change on a placed part. Its value goes into the SPICE deck. */
@@ -63,6 +70,13 @@ export interface PartAnalog {
   subckt: string;
   /** Subcircuit parameter -> a fixed text, or "$name" for the setting of that name. */
   params?: Record<string, string>;
+  /**
+   * "gear": a live run with this part is computed by Gear's method. For a model that
+   * switches hard inside (an op-amp that hits its limits): at the step ceiling of a live run
+   * the usual method (trapezoidal) rings, and a circuit that flips by itself then flips
+   * early. Left out: the usual method.
+   */
+  method?: "gear";
 }
 
 /**
@@ -143,6 +157,26 @@ export interface PartManifest {
    * such a pin has its power from the part, so it is not powered by its name.
    */
   supplies?: string[];
+  /**
+   * The pins through which the part takes the power it passes on (a regulator: its input).
+   * Only with `supplies`. Such a part is a source only when a source of the schematic
+   * reaches one of these pins: a battery, a voltage source, a wire powered by its name or
+   * another such part, on the pin's wire or behind parts that are not chips (a switch, a
+   * diode, a resistor). When none does, the part gives nothing: the wires on `supplies` are
+   * powered by their names as if the part were not there, and the run says so.
+   */
+  suppliesFrom?: string[];
+  /**
+   * The pins a symbol may lack: the pins of a unit that is not placed (one half of a dual
+   * op-amp). Such a pin is left open. A pin that is not listed here and has no pin of the
+   * symbol refuses the part.
+   */
+  mayLack?: string[];
+  /**
+   * The pins the part takes its power through. With nothing connected to one of them the
+   * part does nothing, and the run says so.
+   */
+  powered?: string[];
   settings?: PartSetting[];
   analog: PartAnalog;
   digital?: PartDigital;
@@ -166,6 +200,8 @@ export interface IndexPart {
   description: string;
   fits: PartFit[];
   pins: string[];
+  /** The pins a symbol may lack (see PartManifest). */
+  mayLack?: string[];
   /** True when the part has a digital half. */
   code: boolean;
   emulator?: string;

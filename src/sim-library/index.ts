@@ -17,13 +17,14 @@ export {
   type EditorNetlist, type EditorSchematic, type EditorSymbol, type NetlistItem, type NetlistLine, type NetlistMessage,
 } from "./editor.js";
 export {
-  LEFT_OUT_TIE, LIVE_TRAN, buildDeck, kicadModels, prepareRun, unusableLines,
+  LEFT_OUT_TIE, LIVE_GEAR, LIVE_TRAN, buildDeck, kicadModels, prepareRun, unusableLines,
   type BuildOptions, type Deck, type DeckCodePart, type DeckFile, type DeckInput, type DeckSignal, type PlacedPart,
   type PrepareOptions, type PreparedRun, type Unusable,
 } from "./netlist.js";
 export { analogParams, formatSettings, parseSettings, resolveSettings, settingAllows, settingFromValue, type ResolvedSettings } from "./settings.js";
 export {
-  SUPPLY_OHMS, isSupplyWithoutVolts, namedVolts, powerByName, supplyLines, type AssumedSource, type NamedSupply, type Power,
+  SUPPLY_OHMS, fedParts, isSupplyWithoutVolts, namedVolts, powerByName, supplyLines,
+  type AssumedSource, type NamedSupply, type Passing, type Power, type Unpowered,
 } from "./supplies.js";
 export {
   CODE_MODEL_LINE_MAX, codeModelLines, findSource, hasElement, subcircuits, withExternalSources, type Subcircuit,

@@ -16,6 +16,13 @@
 //
 // A supply name that states no voltage (VCC, VDD, VBUS, +BATT) gets nothing: there is no
 // number to take. The run says that too.
+//
+// A regulator of the library is a source too, but only with something to regulate. A real
+// board takes its power through a connector that nothing simulates: the regulator behind it
+// has no input, and the wire +3V3 on its output would sit at 0 V, where it ran before the
+// regulator had a model. So a regulator counts as a source when a source of the schematic
+// reaches its input (fedParts() below). When none does, the wire on its output keeps the
+// power of its name, and the run says which regulator gives nothing.
 
 /** A net's own name: KiCad puts the sheet in front of a label's name ("/Power/5V"). */
 const ownName = (net: string): string => net.slice(net.lastIndexOf("/") + 1);
@@ -75,6 +82,24 @@ export interface AssumedSource {
   unit: string;
 }
 
+/** A placed part with nothing connected to pins it takes its power through. */
+export interface Unpowered {
+  ref: string;
+  /** Those pins, by the symbol's pin numbers. */
+  pins: string[];
+}
+
+/** A part that passes power on (a regulator), as the netlist step sees it. */
+export interface Passing {
+  ref: string;
+  /** The pins it takes its power through, by the symbol's pin numbers. */
+  pins: string[];
+  /** The nets on those pins. */
+  from: string[];
+  /** The nets on the pins it powers. */
+  to: string[];
+}
+
 export interface Power {
   /** Supply wires that got a source of ours: the name states the voltage, and no source of the schematic sits on the wire. */
   byName: NamedSupply[];
@@ -82,6 +107,10 @@ export interface Power {
   noVolts: string[];
   /** Sources of the schematic whose voltage is the part's default, because the symbol's Value does not say it. */
   assumed: AssumedSource[];
+  /** Parts that do nothing, because nothing is connected to a pin they take their power through. */
+  noPower: Unpowered[];
+  /** Regulators that give nothing, because no source of the schematic reaches their input. `pins`: the input. */
+  unfed: Unpowered[];
 }
 
 /**
@@ -116,6 +145,76 @@ export function powerByName(nets: Iterable<string>, driven: Iterable<string>): P
     else if (isSupplyWithoutVolts(net)) out.noVolts.push(net);
   }
   return out;
+}
+
+/**
+ * Which regulators have something to regulate.
+ *
+ * `nets`: the nets of the circuit. `driven`: the nets a source of the schematic sits on.
+ * `links`: for every simulated part that is not a chip (a switch, a diode, a resistor), the
+ * nets on its pins; power on one of them reaches the others. `passing`: the regulators.
+ *
+ * A regulator is fed when one of its input nets is reached by a source: a driven net, a net
+ * powered by its name, or the output of a fed regulator. Ground is never walked through.
+ * The rest have no source. Of those, a regulator with a wire on its output whose name
+ * states a voltage hands that wire back to its name, the one furthest upstream first, so
+ * that a second regulator behind it is fed again (VIN, no source -> U1 -> +5V -> U2 -> +3V3:
+ * +5V is powered by its name, U2 regulates).
+ */
+export function fedParts(nets: Iterable<string>, driven: Iterable<string>, links: Iterable<readonly string[]>, passing: readonly Passing[]): { fed: Set<string>; unfed: Unpowered[] } {
+  // a wire that is ground, a second ground or a pin with nothing on it carries no power to anyone
+  const dead = (net: string): boolean => isGround(net) || namedVolts(net) === 0 || /^unconnected-/i.test(net);
+  const parent = new Map<string, string>();
+  const root = (net: string): string => {
+    let at = net.toLowerCase();
+    for (let up = parent.get(at); up !== undefined; up = parent.get(at)) at = up;
+    return at;
+  };
+  for (const group of links) {
+    const live = group.filter((n) => !dead(n));
+    for (const net of live.slice(1)) {
+      const a = root(live[0] ?? net);
+      const b = root(net);
+      if (a !== b) parent.set(b, a);
+    }
+  }
+  const outputs = new Set(passing.flatMap((p) => p.to.map((n) => n.toLowerCase())));
+  const stated = (net: string): boolean => !dead(net) && namedVolts(net) !== null;
+  const powered = new Set<string>();
+  const power = (list: Iterable<string>): void => {
+    for (const net of list) if (!dead(net)) powered.add(root(net));
+  };
+  power(driven);
+  power([...nets].filter((n) => stated(n) && !outputs.has(n.toLowerCase())));
+
+  const reached = (p: Passing): boolean => p.from.some((n) => !dead(n) && powered.has(root(n)));
+  const behind = (q: Passing, p: Passing): boolean => q !== p && q.to.some((n) => !dead(n) && p.from.some((m) => !dead(m) && root(m) === root(n)));
+  let open = [...passing].sort((a, b) => natural(a.ref, b.ref));
+  const fed = new Set<string>();
+  const unfed: Passing[] = [];
+  for (;;) {
+    const now = open.filter(reached);
+    if (now.length) {
+      for (const p of now) {
+        fed.add(p.ref);
+        power(p.to);
+      }
+      open = open.filter((p) => !now.includes(p));
+      continue;
+    }
+    const named = open.filter((p) => p.to.some(stated));
+    if (!named.length) break;
+    const first = named.filter((p) => !named.some((q) => behind(q, p)));
+    // regulators in a ring: the first by its reference
+    const back = first.length ? first : named.slice(0, 1);
+    for (const p of back) {
+      unfed.push(p);
+      power(p.to.filter(stated));
+    }
+    open = open.filter((p) => !back.includes(p));
+  }
+  unfed.push(...open);
+  return { fed, unfed: unfed.sort((a, b) => natural(a.ref, b.ref)).map(({ ref, pins }) => ({ ref, pins })) };
 }
 
 /** The lines that power the wires: for each a source to ground, and its small resistance to the wire. */

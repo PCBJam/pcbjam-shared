@@ -42,7 +42,7 @@ export interface Candidate { partId: string; title: string; fits?: boolean; reas
 
 export type Match = Base & (
   /** The part is used. pinMap[i] is the symbol pin number the part's pin i goes to. */
-  | { status: "matched"; rule: 1 | 3; partId: string; pinMap: string[]; unusedPins: string[]; origin?: [number, number] }
+  | { status: "matched"; rule: 1 | 3; partId: string; pinMap: string[]; unusedPins: string[]; origin?: [number, number]; set?: Record<string, string> }
   /** The user switched simulation off for this symbol. */
   | { status: "off"; rule: 1 }
   /** A part was found and cannot be used; `reason` says why in plain words. */
@@ -74,12 +74,18 @@ export type PinResult = { ok: true; map: string[]; unused: string[] } | { ok: fa
  * Which pin of the symbol each pin of the part goes to. A "fits" line says how: "number",
  * "name" or a table (see PinStyle). The table belongs to the "fits" line because one part can
  * fit several symbols. Refused when the pins do not line up.
+ *
+ * A pin the part says a symbol may lack (the pin of a unit that is not placed) keeps its
+ * place in the map with the number the "fits" line gives it; the symbol has no such pin, so
+ * it is left open. At least one pin of the part has to be there.
  */
-export function resolvePins(part: Pick<IndexPart, "pins">, fit: PartFit | undefined, sym: SchematicSymbol): PinResult {
+export function resolvePins(part: Pick<IndexPart, "pins" | "mayLack">, fit: PartFit | undefined, sym: SchematicSymbol): PinResult {
   const style = fit?.pins ?? "number";
   const numbers = Object.keys(sym.pins);
+  const mayLack = new Set(part.mayLack ?? []);
   const map: string[] = [];
   const missing: string[] = [];
+  let found = 0;
   for (const p of part.pins) {
     let n: string | undefined;
     if (style === "number") n = p;
@@ -88,17 +94,20 @@ export function resolvePins(part: Pick<IndexPart, "pins">, fit: PartFit | undefi
       if (hits.length > 1) return { ok: false, reason: `the symbol has ${hits.length} pins named ${p}` };
       n = hits[0];
     } else n = style[p];
-    if (n === undefined || !sym.pins[n]) missing.push(p);
-    else map.push(n);
+    if (n !== undefined && sym.pins[n]) { map.push(n); found++; }
+    else if (mayLack.has(p)) map.push(n ?? p);
+    else missing.push(p);
   }
   if (missing.length) return { ok: false, reason: `the symbol has no pin for ${missing.join(", ")}` };
+  if (!found && part.pins.length) return { ok: false, reason: "the symbol has none of the part's pins" };
   if (new Set(map).size !== map.length) return { ok: false, reason: "two pins of the part go to one pin of the symbol" };
   const used = new Set(map);
   return { ok: true, map, unused: numbers.filter((k) => !used.has(k)) };
 }
 
-/** Where the part's overlay sits on the symbol, when the "fits" line says so. */
-const originOf = (fit: PartFit): { origin?: [number, number] } => (fit.origin ? { origin: fit.origin } : {});
+/** What a "fits" line says beside the pins: where the part's overlay sits on the symbol, and the settings this symbol has. */
+const originOf = (fit: PartFit): { origin?: [number, number]; set?: Record<string, string> } =>
+  ({ ...(fit.origin ? { origin: fit.origin } : {}), ...(fit.set ? { set: fit.set } : {}) });
 
 function matchOne(byId: Map<string, IndexPart>, parts: IndexPart[], sym: SchematicSymbol, override: string | undefined, hasKicadModel: boolean): Match {
   const base: Base = { ref: sym.ref, uuid: sym.uuid, sheet: sym.sheet, libId: sym.libId, value: sym.value };
