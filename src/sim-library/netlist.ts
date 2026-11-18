@@ -24,7 +24,7 @@ import type { EditorNetlist } from "./editor.js";
 import type { PartDigital, PartInput } from "./format.js";
 import { matchSymbols, type Match, type SchematicSymbol } from "./match.js";
 import { analogParams, resolveSettings, type ResolvedSettings } from "./settings.js";
-import { CODE_MODEL_LINE_MAX, codeModelLines, withExternalSources } from "./spice-text.js";
+import { CODE_MODEL_LINE_MAX, chipFile, chipModel, codeModelLines, withExternalSources } from "./spice-text.js";
 import { fedParts, powerByName, supplyLines, type AssumedSource, type Passing, type Power, type Unpowered } from "./supplies.js";
 
 /**
@@ -150,6 +150,14 @@ export interface DeckSignal {
 export interface DeckCodePart {
   partId: string;
   kind: PartDigital["kind"];
+  /**
+   * The name the model asks the engine for its code under. A part's id; for a chip that runs
+   * an emulator the id and the chip's number ("esp32-c3-wroom-02_1"), so that every placed
+   * chip has code, and with it a firmware image, of its own.
+   */
+  name: string;
+  /** Only for an emulator: the placed chip the code is for. */
+  ref?: string;
   /** The compiled code of a "part-wasm" part. Null for an emulator: its files are loaded by the step that runs it. */
   logic: Uint8Array | null;
 }
@@ -256,7 +264,8 @@ export function buildDeck({ symbols, excluded = [], netlist, plan, parts, live =
   const signals: DeckSignal[] = [];
   const codeParts: DeckCodePart[] = [];
   const placed: PlacedPart[] = [];
-  const used = new Set<string>();
+  /** The model text of each part that is in the circuit, as the run takes it. */
+  const used = new Map<string, string>();
   /** The nets a source sits on: no power by name for them. */
   const driven = new Set<string>();
   /** The sources that run with their part's own voltage. */
@@ -296,7 +305,9 @@ export function buildDeck({ symbols, excluded = [], netlist, plan, parts, live =
     const number = man.digital ? ++order : 0;
     if (man.digital) params.push(`${man.digital.orderParam}=${number}`);
     const name = `X${m.ref}`;
-    lines.push(`${name} ${nodes.join(" ")} ${man.analog.subckt}${params.length ? " " + params.join(" ") : ""}`);
+    // A chip that runs firmware has its model to itself (see chipModel), under a name of its own.
+    const own = man.digital?.kind === "emulator" ? `_${number}` : "";
+    lines.push(`${name} ${nodes.join(" ")} ${man.analog.subckt}${own}${params.length ? " " + params.join(" ") : ""}`);
     // A source (a battery): the wires on its supply pins have their power from it. When the
     // symbol's Value does not say its voltage, it runs with the part's own, and the run says so.
     // A part that passes power on (a regulator) is a source only when one reaches its input.
@@ -321,15 +332,27 @@ export function buildDeck({ symbols, excluded = [], netlist, plan, parts, live =
       }
     }
 
-    if (!used.has(m.partId)) {
-      used.add(m.partId);
+    const first = !used.has(m.partId);
+    if (first) {
       const sources = (man.inputs ?? []).map((i) => i.source);
       let text = part.analog;
       if (live && sources.length) {
         try { text = withExternalSources(part.analog, man.analog.subckt, sources); } catch (err) { errors.push(`${m.partId}: ${err instanceof Error ? err.message : String(err)}`); }
       }
-      files.push({ path: modelPath(m.partId, man.analog.file), text });
-      if (man.digital) codeParts.push({ partId: m.partId, kind: man.digital.kind, logic: part.logic });
+      used.set(m.partId, text);
+    }
+    if (own) {
+      // one model and one piece of code per placed chip
+      const code = `${m.partId}${own}`;
+      try {
+        files.push({ path: modelPath(m.partId, chipFile(man.analog.file, number)), text: chipModel(used.get(m.partId) ?? "", man.analog.subckt, m.partId, own) });
+      } catch (err) {
+        errors.push(`${m.ref}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      codeParts.push({ partId: m.partId, kind: "emulator", name: code, ref: m.ref, logic: null });
+    } else if (first) {
+      files.push({ path: modelPath(m.partId, man.analog.file), text: used.get(m.partId) ?? "" });
+      if (man.digital) codeParts.push({ partId: m.partId, kind: man.digital.kind, name: m.partId, logic: part.logic });
     }
 
     const inst = `x${m.ref.toLowerCase()}`;

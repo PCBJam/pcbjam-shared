@@ -107,3 +107,38 @@ export function withExternalSources(text: string, subckt: string, sources: strin
   if (done.size !== sources.length) throw new Error(`${subckt}: not every input source was found (${sources.join(", ")})`);
   return out.join("\n");
 }
+
+/**
+ * The model of one placed chip that runs an emulator. Every placed chip has its own code
+ * (its firmware image is its own), and the simulator finds a part's code by the name its
+ * model asks for: `simulation="<part id>"`. ngspice puts no number of a placed chip into
+ * that name, so the netlist step writes the model once per chip: the subcircuit and the
+ * name it asks for both get `suffix`.
+ *
+ * The file may hold nothing but the part's one subcircuit: anything else would be defined
+ * once per chip.
+ */
+export function chipModel(text: string, subckt: string, codeName: string, suffix: string): string {
+  const { subs, outside } = subcircuits(text);
+  if (subs.size !== 1 || !subs.has(subckt.toLowerCase()) || outside.length)
+    throw new Error(`${subckt}: the model file of a chip may hold only its one subcircuit`);
+  const asks = new RegExp(`(simulation\\s*=\\s*")${codeName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(")`);
+  let asked = 0;
+  const out = text.split(/\r?\n/).map((line) => {
+    const start = /^(\.subckt\s+\S+)(.*)$/i.exec(line);
+    if (start) return `${start[1]}${suffix}${start[2]}`;
+    const end = /^(\.ends\s+\S+)(.*)$/i.exec(line);
+    if (end) return `${end[1]}${suffix}${end[2]}`;
+    if (line.trim().startsWith("*") || !asks.test(line)) return line;
+    asked++;
+    return line.replace(asks, `$1${codeName}${suffix}$2`);
+  });
+  if (asked !== 1) throw new Error(`${subckt}: the model must ask for its code once, as simulation="${codeName}"`);
+  return out.join("\n");
+}
+
+/** The name of a placed chip's own model file: "model.lib" for chip 2 is "model.2.lib". */
+export function chipFile(file: string, number: number): string {
+  const dot = file.lastIndexOf(".");
+  return dot > file.lastIndexOf("/") + 1 ? `${file.slice(0, dot)}.${number}${file.slice(dot)}` : `${file}.${number}`;
+}

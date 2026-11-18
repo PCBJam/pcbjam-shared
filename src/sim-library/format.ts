@@ -204,16 +204,26 @@ export interface IndexPart {
   mayLack?: string[];
   /** True when the part has a digital half. */
   code: boolean;
+  /** The emulator a chip part runs its firmware in (an id of `LibraryIndex.emulators`). */
   emulator?: string;
   files: IndexFile[];
 }
 
+/**
+ * A chip emulator the library carries: somebody else's program that runs the user's firmware.
+ * Its files sit beside the snapshots, at emulators/<id>/<version>/<file>, and are pinned by
+ * their checksums here; a new release is a new version, decided by us.
+ */
 export interface IndexEmulator {
   id: string;
   version: string;
   title: string;
   licence: string;
   origin: string;
+  /** Which of its files is the emulator itself, a WebAssembly module. */
+  program: string;
+  /** Which of its files is the JavaScript that loads the program. */
+  loader: string;
   files: IndexFile[];
 }
 

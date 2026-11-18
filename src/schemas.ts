@@ -117,6 +117,78 @@ export const projectSchema = z.object({
 });
 export type Project = z.infer<typeof projectSchema>;
 
+// --- a chip's firmware image as a project file (live simulation) ---
+// A microcontroller of the simulation library runs the user's own program: the
+// merged flash image, the file that is written to the real chip at address 0.
+// It is kept as a file of the project. This says what such a file is, for
+// every place that takes one: a server's upload, and the editor's page before
+// it sends a picked file.
+
+/** A firmware image's name ends in one of these. */
+export const FIRMWARE_UPLOAD_EXTENSIONS: ReadonlySet<string> = new Set([".bin"]);
+
+/**
+ * The largest firmware image a project takes. The Arduino build pads its merged
+ * image to the size of the flash, and the largest module of the library has
+ * 16 MB of it.
+ */
+export const MAX_FIRMWARE_UPLOAD_BYTES = 16 * 1024 * 1024;
+
+/** How many leading bytes `looksLikeFirmware` inspects: the header of an ESP32 image. */
+export const FIRMWARE_SNIFF_BYTES = 24;
+
+/** Whether a project-relative path is a firmware image by its name. */
+export function isFirmwareUploadPath(relPath: string): boolean {
+  const base = (relPath.split("/").pop() ?? "").toLowerCase();
+  if (base.startsWith(".")) return false;
+  const dot = base.lastIndexOf(".");
+  return dot > 0 && FIRMWARE_UPLOAD_EXTENSIONS.has(base.slice(dot));
+}
+
+/**
+ * Whether the first bytes of a file are the header of an ESP32 image: the magic
+ * byte 0xE9 and a segment count an image can have (1 to 16). A merged flash
+ * image starts with the bootloader's.
+ */
+export function looksLikeFirmware(head: Uint8Array): boolean {
+  if (head.length < FIRMWARE_SNIFF_BYTES) return false;
+  const segments = head[1] ?? 0;
+  return head[0] === 0xe9 && segments >= 1 && segments <= 16;
+}
+
+/** A chip an ESP32 image can be built for. */
+export interface FirmwareChip {
+  /** The number in the image's header. */
+  id: number;
+  /** The name Espressif's tools use for the chip. */
+  chip: string;
+  /** The name people read. */
+  title: string;
+}
+
+/** The chips an ESP32 image names in its header (esp_chip_id_t of ESP-IDF). */
+export const FIRMWARE_CHIPS: readonly FirmwareChip[] = [
+  { id: 0x0000, chip: "esp32", title: "ESP32" },
+  { id: 0x0002, chip: "esp32s2", title: "ESP32-S2" },
+  { id: 0x0005, chip: "esp32c3", title: "ESP32-C3" },
+  { id: 0x0009, chip: "esp32s3", title: "ESP32-S3" },
+  { id: 0x000c, chip: "esp32c2", title: "ESP32-C2" },
+  { id: 0x000d, chip: "esp32c6", title: "ESP32-C6" },
+  { id: 0x0010, chip: "esp32h2", title: "ESP32-H2" },
+  { id: 0x0012, chip: "esp32p4", title: "ESP32-P4" },
+  { id: 0x0014, chip: "esp32c61", title: "ESP32-C61" },
+  { id: 0x0017, chip: "esp32c5", title: "ESP32-C5" },
+];
+
+/**
+ * The number of the chip an ESP32 image was built for: bytes 12 and 13 of its
+ * header. An image runs on that chip only. Null for what is no image.
+ */
+export function firmwareChipId(head: Uint8Array): number | null {
+  if (!looksLikeFirmware(head)) return null;
+  return (head[12] ?? 0) | ((head[13] ?? 0) << 8);
+}
+
 /** Request/response header for a project file's opaque CAS generation. */
 export const PROJECT_FILE_REVISION_HEADER = "x-pcbjam-file-revision";
 

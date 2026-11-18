@@ -4,11 +4,17 @@
 //   1. current.json                         which snapshot is the current one
 //   2. <snapshot>/index.json                every part: what it fits, its pins, its files
 //   3. <snapshot>/parts/<id>/<file>         one file of one part, checked against the index
+//      emulators/<id>/<version>/<file>      one file of a chip emulator, checked the same way.
+//                                           Beside the snapshots: an emulator is megabytes and
+//                                           changes with its own releases, not with the parts
 //
 // A snapshot never changes once it is published, so 2 and 3 can be cached forever; only 1 is
 // asked again. Works the same in a page and under Node: pass the base URL and, if needed, a
 // fetch function.
-import { INDEX_SCHEMA, POINTER_SCHEMA, SNAPSHOT_NAME, type IndexPart, type LibraryIndex, type LibraryPointer, type PartManifest } from "./format.js";
+import {
+  INDEX_SCHEMA, POINTER_SCHEMA, SNAPSHOT_NAME, type IndexEmulator, type IndexFile, type IndexPart, type LibraryIndex, type LibraryPointer,
+  type PartManifest,
+} from "./format.js";
 
 export async function sha256(bytes: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", bytes as BufferSource);
@@ -41,6 +47,10 @@ export interface SimLibrary {
   file(id: string, name: string): Promise<Uint8Array>;
   text(id: string, name: string): Promise<string>;
   loadPart(id: string): Promise<LoadedPart>;
+  /** A chip emulator the library carries, as the index describes it. */
+  emulator(id: string): IndexEmulator | undefined;
+  /** One file of an emulator, as bytes. Refused when it is not the file the index describes. */
+  emulatorFile(id: string, name: string): Promise<Uint8Array>;
   /** How much was asked for so far. */
   requests: { pointer: number; index: number; files: number; bytes: number };
 }
@@ -70,27 +80,38 @@ export async function openLibrary(base: string, { fetch: f, version }: OpenOptio
   if (index.version !== snapshot) throw new Error(`simulation library: asked for snapshot ${snapshot}, got ${index.version}`);
 
   const byId = new Map(index.parts.map((p) => [p.id, p]));
+  const emulators = new Map((index.emulators ?? []).map((e) => [e.id, e]));
   const files = new Map<string, Promise<Uint8Array>>();
 
-  const file = (id: string, name: string): Promise<Uint8Array> => {
-    const key = `parts/${id}/${name}`;
-    let got = files.get(key);
+  /** One file of the library, once, checked against what the index says about it. */
+  const checked = (path: string, label: string, missing: string, meta: IndexFile | undefined): Promise<Uint8Array> => {
+    let got = files.get(path);
     if (!got) {
       got = (async () => {
-        const meta = byId.get(id)?.files.find((x) => x.name === name);
-        if (!meta) throw new Error(`simulation library: part "${id}" has no file "${name}"`);
+        if (!meta) throw new Error(`simulation library: ${missing}`);
         requests.files++;
-        const bytes = new Uint8Array(await (await get(`${snapshot}/${key}`)).arrayBuffer());
+        const bytes = new Uint8Array(await (await get(path)).arrayBuffer());
         requests.bytes += bytes.length;
         if (bytes.length !== meta.bytes || (await sha256(bytes)) !== meta.sha256)
-          throw new Error(`simulation library: ${id}/${name} does not match its checksum`);
+          throw new Error(`simulation library: ${label} does not match its checksum`);
         return bytes;
       })();
-      files.set(key, got);
+      files.set(path, got);
       // a failed download is not kept: the next ask tries again
-      got.catch(() => files.delete(key));
+      got.catch(() => files.delete(path));
     }
     return got;
+  };
+
+  const file = (id: string, name: string): Promise<Uint8Array> =>
+    checked(`${snapshot}/parts/${id}/${name}`, `${id}/${name}`, `part "${id}" has no file "${name}"`, byId.get(id)?.files.find((x) => x.name === name));
+
+  const emulatorFile = (id: string, name: string): Promise<Uint8Array> => {
+    const e = emulators.get(id);
+    return checked(
+      `emulators/${id}/${e?.version ?? "-"}/${name}`, `emulator ${id}/${name}`, `emulator "${id}" has no file "${name}"`,
+      e?.files.find((x) => x.name === name),
+    );
   };
 
   const text = async (id: string, name: string): Promise<string> => new TextDecoder().decode(await file(id, name));
@@ -105,5 +126,8 @@ export async function openLibrary(base: string, { fetch: f, version }: OpenOptio
     return { id, manifest, analog, logic };
   };
 
-  return { base: root, version: snapshot, index, parts: index.parts, part: (id) => byId.get(id), file, text, loadPart, requests };
+  return {
+    base: root, version: snapshot, index, parts: index.parts, part: (id) => byId.get(id), file, text, loadPart,
+    emulator: (id) => emulators.get(id), emulatorFile, requests,
+  };
 }

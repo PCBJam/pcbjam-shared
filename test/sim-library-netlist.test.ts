@@ -206,7 +206,7 @@ describe("the circuit that runs", () => {
 
     expect(inputs).toEqual([{ ref: "R2", partId: "push-button", input: BUTTON.inputs?.[0], vector: "v.xr2.vctl", initial: 0 }]);
     expect(signals).toEqual([{ ref: "D2", partId: "led", name: "current", vector: "v.xd2.vsense#branch" }]);
-    expect(codeParts).toEqual([{ partId: "demo-chip", kind: "part-wasm", logic: WASM }]);
+    expect(codeParts).toEqual([{ partId: "demo-chip", kind: "part-wasm", name: "demo-chip", logic: WASM }]);
 
     expect(placed.map((p) => [p.ref, p.partId, p.version, p.rule, p.name, p.number])).toEqual([
       ["D2", "led", 1, 3, "XD2", 0],
@@ -257,6 +257,48 @@ describe("the circuit that runs", () => {
     expect(placed.filter((p) => p.number).map((p) => [p.ref, p.number])).toEqual([["R11", 1], ["R12", 2], ["U1", 3]]);
     expect(codeParts.map((c) => c.partId)).toEqual(["demo-gate", "demo-chip"]);
     expect(deck.filter((l) => l.includes("demo-gate/model.lib"))).toHaveLength(1);
+  });
+
+  it("gives every placed chip that runs firmware a model and code of its own", () => {
+    const mcu: PartManifest = {
+      schema: 1, id: "demo-mcu", version: 1, title: "Demo microcontroller",
+      fits: [{ symbol: "Test:MCU" }],
+      pins: ["1", "2"],
+      analog: { file: "model.lib", subckt: "T_MCU" },
+      digital: { kind: "emulator", emulator: "demo-emu", chip: "demo", pads: { "1": 0, "2": 1 }, orderParam: "ORDER" },
+    };
+    const model = `* a chip\n.subckt T_MCU 1 2 ORDER=0\nAemu [1] [2] mcumodel\n.model mcumodel d_cosim(simulation="demo-mcu" irreversible={ORDER})\n.ends T_MCU\n`;
+    const parts = new Map([...PARTS, ["demo-mcu", loaded(mcu, model)]]);
+    const index = { parts: [...INDEX.parts, { id: mcu.id, version: 1, title: mcu.title, description: "", fits: mcu.fits, pins: mcu.pins, code: true, files: [] }] };
+    const { symbols, netlist } = read();
+    for (const s of symbols) if (s.ref === "R11" || s.ref === "R12") s.libId = "Test:MCU";
+    const plan = matchSymbols(index, symbols, { overrides: { [UUID("U1")]: "demo-chip" }, kicadModels: kicadModels(netlist) });
+    const { deck, files, codeParts, placed, errors } = buildDeck({ symbols, netlist, plan, parts });
+    expect(errors).toEqual([]);
+    // each chip's line names its own subcircuit; the part with compiled code keeps the one it has
+    expect(deck.filter((l) => l.startsWith("X") && l.includes("ORDER="))).toEqual([
+      "XR11 /Key_1/MID GND T_MCU_1 ORDER=1",
+      "XR12 /Key_2/MID GND T_MCU_2 ORDER=2",
+      "XU1 unconnected-_U1A-A-Pad1_ unconnected-_U1A-B-Pad2_ unconnected-_U1B-C-Pad3_ unconnected-_U1B-D-Pad4_ T_CHIP ORDER=3",
+    ]);
+    const own = files.filter((f) => f.path.includes("demo-mcu"));
+    expect(own.map((f) => f.path)).toEqual(["/sim-library/demo-mcu/model.1.lib", "/sim-library/demo-mcu/model.2.lib"]);
+    expect(own[0]?.text).toBe(`* a chip\n.subckt T_MCU_1 1 2 ORDER=0\nAemu [1] [2] mcumodel\n.model mcumodel d_cosim(simulation="demo-mcu_1" irreversible={ORDER})\n.ends T_MCU_1\n`);
+    expect(own[1]?.text).toContain('simulation="demo-mcu_2"');
+    expect(deck.filter((l) => l.includes("demo-mcu/"))).toEqual(['.include "/sim-library/demo-mcu/model.1.lib"', '.include "/sim-library/demo-mcu/model.2.lib"']);
+    expect(codeParts).toEqual([
+      { partId: "demo-mcu", kind: "emulator", name: "demo-mcu_1", ref: "R11", logic: null },
+      { partId: "demo-mcu", kind: "emulator", name: "demo-mcu_2", ref: "R12", logic: null },
+      { partId: "demo-chip", kind: "part-wasm", name: "demo-chip", logic: WASM },
+    ]);
+    expect(placed.filter((p) => p.number).map((p) => [p.ref, p.number])).toEqual([["R11", 1], ["R12", 2], ["U1", 3]]);
+
+    // a model the step cannot give to each chip stops the run with the chip's name
+    const loose = new Map([...PARTS, ["demo-mcu", loaded(mcu, model + ".model LOOSE D(IS=1e-14)\n")]]);
+    expect(buildDeck({ symbols, netlist, plan, parts: loose }).errors).toEqual([
+      "R11: T_MCU: the model file of a chip may hold only its one subcircuit",
+      "R12: T_MCU: the model file of a chip may hold only its one subcircuit",
+    ]);
   });
 
   it("gives a pin without a net a node of its own", () => {

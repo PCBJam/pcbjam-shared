@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { openLibrary } from "../src/sim-library/index.js";
-import { makeSnapshot, serve } from "./sim-library-fixtures.js";
+import { makeEmulator, makeSnapshot, serve } from "./sim-library-fixtures.js";
 
 const BASE = "https://library.test/sim";
 
@@ -28,6 +28,29 @@ describe("reading a published snapshot", () => {
     const lib = await openLibrary(BASE + "/", { fetch: cdn.fetch, version: snapshot.version });
     expect(cdn.asked).toEqual([`${snapshot.version}/index.json`]);
     expect(lib.parts.map((p) => p.id)).toContain("led");
+  });
+
+  it("reads a chip emulator's files from beside the snapshots, once, and checks them the same way", async () => {
+    const emulator = makeEmulator();
+    const snapshot = makeSnapshot(undefined, [emulator]);
+    const cdn = serve(snapshot);
+    const lib = await openLibrary(BASE, { fetch: cdn.fetch });
+    expect(lib.emulator("esp-emu")).toMatchObject({ version: "1.0.0-rc2", program: "esp_emu_bg.wasm", loader: "esp_emu.js" });
+    expect(lib.emulator("nothing")).toBeUndefined();
+
+    const program = await lib.emulatorFile("esp-emu", "esp_emu_bg.wasm");
+    expect([...program.subarray(0, 4)]).toEqual([0, 97, 115, 109]);
+    await lib.emulatorFile("esp-emu", "esp_emu_bg.wasm");
+    expect(cdn.asked.slice(2)).toEqual(["emulators/esp-emu/1.0.0-rc2/esp_emu_bg.wasm"]);
+
+    await expect(lib.emulatorFile("esp-emu", "other.js")).rejects.toThrow('simulation library: emulator "esp-emu" has no file "other.js"');
+    await expect(lib.emulatorFile("nothing", "esp_emu.js")).rejects.toThrow('simulation library: emulator "nothing" has no file "esp_emu.js"');
+
+    const key = "emulators/esp-emu/1.0.0-rc2/esp_emu.js";
+    const changed = new Uint8Array(cdn.files.get(key) ?? []);
+    changed[0] = (changed[0] ?? 0) ^ 1;
+    cdn.files.set(key, changed);
+    await expect(lib.emulatorFile("esp-emu", "esp_emu.js")).rejects.toThrow("simulation library: emulator esp-emu/esp_emu.js does not match its checksum");
   });
 
   it("refuses a file that is not the one the index describes", async () => {

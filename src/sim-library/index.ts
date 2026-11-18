@@ -27,5 +27,5 @@ export {
   type AssumedSource, type NamedSupply, type Passing, type Power, type Unpowered,
 } from "./supplies.js";
 export {
-  CODE_MODEL_LINE_MAX, codeModelLines, findSource, hasElement, subcircuits, withExternalSources, type Subcircuit,
+  CODE_MODEL_LINE_MAX, chipFile, chipModel, codeModelLines, findSource, hasElement, subcircuits, withExternalSources, type Subcircuit,
 } from "./spice-text.js";
