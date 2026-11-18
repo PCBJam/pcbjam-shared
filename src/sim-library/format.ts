@@ -111,10 +111,18 @@ export interface DigitalEmulator {
   emulator: string;
   chip: string;
   cores?: 1 | 2;
+  /** The chip's clock in Hz, for an emulator that has to be told (an AVR chip on a board with a crystal). */
+  clock?: number;
   /** Part pin -> GPIO number. */
   pads: Record<string, number>;
   enable?: string;
   padRegisters?: { base: number; count: number; pullUpBit: number; pullDownBit: number };
+  /**
+   * The voltages the chip's program may ask the engine for (an analog input, the supply, a
+   * reference pin), by the names the emulator's adapter knows them by, in the order of the
+   * inputs of the model's voltage tap (a `pj_vtap` line). Left out: the chip measures nothing.
+   */
+  taps?: string[];
   orderParam: string;
 }
 
@@ -177,6 +185,12 @@ export interface PartManifest {
    * part does nothing, and the run says so.
    */
   powered?: string[];
+  /**
+   * Pins that are one net inside the part: a board's three ground pins, an Arduino's A4 and
+   * its SDA pin. The model joins them. Where a rule asks whether a pin has something
+   * connected (`powered`, the wired pads of a chip), a wire on any pin of its group counts.
+   */
+  joined?: string[][];
   settings?: PartSetting[];
   analog: PartAnalog;
   digital?: PartDigital;
@@ -220,9 +234,9 @@ export interface IndexEmulator {
   title: string;
   licence: string;
   origin: string;
-  /** Which of its files is the emulator itself, a WebAssembly module. */
-  program: string;
-  /** Which of its files is the JavaScript that loads the program. */
+  /** Which of its files is the emulator itself, a WebAssembly module. Left out when the emulator is all JavaScript. */
+  program?: string;
+  /** Which of its files is the JavaScript that loads the program, or that is the emulator. */
   loader: string;
   files: IndexFile[];
 }

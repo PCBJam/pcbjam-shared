@@ -176,7 +176,7 @@ export interface PlacedPart {
   name: string;
   /** The net of each pin of the part, in the order of the part's pins. */
   nodes: string[];
-  /** The pins of the part that have something else connected to them. */
+  /** The pins of the part that have something else connected to them, on the pin or on a pin the part joins it with. */
   connected: string[];
   /** Every setting of the part with its value and where the value came from. */
   settings: ResolvedSettings["values"];
@@ -294,10 +294,14 @@ export function buildDeck({ symbols, excluded = [], netlist, plan, parts, live =
     notes.push(...settings.notes);
     // A pin without a net gets a node of its own, named the way KiCad names a net with one pin.
     const nodes = m.pinMap.map((n) => sym.pins[n]?.node ?? `unconnected-${m.ref}-${n}`);
+    // KiCad calls a net with nothing else on it "unconnected-...". Pins the part joins inside
+    // (a board's ground pins) are one net: a wire on one of them is a wire on each.
+    const alone = (pin: string): boolean => /^unconnected-/i.test(nodes[man.pins.indexOf(pin)] ?? "unconnected-");
+    const wired = (pin: string): boolean => (man.joined?.find((group) => group.includes(pin)) ?? [pin]).some((p) => !alone(p));
     // A chip without its supply does nothing, and looks like a part that is broken.
     const open = (man.powered ?? []).flatMap((pin) => {
       const i = man.pins.indexOf(pin);
-      return i >= 0 && /^unconnected-/i.test(nodes[i] ?? "unconnected-") ? [m.pinMap[i] ?? pin] : [];
+      return i >= 0 && !wired(pin) ? [m.pinMap[i] ?? pin] : [];
     });
     if (open.length) noPower.push({ ref: m.ref, pins: open.sort(natural) });
     if (man.analog.method === "gear") gear = true;
@@ -362,8 +366,7 @@ export function buildDeck({ symbols, excluded = [], netlist, plan, parts, live =
       signals.push({ ref: m.ref, partId: m.partId, name: s.name, vector: `v.${inst}.${s.current.toLowerCase()}#branch` });
     placed.push({
       ref: m.ref, uuid: m.uuid, sheet: m.sheet, partId: m.partId, version: man.version, rule: m.rule, name, nodes,
-      // KiCad calls a net with nothing else on it "unconnected-..."
-      connected: man.pins.filter((_, i) => !/^unconnected-/i.test(nodes[i] ?? "unconnected-")),
+      connected: man.pins.filter(wired),
       settings: settings.values, number,
       ...(m.origin ? { origin: m.origin } : {}),
     });

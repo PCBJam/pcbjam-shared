@@ -312,6 +312,31 @@ describe("the circuit that runs", () => {
     expect(placed.find((p) => p.ref === "D2")?.connected).toEqual(["A"]);
   });
 
+  it("counts a wire on a pin for every pin the part joins it with", () => {
+    const { symbols, netlist } = read();
+    const d2 = symbols.find((s) => s.ref === "D2");
+    if (!d2) throw new Error("no D2");
+    d2.pins["1"] = { name: "K" };
+    const plan = matchSymbols(INDEX, symbols, { kicadModels: kicadModels(netlist) });
+    // a part that takes its power through a pin nothing is on: the run says so
+    const alone = new Map([...PARTS, ["led", loaded({ ...LED, powered: ["K"] }, LED_MODEL)]]);
+    const a = buildDeck({ symbols, netlist, plan, parts: alone });
+    expect(a.power.noPower).toEqual([{ ref: "D2", pins: ["1"] }]);
+    expect(a.placed.find((p) => p.ref === "D2")?.connected).toEqual(["A"]);
+    // the same pin, joined inside the part with one that has a wire (a board's second ground pin)
+    const joined = new Map([...PARTS, ["led", loaded({ ...LED, powered: ["K"], joined: [["A", "K"]] }, LED_MODEL)]]);
+    const b = buildDeck({ symbols, netlist, plan, parts: joined });
+    expect(b.power.noPower).toEqual([]);
+    expect(b.placed.find((p) => p.ref === "D2")?.connected).toEqual(["A", "K"]);
+    // the nodes are what they were: the model does the joining
+    expect(b.deck).toContain("XD2 Net-_D1-A_ unconnected-D2-1 T_LED");
+    // a group with no wire at all stays without one
+    d2.pins["2"] = { name: "A" };
+    const c = buildDeck({ symbols, netlist, plan, parts: joined });
+    expect(c.power.noPower).toEqual([{ ref: "D2", pins: ["1"] }]);
+    expect(c.placed.find((p) => p.ref === "D2")?.connected).toEqual([]);
+  });
+
   it("leaves out a matched symbol whose model is switched off in KiCad", () => {
     const netlist = readEditorNetlist(NETLIST);
     const off: EditorNetlist = {

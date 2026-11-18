@@ -118,14 +118,20 @@ export const projectSchema = z.object({
 export type Project = z.infer<typeof projectSchema>;
 
 // --- a chip's firmware image as a project file (live simulation) ---
-// A microcontroller of the simulation library runs the user's own program: the
-// merged flash image, the file that is written to the real chip at address 0.
-// It is kept as a file of the project. This says what such a file is, for
-// every place that takes one: a server's upload, and the editor's page before
-// it sends a picked file.
+// A microcontroller of the simulation library runs the user's own program. It
+// is kept as a file of the project, in one of two forms:
+//   .bin  an ESP32's merged flash image, the file that is written to the real
+//         chip at address 0
+//   .hex  an AVR chip's program (an Arduino Uno's) as Intel HEX text, the file
+//         the Arduino IDE's "Export Compiled Binary" writes
+// This says what such a file is, for every place that takes one: a server's
+// upload, and the editor's page before it sends a picked file.
 
 /** A firmware image's name ends in one of these. */
-export const FIRMWARE_UPLOAD_EXTENSIONS: ReadonlySet<string> = new Set([".bin"]);
+export const FIRMWARE_UPLOAD_EXTENSIONS: ReadonlySet<string> = new Set([".bin", ".hex"]);
+
+/** The two forms of a firmware file: an ESP32 flash image, or a program as Intel HEX text. */
+export type FirmwareKind = "image" | "hex";
 
 /**
  * The largest firmware image a project takes. The Arduino build pads its merged
@@ -134,7 +140,7 @@ export const FIRMWARE_UPLOAD_EXTENSIONS: ReadonlySet<string> = new Set([".bin"])
  */
 export const MAX_FIRMWARE_UPLOAD_BYTES = 16 * 1024 * 1024;
 
-/** How many leading bytes `looksLikeFirmware` inspects: the header of an ESP32 image. */
+/** How many leading bytes `looksLikeFirmware` and its like inspect: the header of an ESP32 image. */
 export const FIRMWARE_SNIFF_BYTES = 24;
 
 /** Whether a project-relative path is a firmware image by its name. */
@@ -143,6 +149,12 @@ export function isFirmwareUploadPath(relPath: string): boolean {
   if (base.startsWith(".")) return false;
   const dot = base.lastIndexOf(".");
   return dot > 0 && FIRMWARE_UPLOAD_EXTENSIONS.has(base.slice(dot));
+}
+
+/** Which form a firmware file has, by its name. Null for a name that is no firmware's. */
+export function firmwareKind(relPath: string): FirmwareKind | null {
+  if (!isFirmwareUploadPath(relPath)) return null;
+  return relPath.toLowerCase().endsWith(".hex") ? "hex" : "image";
 }
 
 /**
@@ -154,6 +166,25 @@ export function looksLikeFirmware(head: Uint8Array): boolean {
   if (head.length < FIRMWARE_SNIFF_BYTES) return false;
   const segments = head[1] ?? 0;
   return head[0] === 0xe9 && segments >= 1 && segments <= 16;
+}
+
+/**
+ * Whether the first bytes of a file are the start of Intel HEX text: a colon,
+ * then at least ten hex digits (the shortest record), and nothing but records
+ * and line ends after it.
+ */
+export function looksLikeIntelHex(head: Uint8Array): boolean {
+  const text = String.fromCharCode(...head.subarray(0, FIRMWARE_SNIFF_BYTES));
+  return /^:[0-9A-Fa-f]{10}/.test(text) && /^[:0-9A-Fa-f\r\n]*$/.test(text);
+}
+
+/**
+ * Whether the first bytes of a file are what a firmware file of this name
+ * starts with: an image's header for `.bin`, Intel HEX text for `.hex`.
+ */
+export function looksLikeFirmwareFile(relPath: string, head: Uint8Array): boolean {
+  const kind = firmwareKind(relPath);
+  return kind === "hex" ? looksLikeIntelHex(head) : kind === "image" && looksLikeFirmware(head);
 }
 
 /** A chip an ESP32 image can be built for. */
