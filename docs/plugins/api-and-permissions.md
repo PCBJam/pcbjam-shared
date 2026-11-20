@@ -27,7 +27,7 @@ permissions. `context.get()` needs no additional permission.
 | Call (`await pcbjam.…`) | Permission | Result |
 |---|---|---|
 | `http.request(endpointId, {method, path, json?})` | `network:<id>`; plus `backend:identity:<id>` for identity | Send bounded JSON to an operator-approved endpoint; optionally carries a signed user identity. |
-| `http.upload(endpointId, {path, bundleId, fields?})` | `network:<id>` (endpoint with `upload`) | POST a bundle (`exports.bundle`) as multipart/form-data to an approved endpoint path that declares `upload`; the answer must be JSON. |
+| `http.upload(endpointId, {path, bundleId, fields?, query?})` | `network:<id>` (endpoint with `upload`) | POST a bundle (`exports.bundle`) as multipart/form-data to an approved endpoint path that declares `upload`; `query` carries the query parameters that path declares; the answer must be JSON. |
 | `net.fetch(url, {method?, headers?, body?})` | `direct:<hostname>` per declared site | An HTTPS request straight from the plugin to a site declared in `network`: no cookies, referrer, cache or redirects; GET/POST, up to 1 MiB back. The site must answer CORS. |
 | `ui.openExternal(url)` | `ui:open-external` | Open an https page of one of the plugin’s approved endpoint sites in a new tab after the user confirms; opened or cancelled. |
 | `context.get()` | None extra | Editor name, read-only state, supported host methods and limits. |
@@ -53,8 +53,8 @@ permissions. `context.get()` needs no additional permission.
 | `files.save({name, text})` | `files:save` | Trusted text download confirmation; download-requested or cancelled. |
 | `files.saveHtml({name, html})` | `files:save-html` | Trusted download confirmation for a standalone web page; PCBJam prepends a policy that blocks all network access from the saved file. |
 | `files.saveImage({name, base64})` | `files:save` | Trusted download confirmation for a PNG; bytes that are not a PNG are refused. |
-| `exports.run(kind)` | `project:export` | Run a KiCad export (`gerbers`, `drill`, `ipc356`, `fab-components`) of the open document on PCBJam’s servers; returns an export id and its file names and sizes. The bytes stay on the server. |
-| `exports.runMany(kinds)` | `project:export` | Run several of those exports in one KiCad run (the board loads once), all or nothing; returns them in the order asked, each like `exports.run`. |
+| `exports.run(kind, options?)` | `project:export` | Run a KiCad export (`gerbers`, `drill`, `ipc356`, `fab-components`) of the open document on PCBJam’s servers; returns an export id and its file names and sizes. The bytes stay on the server. `options` (for `gerbers` and `drill`) choose the layers, file names and drill file layout. |
+| `exports.runMany(kinds, options?)` | `project:export` | Run several of those exports in one KiCad run (the board loads once), all or nothing; returns them in the order asked, each like `exports.run`. `options` holds the options of each kind (`{gerbers?, drill?}`). |
 | `exports.readJson(exportId, name)` | `project:export` | Read a JSON output of an export (at most 1 MiB), e.g. the `fab-components` component list. |
 | `exports.bundle({parts, extraFiles?, zipName})` | `project:export` | Zip exports (optionally renaming files) with text files the plugin made; returns a bundle id, name, size and file list. |
 | `files.saveBundle({bundleId})` | `files:save` | Trusted download confirmation for a bundle ZIP; download-requested or cancelled. |
@@ -509,7 +509,7 @@ await pcbjam.files.saveBundle({ bundleId: bundle.bundleId }); // needs files:sav
 ```
 
 - Kinds: `gerbers` (one file per enabled layer plus a `.gbrjob`, KiCad's
-  defaults), `drill` (Excellon, metric), `ipc356` (`netlist.ipc`) and
+  defaults), `drill` (Excellon, inches, one file), `ipc356` (`netlist.ipc`) and
   `fab-components` (board size, origins, copper layers and every footprint with
   position, rotation, side, attributes and fields, as `fab-components.json`).
 - `readJson` reads JSON outputs up to 1 MiB. `bundle` takes up to 8 exports,
@@ -523,6 +523,46 @@ await pcbjam.files.saveBundle({ bundleId: bundle.bundleId }); // needs files:sav
   retry shortly).
 - Available only on hosted PCBJam with a saved project, in the PCB editor.
   `context.get().methods` lists `exports.run` when it is available.
+
+### Export options
+
+Some manufacturers read only the files their own KiCad plugin writes. The
+`gerbers` and `drill` exports take options for that; without them the files
+are as described above.
+
+```ts
+const gerbers = await pcbjam.exports.run('gerbers', {
+  layers: ['F.Cu', 'B.Cu', 'F.SilkS', 'F.Mask', 'Edge.Cuts'],
+  canonicalNames: true,       // board-F_SilkS.gbr
+  protelExtensions: false,    // every file .gbr
+  jobFile: false,
+  precision: 6,
+});
+const [g, d] = await pcbjam.exports.runMany(['gerbers', 'drill'], {
+  gerbers: { jobFile: false },
+  drill: { separatePlated: true, minimalHeader: true },
+});
+```
+
+| Kind | Option | What it does |
+|---|---|---|
+| `gerbers` | `layers` | KiCad's layer names (`F.Cu`, `In1.Cu`, `F.SilkS`, `Edge.Cuts`), 1 to 64, in plot order. A layer the board has not enabled is left out. Default: every enabled layer. |
+| `gerbers` | `canonicalNames: true` | Files are named by KiCad's layer name (`board-F_SilkS.gbr`), not by the name the board gives that layer. |
+| `gerbers` | `protelExtensions: false` | Every file ends in `.gbr`. Default: Protel extensions (`.gtl`, `.gbl`, ...). |
+| `gerbers` | `jobFile: false` | No `.gbrjob` file. |
+| `gerbers` | `zeroMaskExpansion: true` | The board's solder mask expansion counts as 0: mask openings at pad size. |
+| `gerbers` | `zeroMaskMinWidth: true` | The board's solder mask minimum width counts as 0: no merged mask webs. |
+| `gerbers` | `precision` | Decimal places of the coordinates, `5` (default) or `6`. |
+| `drill` | `separatePlated: true` | Plated and non-plated holes in two files (`board-PTH.drl`, `board-NPTH.drl`). |
+| `drill` | `minimalHeader: true` | KiCad's minimal Excellon header. |
+| `drill` | `routeOvalHoles: true` | Oval holes as routed slots, not the canned `G85` slot. |
+
+- Options change the exported files only, never the saved board.
+- An export with options runs with exactly those options or fails
+  (`EXPORT_UNAVAILABLE` while PCBJam's export service cannot apply them yet);
+  you never get the default files instead.
+- An editor older than the options ignores them. If the files must have a
+  certain shape, check the names that come back before you send them anywhere.
 
 ## Upload a bundle and open a page
 
@@ -552,6 +592,14 @@ await pcbjam.ui.openExternal(answer.body.redirect);   // user confirms, new tab
 - `upload` lists the paths that take a file, the multipart field name, and the
   largest file (at most 16 MiB). It is part of what PCBJam approves; the
   consent screen reads "Send data and upload files to …".
+- An upload path can take query parameters, for a service that issues a signed
+  upload address per upload. Declare their names in `upload.query` (up to 8,
+  e.g. `"query": ["p", "s"]`) and pass the values with the call:
+  `pcbjam.http.upload('fab', { path: '/upload', query: { p, s }, bundleId })`.
+  Each value is 1 to 512 characters of `A-Z a-z 0-9 _ -`. PCBJam builds the
+  query string itself, in name order; a parameter the endpoint does not
+  declare is refused. Take the values out of the address the service gave
+  you, and check its origin and path first.
 - `http.upload` sends the stored bundle as `multipart/form-data`: your `fields`
   (up to 16, 1,024 characters each, no line breaks) and the ZIP under the
   declared field name, with the bundle's file name. The bytes go from PCBJam's
@@ -756,7 +804,11 @@ const response = await pcbjam.http.request('backend', {
 // { status, headers: { 'content-type': 'application/json' }, body }
 ```
 
-One endpoint, up to 16 exact paths; HTTPS port 443 only. No query strings,
+One endpoint, up to 16 exact paths; HTTPS port 443 only. A path may end in one
+placeholder segment, `"/v1/jobs/{job}"`, for an id the backend issued: it
+stands for 1 to 64 characters of `A-Z a-z 0-9 _ -` in that last segment (upload
+paths stay exact). No query strings (apart from the declared parameters of an
+[upload](#upload-a-bundle-and-open-a-page)),
 redirects, percent-encoded paths, custom headers or arbitrary URLs. `GET` has no
 `json`; `POST` requires it. `auth: "none"` only needs the network grant and sends
 no identity. Network permission allows sending data the plugin can read.

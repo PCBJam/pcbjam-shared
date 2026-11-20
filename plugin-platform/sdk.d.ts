@@ -61,6 +61,31 @@ type PCBJamTour = {id:string;title?:string;editor:'eeschema'|'pcbnew';closable?:
 // BEGIN GENERATED HOST METHODS
 type PCBJamHostMethod = "http.request" | "http.upload" | "net.fetch" | "ui.openExternal" | "context.get" | "project.getInfo" | "documents.list" | "documents.getCurrent" | "documents.snapshot" | "documents.poll" | "documents.exportStart" | "documents.exportRead" | "board.geometryStart" | "items.list" | "items.get" | "selection.get" | "editor.select" | "storage.get" | "storage.set" | "storage.delete" | "storage.list" | "files.choose" | "files.readText" | "files.close" | "files.save" | "files.saveHtml" | "files.saveImage" | "exports.run" | "exports.runMany" | "exports.readJson" | "exports.bundle" | "files.saveBundle" | "editor.requestPlacement" | "board.edit" | "schematic.edit" | "tour.start" | "tour.stop" | "tour.status" | "ui.overlay.show" | "ui.overlay.clear" | "parts.save" | "schematic.symbols" | "schematic.connectivity" | "board.updateFromSchematic" | "editor.pickPoint" | "editor.openFile" | "identity.token" | "editor.highlight";
 // END GENERATED HOST METHODS
+/** How KiCad writes the Gerber files of `exports.run('gerbers', ...)`. Left out: as before. */
+type PCBJamGerberOptions = {
+  /** KiCad's layer names (`F.Cu`, `F.SilkS`, `Edge.Cuts`), in plot order. A layer the board has not enabled is left out. Default: every enabled layer. */
+  layers?:string[];
+  /** Name each file by KiCad's layer name (`board-F_SilkS.gbr`), not by the board's own name for that layer. */
+  canonicalNames?:boolean;
+  /** `false`: every file ends in `.gbr`. Default: Protel extensions (`.gtl`, `.gbl`, ...). */
+  protelExtensions?:boolean;
+  /** `false`: no `.gbrjob` file. */
+  jobFile?:boolean;
+  /** Plot the mask openings at pad size: the board's solder mask expansion counts as 0. The saved board is not changed. */
+  zeroMaskExpansion?:boolean;
+  /** Plot the mask without merged webs: the board's solder mask minimum width counts as 0. The saved board is not changed. */
+  zeroMaskMinWidth?:boolean;
+  /** Decimal places of the coordinates. Default 5. */
+  precision?:5|6;
+};
+/** How KiCad writes the Excellon files of `exports.run('drill', ...)`. Left out: as before (one file, inches, full header). */
+type PCBJamDrillOptions = {
+  /** Plated and non-plated holes in two files (`board-PTH.drl`, `board-NPTH.drl`). */
+  separatePlated?:boolean;
+  minimalHeader?:boolean;
+  /** Oval holes as routed slots (G00/G01), not the canned G85 slot. */
+  routeOvalHoles?:boolean;
+};
 /** Plugin logic only, and only while a command is being handled: at most 32 pending, 60 s each,
  *  all cancelled when the command settles. An exception thrown from a callback stops the plugin. */
 declare function setTimeout(callback:(...args:any[])=>unknown,ms?:number,...args:any[]):number;
@@ -81,8 +106,10 @@ declare const pcbjam: {
   /** Approved HTTPS backend; no arbitrary URLs, headers or API keys. */
   http:{request(endpointId:string,request:{method:'GET';path:string}|{method:'POST';path:string;json:PCBJamJSON}):Promise<{status:number;headers:Record<string,string>;body:PCBJamJSON}>;
     /** POST a bundle (`exports.bundle`) as multipart/form-data to an endpoint path that declares `upload` in the
-     *  manifest; `fields` become text form fields. The answer must be JSON. Same grants as `request`. */
-    upload(endpointId:string,request:{path:string;bundleId:string;fields?:Record<string,string>}):Promise<{status:number;headers:Record<string,string>;body:PCBJamJSON}>};
+     *  manifest; `fields` become text form fields. The answer must be JSON. Same grants as `request`.
+     *  `query`: for an endpoint that hands out a signed upload URL. Only the names the manifest lists in
+     *  `upload.query`, values of 1 to 512 characters of `A-Z a-z 0-9 _ -`; PCBJam builds the query string. */
+    upload(endpointId:string,request:{path:string;bundleId:string;fields?:Record<string,string>;query?:Record<string,string>}):Promise<{status:number;headers:Record<string,string>;body:PCBJamJSON}>};
   /** Open an https page of one of the plugin's approved endpoint sites in a new browser tab after the user confirms
    *  (needs `ui:open-external`). Never an iframe; the editor stays open. */
   ui:{openExternal(url:string):Promise<{status:'opened'|'cancelled'}>;
@@ -175,13 +202,15 @@ declare const pcbjam: {
    *  `gerbers`, `drill`, `ipc356` and `fab-components` run in the PCB editor. Output bytes stay on the server:
    *  you get ids, file names and sizes, can read small JSON outputs, and can zip exports for download. */
   exports:{
-    run(kind:'gerbers'|'drill'|'ipc356'|'fab-components'):Promise<{exportId:string;kind:string;files:{name:string;size:number}[]}>;
+    /** `options` (gerbers and drill only) change how KiCad writes the files; without them the export is as before.
+     *  An older host ignores them: check the file names that come back. */
+    run(kind:'gerbers',options?:PCBJamGerberOptions):Promise<{exportId:string;kind:string;files:{name:string;size:number}[]}>;
+    run(kind:'drill',options?:PCBJamDrillOptions):Promise<{exportId:string;kind:string;files:{name:string;size:number}[]}>;
+    run(kind:'ipc356'|'fab-components'):Promise<{exportId:string;kind:string;files:{name:string;size:number}[]}>;
     /** Several kinds of the open board in one KiCad run (the board loads once): faster than one `run` per kind.
-     *  All or nothing, results in the order asked. Check `context.methods` for it; older hosts only have `run`. */
-    runMany(kinds:('gerbers'|'drill'|'ipc356'|'fab-components')[]):Promise<{exportId:string;kind:string;files:{name:string;size:number}[]}[]>;
-    /** Several kinds of the open board in one KiCad run (the board loads once): faster than one `run` per kind.
-     *  All or nothing, results in the order asked. Check `context.methods` for it; older hosts only have `run`. */
-    runMany(kinds:('gerbers'|'drill'|'ipc356'|'fab-components')[]):Promise<{exportId:string;kind:string;files:{name:string;size:number}[]}[]>;
+     *  All or nothing, results in the order asked. Check `context.methods` for it; older hosts only have `run`.
+     *  `options`: per kind, for the kinds asked. */
+    runMany(kinds:('gerbers'|'drill'|'ipc356'|'fab-components')[],options?:{gerbers?:PCBJamGerberOptions;drill?:PCBJamDrillOptions}):Promise<{exportId:string;kind:string;files:{name:string;size:number}[]}[]>;
     /** A JSON output of an export, at most 1 MiB (e.g. `fab-components.json`). */
     readJson(exportId:string,name:string):Promise<PCBJamJSON>;
     /** Zip exports with text files you made (≤ 16 files, ≤ 2 MiB); `rename` maps an export's file names. */

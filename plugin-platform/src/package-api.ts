@@ -69,6 +69,39 @@ export const EXPORT_LIMITS = Object.freeze({ jsonBytes: 1024 * 1024, bundleBytes
 const exportFile = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,120}$/);
 const exportId = z.string().uuid();
 const exportKind = z.enum(Object.keys(EXPORT_KINDS) as [ExportKind, ...ExportKind[]]);
+/**
+ * What a plugin may change about an export (plugins 0027), per kind; kinds that are not listed take
+ * no options. Every option is a switch or a list of names from a fixed character set: they become
+ * flags of KiCad's own exporter, never paths or free text. Left out = the export as it always was.
+ */
+const exportLayer = z.string().regex(/^[A-Za-z0-9]{1,16}(\.[A-Za-z0-9]{1,16})?$/);
+export const EXPORT_OPTIONS = Object.freeze({
+    gerbers: z.object({
+        /** KiCad's layer names (`F.Cu`, `F.SilkS`, `Edge.Cuts`), in plot order; a layer the board has not enabled is left out. */
+        layers: z.array(exportLayer).min(1).max(64).refine(v => new Set(v).size === v.length, 'Each layer at most once').optional(),
+        /** Name each file by KiCad's layer name (`board-F_SilkS.gbr`), not by the board's own name for the layer. */
+        canonicalNames: z.boolean().optional(),
+        /** false: every file ends in `.gbr`. Default: Protel extensions (`.gtl`, `.gbl`, ...). */
+        protelExtensions: z.boolean().optional(),
+        /** false: no `.gbrjob` file. */
+        jobFile: z.boolean().optional(),
+        /** Plot with solder mask expansion and minimum web width 0 (the saved board is not changed). */
+        zeroMaskExpansion: z.boolean().optional(),
+        zeroMaskMinWidth: z.boolean().optional(),
+        /** Decimal places of the coordinates. Default 5. */
+        precision: z.union([z.literal(5), z.literal(6)]).optional(),
+    }).strict(),
+    drill: z.object({
+        /** Plated and non-plated holes in two files (`board-PTH.drl`, `board-NPTH.drl`). Default: one file. */
+        separatePlated: z.boolean().optional(),
+        minimalHeader: z.boolean().optional(),
+        /** Oval holes as routed slots (G00/G01), not the canned G85 slot. */
+        routeOvalHoles: z.boolean().optional(),
+    }).strict(),
+} as const);
+export type ExportOptions = { [K in keyof typeof EXPORT_OPTIONS]?: z.infer<(typeof EXPORT_OPTIONS)[K]> };
+/** Options keyed by kind, as they travel: `{ gerbers: {...}, drill: {...} }`. */
+const exportOptions = z.object({ gerbers: EXPORT_OPTIONS.gerbers.optional(), drill: EXPORT_OPTIONS.drill.optional() }).strict();
 /** The complete host operation allowlist. Tests must cover every entry. */
 export const METHODS = {
     // Dynamic endpoint grants are checked by both the host and server.
@@ -107,9 +140,12 @@ export const METHODS = {
     'files.saveHtml': request('files:save-html', z.object({ name: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,90}\.html$/), html: z.string().max(8 * 1024 * 1024) }).strict()),
     'files.saveImage': request('files:save', z.object({ name: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,90}\.png$/), base64: z.string().min(16).max(Math.ceil(4 * 1024 * 1024 / 3) * 4) }).strict()),
     // Server-side exports of the open document; bundles zip them for download.
-    'exports.run': request('project:export', z.object({ kind: exportKind }).strict()),
+    // `options`: keyed by the kind, only for the kind asked (plugins 0027).
+    'exports.run': request('project:export', z.object({ kind: exportKind, options: exportOptions.optional() }).strict()
+        .refine(v => Object.keys(v.options ?? {}).every(k => k === v.kind), 'Options are for the kind asked')),
     // Several exports of the open document in one KiCad run (one board load), in the order asked.
-    'exports.runMany': request('project:export', z.object({ kinds: z.array(exportKind).min(1).max(Object.keys(EXPORT_KINDS).length).refine(v => new Set(v).size === v.length, 'Each export kind at most once') }).strict()),
+    'exports.runMany': request('project:export', z.object({ kinds: z.array(exportKind).min(1).max(Object.keys(EXPORT_KINDS).length).refine(v => new Set(v).size === v.length, 'Each export kind at most once'), options: exportOptions.optional() }).strict()
+        .refine(v => Object.keys(v.options ?? {}).every(k => (v.kinds as string[]).includes(k)), 'Options are for the kinds asked')),
     'exports.readJson': request('project:export', z.object({ exportId, name: exportFile }).strict()),
     'exports.bundle': request('project:export', z.object({
         parts: z.array(z.object({ exportId, rename: z.record(exportFile, exportFile).optional() }).strict()).min(1).max(EXPORT_LIMITS.bundleParts),

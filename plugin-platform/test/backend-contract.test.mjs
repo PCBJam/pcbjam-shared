@@ -168,3 +168,92 @@ test("an endpoint may declare upload paths; uploads stay inside that declaration
   // An endpoint without an upload declaration takes no uploads.
   assert.throws(() => validateUploadRequest({ ...request, path: "/v1/preferences" }, validateEndpoints({ backend: endpoint }).backend));
 });
+
+test("an upload may carry the query parameters its endpoint declares, and nothing else", async () => {
+  const { validateUploadRequest, backendPolicyText, uploadQueryString } = await import("../backend-contract.mjs");
+  const fab = {
+    origin: "https://fab.example",
+    paths: ["/api/import", "/p/new.json"],
+    methods: ["GET", "POST"],
+    auth: "none",
+    upload: { paths: ["/api/import"], field: "upload[file]", maxBytes: 1024, query: ["s", "p"] },
+  };
+  const { fab: policy } = validateEndpoints({ fab });
+  assert.deepEqual(policy.upload.query, ["p", "s"]);
+  // The names are part of what the operator approves; a policy without them keeps its old text.
+  const plain = validateEndpoints({ fab: { ...fab, upload: { ...fab.upload, query: undefined } } }).fab;
+  assert.equal(Object.hasOwn(plain.upload, "query"), false);
+  assert.notEqual(backendPolicyText(policy), backendPolicyText(plain));
+  assert.notEqual(backendPolicyText(policy), backendPolicyText({ ...policy, upload: { ...policy.upload, query: ["p"] } }));
+  for (const query of [[], ["p", "p"], ["a b"], ["a="], ["a&b"], [1], "p", ["x".repeat(33)], ["a", "b", "c", "d", "e", "f", "g", "h", "i"]])
+    assert.throws(() => validateEndpoints({ fab: { ...fab, upload: { ...fab.upload, query } } }), undefined, JSON.stringify(query));
+
+  const request = { endpointId: "fab", path: "/api/import", bundleId: "11111111-1111-4111-8111-111111111111", query: { p: "A".repeat(164), s: "0f".repeat(32) } };
+  assert.deepEqual(validateUploadRequest(request, policy), request);
+  assert.equal(uploadQueryString(request.query), "?p=" + "A".repeat(164) + "&s=" + "0f".repeat(32));
+  assert.equal(uploadQueryString({ s: "2", p: "1" }), "?p=1&s=2");
+  assert.equal(uploadQueryString(undefined), "");
+  assert.equal(uploadQueryString({}), "");
+  // A declared name may be left out; the endpoint decides what it needs.
+  assert.deepEqual(validateUploadRequest({ ...request, query: { p: "1" } }, policy).query, { p: "1" });
+  for (const query of [
+    { p: "1", other: "2" },
+    { p: "" },
+    { p: "a&s=b" },
+    { p: "a=b" },
+    { p: "a b" },
+    { p: "a%26b" },
+    { p: "a#b" },
+    { p: "a/b" },
+    { p: "a\r\nb" },
+    { p: "x".repeat(513) },
+    { p: 1 },
+    { p: ["1"] },
+    ["p"],
+    "p=1",
+  ])
+    assert.throws(() => validateUploadRequest({ ...request, query }, policy), undefined, JSON.stringify(query));
+  for (const query of [{ "p&q": "1" }, { p: "a&b" }, { p: 1 }])
+    assert.throws(() => uploadQueryString(query), undefined, JSON.stringify(query));
+  // An endpoint that declares no query takes none, and a path never carries one.
+  assert.throws(() => validateUploadRequest(request, plain));
+  assert.deepEqual(validateUploadRequest({ ...request, query: {} }, plain).query, {});
+  assert.throws(() => validateUploadRequest({ ...request, path: "/api/import?p=1", query: undefined }, policy));
+});
+
+test("a policy path may end in one placeholder segment", async () => {
+  const { backendPathPattern, pathAllowed } = await import("../backend-contract.mjs");
+  const fab = { origin: "https://fab.example", paths: ["/api/import/{job}", "/api/import", "/p/new.json"], methods: ["GET", "POST"], auth: "none" };
+  const { fab: policy } = validateEndpoints({ fab });
+  assert.deepEqual(policy.paths, ["/api/import", "/api/import/{job}", "/p/new.json"]);
+  const get = (path) => ({ endpointId: "fab", method: "GET", path });
+  for (const path of ["/api/import", "/p/new.json", "/api/import/5f1c0a2b9d3e4f5a6b7c8d9e", "/api/import/a", "/api/import/A_b-9", "/api/import/" + "a".repeat(64)])
+    assert.deepEqual(validateBackendRequest(get(path), policy), get(path), path);
+  for (const path of [
+    "/api/import/",
+    "/api/import/a/b",
+    "/api/import/a.json",
+    "/api/import/" + "a".repeat(65),
+    "/api/import/{job}",
+    "/api/imports/a",
+    "/api/a",
+    "/p/a",
+    "/a",
+    "/api/import/..",
+  ])
+    assert.throws(() => validateBackendRequest(get(path), policy), undefined, path);
+  assert.equal(pathAllowed(policy.paths, "/api/import/abc"), true);
+  assert.equal(pathAllowed(["/api/import"], "/api/import/abc"), false);
+  // Only the last segment, only once, and never the site's first level.
+  for (const path of ["/{id}", "/{a}/b", "/a/{b}/c", "/a/{b}{c}", "/a/x{b}", "/a/{b}x", "/a/{B}", "/a/{}", "/a/{1a}", "/a/{" + "a".repeat(17) + "}", "/a//{b}", "/a/{b}/"])
+    assert.throws(() => backendPathPattern(path), undefined, path);
+  assert.equal(backendPathPattern("/a/{b}"), "/a/{b}");
+  assert.equal(backendPathPattern("/a/b"), "/a/b");
+  // The placeholder is part of the approved policy text.
+  const { backendPolicyText } = await import("../backend-contract.mjs");
+  assert.notEqual(backendPolicyText(policy), backendPolicyText({ ...policy, paths: ["/api/import", "/p/new.json"] }));
+  // An upload never goes to a placeholder path.
+  assert.throws(() =>
+    validateEndpoints({ fab: { ...fab, upload: { paths: ["/api/import/{job}"], field: "file", maxBytes: 1024 } } })
+  );
+});

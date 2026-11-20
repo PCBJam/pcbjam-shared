@@ -99,8 +99,9 @@ declare const __clearTimer: (message: string) => void;
                 call('schematic.edit', libSymbols === undefined ? { label, upsert, remove } : { label, upsert, remove, libSymbols }),
         }),
         exports: Object.freeze({
-            run: (kind: unknown) => call('exports.run', { kind }),
-            runMany: async (kinds: unknown) => ((await call('exports.runMany', { kinds })) as any).exports,
+            // Options travel keyed by kind; `run` takes the ones of its kind.
+            run: (kind: unknown, options?: unknown) => call('exports.run', options === undefined ? { kind } : { kind, options: { [String(kind)]: options } }),
+            runMany: async (kinds: unknown, options?: unknown) => ((await call('exports.runMany', options === undefined ? { kinds } : { kinds, options })) as any).exports,
             readJson: (exportId: unknown, name: unknown) => call('exports.readJson', { exportId, name }),
             bundle: (proposal: unknown) => call('exports.bundle', proposal),
         }),
