@@ -11,9 +11,12 @@
   "exports": {
     ".": "./src/index.ts",
     "./lib-index": "./src/lib-index.ts",
-    "./sim-library": "./src/sim-library/index.ts"
+    "./sim-library": "./src/sim-library/index.ts",
+    "./site-status": "./src/site-status.ts"
   },
-  "files": ["src"],
+  "files": [
+    "src"
+  ],
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "node scripts/check-doc-dates.mjs && vitest run",
