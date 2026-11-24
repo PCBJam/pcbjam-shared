@@ -12,10 +12,12 @@ export const BACKEND_LIMITS = Object.freeze({
 });
 const UPLOAD_NAME = /^[A-Za-z0-9_.\[\]-]{1,64}$/;
 // The query of an upload URL: names the manifest declares, values the endpoint
-// issued (a signed token, say). No character that could end a value, start
-// another parameter or need encoding.
+// issued (a signed token, say). No character that could end a value or start
+// another parameter. A value may end in base64 padding, "=" once or twice:
+// tokens made with Ruby's urlsafe base64 carry it about one time in three
+// (AISLER's do). The query string writes it as "%3D", as such a service does.
 const QUERY_KEY = /^[A-Za-z0-9_-]{1,32}$/;
-const QUERY_VALUE = /^[A-Za-z0-9_-]{1,512}$/;
+const QUERY_VALUE = /^[A-Za-z0-9_-]{1,512}={0,2}$/;
 const QUERY_KEYS = 8;
 // A policy path may end in one placeholder segment, "/jobs/{id}".
 const PLACEHOLDER = /^\{[a-z][a-z0-9]{0,15}\}$/;
@@ -107,7 +109,7 @@ export function uploadQueryString(query) {
   if (typeof query !== "object" || Array.isArray(query)) fail();
   const keys = Object.keys(query).sort();
   if (keys.length > QUERY_KEYS || keys.some((k) => !QUERY_KEY.test(k) || typeof query[k] !== "string" || !QUERY_VALUE.test(query[k]))) fail();
-  return keys.length ? "?" + keys.map((k) => k + "=" + query[k]).join("&") : "";
+  return keys.length ? "?" + keys.map((k) => k + "=" + query[k].replaceAll("=", "%3D")).join("&") : "";
 }
 export function validateEndpoints(input) {
   if (input === undefined) return undefined;

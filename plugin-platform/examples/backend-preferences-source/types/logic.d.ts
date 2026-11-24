@@ -108,7 +108,8 @@ declare const pcbjam: {
     /** POST a bundle (`exports.bundle`) as multipart/form-data to an endpoint path that declares `upload` in the
      *  manifest; `fields` become text form fields. The answer must be JSON. Same grants as `request`.
      *  `query`: for an endpoint that hands out a signed upload URL. Only the names the manifest lists in
-     *  `upload.query`, values of 1 to 512 characters of `A-Z a-z 0-9 _ -`; PCBJam builds the query string. */
+     *  `upload.query`, values of 1 to 512 characters of `A-Z a-z 0-9 _ -`, then at most two `=` (base64 padding); PCBJam builds
+     *  the query string. */
     upload(endpointId:string,request:{path:string;bundleId:string;fields?:Record<string,string>;query?:Record<string,string>}):Promise<{status:number;headers:Record<string,string>;body:PCBJamJSON}>};
   /** Open an https page of one of the plugin's approved endpoint sites in a new browser tab after the user confirms
    *  (needs `ui:open-external`). Never an iframe; the editor stays open. */

@@ -2,7 +2,7 @@
 title: API and permissions
 description: "Every host method a plugin can call, the permission each needs, and the limits."
 created: 2026-09-16
-updated: 2026-11-10
+updated: 2026-11-24
 ---
 
 This is the reference for plugin authors: every call your plugin's logic can
@@ -596,10 +596,11 @@ await pcbjam.ui.openExternal(answer.body.redirect);   // user confirms, new tab
   upload address per upload. Declare their names in `upload.query` (up to 8,
   e.g. `"query": ["p", "s"]`) and pass the values with the call:
   `pcbjam.http.upload('fab', { path: '/upload', query: { p, s }, bundleId })`.
-  Each value is 1 to 512 characters of `A-Z a-z 0-9 _ -`. PCBJam builds the
-  query string itself, in name order; a parameter the endpoint does not
-  declare is refused. Take the values out of the address the service gave
-  you, and check its origin and path first.
+  Each value is 1 to 512 characters of `A-Z a-z 0-9 _ -`, and may end in one
+  or two `=` (the padding of a base64 token; pass it as `=`, not as `%3D`).
+  PCBJam builds the query string itself, in name order; a parameter the
+  endpoint does not declare is refused. Take the values out of the address
+  the service gave you, and check its origin and path first.
 - `http.upload` sends the stored bundle as `multipart/form-data`: your `fields`
   (up to 16, 1,024 characters each, no line breaks) and the ZIP under the
   declared field name, with the bundle's file name. The bytes go from PCBJam's

@@ -192,6 +192,11 @@ test("an upload may carry the query parameters its endpoint declares, and nothin
   assert.deepEqual(validateUploadRequest(request, policy), request);
   assert.equal(uploadQueryString(request.query), "?p=" + "A".repeat(164) + "&s=" + "0f".repeat(32));
   assert.equal(uploadQueryString({ s: "2", p: "1" }), "?p=1&s=2");
+  // A signed token may end in base64 padding; the query string carries it encoded.
+  for (const p of ["A".repeat(163) + "=", "A".repeat(162) + "==", "a="]) {
+    assert.deepEqual(validateUploadRequest({ ...request, query: { p } }, policy).query, { p });
+    assert.equal(uploadQueryString({ p, s: "1" }), "?p=" + p.replaceAll("=", "%3D") + "&s=1");
+  }
   assert.equal(uploadQueryString(undefined), "");
   assert.equal(uploadQueryString({}), "");
   // A declared name may be left out; the endpoint decides what it needs.
@@ -201,6 +206,11 @@ test("an upload may carry the query parameters its endpoint declares, and nothin
     { p: "" },
     { p: "a&s=b" },
     { p: "a=b" },
+    { p: "=" },
+    { p: "a===" },
+    { p: "=a" },
+    { p: "a%3D" },
+    { p: "x".repeat(512) + "===" },
     { p: "a b" },
     { p: "a%26b" },
     { p: "a#b" },
@@ -213,7 +223,7 @@ test("an upload may carry the query parameters its endpoint declares, and nothin
     "p=1",
   ])
     assert.throws(() => validateUploadRequest({ ...request, query }, policy), undefined, JSON.stringify(query));
-  for (const query of [{ "p&q": "1" }, { p: "a&b" }, { p: 1 }])
+  for (const query of [{ "p&q": "1" }, { p: "a&b" }, { p: "a=b" }, { p: "=" }, { p: 1 }])
     assert.throws(() => uploadQueryString(query), undefined, JSON.stringify(query));
   // An endpoint that declares no query takes none, and a path never carries one.
   assert.throws(() => validateUploadRequest(request, plain));
