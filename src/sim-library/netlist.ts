@@ -15,7 +15,9 @@
 //   - gives a supply wire whose name states a voltage (+5V) a source, when no source of
 //     the schematic sits on it (supplies.ts). A regulator of the library is such a source
 //     when a source of the schematic reaches its input,
-//   - includes the model file of every part that is used.
+//   - includes the model file of every part that is used,
+//   - gives a part its thermal pins when its symbol names the wires they are on, so that
+//     heat is part of the circuit the user draws (thermal.ts).
 // The nodes come from the editor's pin-to-net table (kicadSimSymbols). Which of KiCad's
 // lines belongs to which symbol comes from the editor too (kicadSimNetlist): nothing here
 // guesses it from the text.
@@ -25,6 +27,10 @@ import type { PartDigital, PartInput } from "./format.js";
 import { matchSymbols, type Match, type SchematicSymbol } from "./match.js";
 import { analogParams, resolveSettings, type ResolvedSettings } from "./settings.js";
 import { CODE_MODEL_LINE_MAX, chipFile, chipModel, codeModelLines, withExternalSources } from "./spice-text.js";
+import {
+  AIR_PARAM, THERMAL_SHOWN, THERMAL_SIGNAL, THERMAL_SUFFIX, thermalFile, thermalModel, thermalPins, thermalRoles, wiresOf, wiresSaid,
+  type WireProblem,
+} from "./thermal.js";
 import { fedParts, powerByName, supplyLines, type AssumedSource, type Passing, type Power, type Unpowered } from "./supplies.js";
 
 /**
@@ -183,11 +189,45 @@ export interface PlacedPart {
   /** Where the part's overlay sits on this symbol, when its "fits" line says so (see PartFit). */
   origin?: [number, number];
   /**
+   * Only for a part that is on heat wires: the nets its thermal pins are on, in the
+   * pins' order (see thermalPins). They follow `nodes` on the part's line.
+   */
+  thermal?: string[];
+  /**
    * Only for a part with code: its place in the call order of a time step (1, 2, 3, ...).
    * The same number is how the engine and the part's own program tell two placed parts
    * apart. 0 for a part without code.
    */
   number: number;
+}
+
+/** A wire that carries heat: a net that a thermal pin of a part is on (thermal.ts). */
+export interface DeckWire {
+  /** Its name, as the first symbol that names it writes it. */
+  name: string;
+  /** The net it is in the circuit: 1 V on it is 1 degree Celsius. */
+  node: string;
+  /** The parts that give their heat to it, by reference. */
+  heat: string[];
+  /** The parts that are as warm as it. */
+  feel: string[];
+  /** The parts that move air to or from it. */
+  air: string[];
+}
+
+/** A symbol that names heat wires and is on none. */
+export interface NotOnWire {
+  ref: string;
+  /** What its field says. */
+  said: string;
+  /**
+   * Why: the field does not name the wires of the part's thermal pins ("wires", with the
+   * part's title and what is wrong), the symbol's part has no thermal pin ("part", with
+   * the part's title), or nothing of the library runs the symbol ("no-part").
+   */
+  why: "wires" | "part" | "no-part";
+  title?: string;
+  problem?: WireProblem;
 }
 
 export interface Deck {
@@ -206,6 +246,10 @@ export interface Deck {
   notSimulated: string[];
   /** The supply wires the circuit powers by their names, and the ones whose names state no voltage. */
   power: Power;
+  /** The wires that carry heat, by name. */
+  wires: DeckWire[];
+  /** The symbols that name heat wires and are on none. */
+  notOnWire: NotOnWire[];
   /** What the user should know. It does not stop the run. */
   notes: string[];
   /** What stops the run. Empty: the circuit can go to the simulator. */
@@ -276,6 +320,13 @@ export function buildDeck({ symbols, excluded = [], netlist, plan, parts, live =
   const passing: Passing[] = [];
   /** The nets each simulated part that is not a chip joins: power on one reaches the others. */
   const links: string[][] = [];
+  /** The nets of the schematic: a symbol names the wire of a thermal pin among them. */
+  const netNames = [...new Set([...symbols, ...excluded].flatMap((s) => Object.values(s.pins).flatMap((p) => (p.node ? [p.node] : []))))];
+  /** The wires that carry heat, by the name the circuit knows their net under. */
+  const wires = new Map<string, DeckWire>();
+  const notOnWire: NotOnWire[] = [];
+  /** The parts whose model with thermal pins is in the circuit. */
+  const thermalUsed = new Set<string>();
   /** A part asks for Gear's method. */
   let gear = false;
   let order = 0;
@@ -311,7 +362,21 @@ export function buildDeck({ symbols, excluded = [], netlist, plan, parts, live =
     const name = `X${m.ref}`;
     // A chip that runs firmware has its model to itself (see chipModel), under a name of its own.
     const own = man.digital?.kind === "emulator" ? `_${number}` : "";
-    lines.push(`${name} ${nodes.join(" ")} ${man.analog.subckt}${own}${params.length ? " " + params.join(" ") : ""}`);
+    // The wires the symbol names for its part's thermal pins. On them the part runs as its
+    // model with those pins after its own (see thermalModel).
+    const thermal = man.thermal;
+    const said = wiresSaid(sym);
+    let onWires: string[] | undefined;
+    if (said.length && !thermal) notOnWire.push({ ref: m.ref, said: said.join(" "), why: "part", title: man.title });
+    else if (said.length && thermal) {
+      const found = wiresOf(sym, thermalPins(thermalRoles(thermal)).length, netNames);
+      if (found && "problem" in found) notOnWire.push({ ref: m.ref, said: said.join(" "), why: "wires", title: man.title, problem: found.problem });
+      else if (found) onWires = found.nodes;
+    }
+    const given = (v: string): string => (v.startsWith("$") ? settings.values[v.slice(1)]?.value ?? "0" : v);
+    if (onWires && thermal?.air) params.push(`${AIR_PARAM}=${given(thermal.air.full)}`);
+    const warmInput = onWires ? thermal?.temperature : undefined;
+    lines.push(`${name} ${[...nodes, ...(onWires ?? [])].join(" ")} ${man.analog.subckt}${own}${onWires ? THERMAL_SUFFIX : ""}${params.length ? " " + params.join(" ") : ""}`);
     // A source (a battery): the wires on its supply pins have their power from it. When the
     // symbol's Value does not say its voltage, it runs with the part's own, and the run says so.
     // A part that passes power on (a regulator) is a source only when one reaches its input.
@@ -360,20 +425,57 @@ export function buildDeck({ symbols, excluded = [], netlist, plan, parts, live =
     }
 
     const inst = `x${m.ref.toLowerCase()}`;
+    if (onWires && thermal && !thermalUsed.has(m.partId)) {
+      // the part's model with its thermal pins
+      thermalUsed.add(m.partId);
+      const current = (signal: string | undefined): string | undefined => (signal === undefined ? undefined : man.signals?.find((s) => s.name === signal)?.current ?? "");
+      const others = (man.inputs ?? []).filter((i) => i.name !== warmInput).map((i) => i.source);
+      try {
+        let text = thermalModel(part.analog, man.analog.subckt, {
+          ...(warmInput !== undefined ? { temperature: man.inputs?.find((i) => i.name === warmInput)?.source ?? "" } : {}),
+          ...(thermal.heat !== undefined ? { heat: current(thermal.heat) } : {}),
+          ...(thermal.air ? { air: current(thermal.air.signal) } : {}),
+        });
+        if (live && others.length) text = withExternalSources(text, `${man.analog.subckt}${THERMAL_SUFFIX}`, others);
+        files.push({ path: modelPath(m.partId, thermalFile(man.analog.file)), text });
+      } catch (err) {
+        errors.push(`${m.partId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
     for (const input of man.inputs ?? [])
-      inputs.push({ ref: m.ref, partId: m.partId, input, vector: `v.${inst}.${input.source.toLowerCase()}`, initial: initialValue(input) });
+      if (input.name !== warmInput) inputs.push({ ref: m.ref, partId: m.partId, input, vector: `v.${inst}.${input.source.toLowerCase()}`, initial: initialValue(input) });
     for (const s of man.signals ?? [])
       signals.push({ ref: m.ref, partId: m.partId, name: s.name, vector: `v.${inst}.${s.current.toLowerCase()}#branch` });
+    if (onWires && thermal) {
+      // which wire each thermal pin is on, and the temperature of the part's own wire
+      thermalPins(thermalRoles(thermal)).forEach((pin, i) => {
+        const node = onWires[i] ?? "";
+        const wire = wires.get(node.toLowerCase()) ?? { name: said[i] ?? node, node, heat: [], feel: [], air: [] };
+        wires.set(node.toLowerCase(), wire);
+        if (pin.does === "air") { if (!wire.air.includes(m.ref)) wire.air.push(m.ref); return; }
+        if (pin.does !== "feels") wire.heat.push(m.ref);
+        if (pin.does !== "heats") wire.feel.push(m.ref);
+        signals.push({ ref: m.ref, partId: m.partId, name: THERMAL_SIGNAL, vector: `v.${inst}.${THERMAL_SHOWN.toLowerCase()}#branch` });
+      });
+    }
     placed.push({
       ref: m.ref, uuid: m.uuid, sheet: m.sheet, partId: m.partId, version: man.version, rule: m.rule, name, nodes,
       connected: man.pins.filter(wired),
       settings: settings.values, number,
       ...(m.origin ? { origin: m.origin } : {}),
+      ...(onWires ? { thermal: onWires } : {}),
     });
   }
+  // a symbol that names heat wires and that no library part runs
+  const mine = new Set(placed.map((p) => p.ref));
+  for (const sym of symbols) {
+    const said = wiresSaid(sym);
+    if (said.length && !mine.has(sym.ref) && !notOnWire.some((n) => n.ref === sym.ref)) notOnWire.push({ ref: sym.ref, said: said.join(" "), why: "no-part" });
+  }
+  notOnWire.sort((a, b) => natural(a.ref, b.ref));
+  const wireList = [...wires.values()].sort((a, b) => natural(a.name, b.name));
 
   // 2. KiCad's netlist without the lines we replace and without the lines no simulator runs
-  const mine = new Set(placed.map((p) => p.ref));
   const unusable = unusableLines(netlist, symbols);
   const notSimulated = [...unusable.keys()].filter((ref) => !mine.has(ref)).sort(natural);
   const keptLines = netlist.lines.filter((l) => l.ref === undefined || !(mine.has(l.ref) || unusable.has(l.ref)));
@@ -425,7 +527,7 @@ export function buildDeck({ symbols, excluded = [], netlist, plan, parts, live =
       if (l.pieces > CODE_MODEL_LINE_MAX)
         errors.push(`${where}: the line of ${l.name} is too long for the simulator (${l.pieces} pieces, at most ${CODE_MODEL_LINE_MAX})`);
 
-  return { deck, files, inputs, signals, codeParts, placed, notSimulated, power, notes, errors };
+  return { deck, files, inputs, signals, codeParts, placed, notSimulated, power, wires: wireList, notOnWire, notes, errors };
 }
 
 export interface PrepareOptions {

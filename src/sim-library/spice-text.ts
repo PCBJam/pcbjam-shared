@@ -62,7 +62,8 @@ export function codeModelLines(text: string): { name: string; pieces: number }[]
   return out;
 }
 
-const sourceRe = (name: string): RegExp =>
+/** A line "Vname n+ n- dc value": the source of that name, as a model of the library writes it. */
+export const sourceRe = (name: string): RegExp =>
   new RegExp(`^(${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})\\s+(\\S+)\\s+(\\S+)\\s+dc\\s+(\\S+)\\s*$`, "i");
 
 /** A voltage source "Vname n+ n- dc value" inside a subcircuit, or null. */

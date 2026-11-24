@@ -137,6 +137,41 @@ export interface OverlayLine {
   on: [number, number, number, number];
 }
 
+/** What a part can do with heat: give it off, be as warm as its wire, move air. */
+export type ThermalRole = "heat" | "temperature" | "air";
+
+/**
+ * What a part does with heat (thermal.ts). Heat is drawn as a circuit: on a wire that
+ * carries heat 1 V is 1 degree Celsius and 1 A is 1 W. A part with this has thermal pins,
+ * which the user joins to such wires by naming them on the symbol. A part without it has
+ * nothing to do with heat. A part may be several of the three.
+ */
+export interface PartThermal {
+  /**
+   * The part is as warm as the wire its thermal pin is on: the name of a range input
+   * that is its temperature in degrees Celsius. On a wire the input is not the user's
+   * any more, and the part's widgets for it are left out.
+   */
+  temperature?: string;
+  /**
+   * The part gives off heat into the wire its thermal pin is on: the name of a signal
+   * that is that heat, in watts.
+   */
+  heat?: string;
+  /**
+   * The part moves air between the wires its two air pins are on: a signal that is 1 at
+   * its full speed, and how much heat the air carries then, in watts for every degree
+   * the one wire is warmer than the other (a number as text, or "$name" for a setting).
+   */
+  air?: { signal: string; full: string };
+  /**
+   * Widgets the part has only while it is on its wires, after its own. With a thermal
+   * pin for its own temperature they may show the signal "wire" too: the temperature
+   * of that pin's wire in degrees Celsius.
+   */
+  overlay?: OverlayEntry[];
+}
+
 /** One widget on the schematic. Other keys are the widget's own options; "$name" reads a setting. */
 export interface OverlayEntry {
   widget: string;
@@ -197,6 +232,7 @@ export interface PartManifest {
   inputs?: PartInput[];
   signals?: PartSignal[];
   overlay?: OverlayEntry[];
+  thermal?: PartThermal;
 }
 
 /** A published file: its name inside the part's folder, its checksum and its size. */
@@ -220,6 +256,8 @@ export interface IndexPart {
   code: boolean;
   /** The emulator a chip part runs its firmware in (an id of `LibraryIndex.emulators`). */
   emulator?: string;
+  /** What the part does with heat (see PartThermal). Missing: nothing. */
+  thermal?: ThermalRole[];
   files: IndexFile[];
 }
 

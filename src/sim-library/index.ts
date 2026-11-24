@@ -18,7 +18,7 @@ export {
 } from "./editor.js";
 export {
   LEFT_OUT_TIE, LIVE_GEAR, LIVE_TRAN, buildDeck, kicadModels, prepareRun, unusableLines,
-  type BuildOptions, type Deck, type DeckCodePart, type DeckFile, type DeckInput, type DeckSignal, type PlacedPart,
+  type BuildOptions, type Deck, type DeckCodePart, type DeckFile, type DeckInput, type DeckSignal, type DeckWire, type NotOnWire, type PlacedPart,
   type PrepareOptions, type PreparedRun, type Unusable,
 } from "./netlist.js";
 export { analogParams, formatSettings, parseSettings, resolveSettings, settingAllows, settingFromValue, type ResolvedSettings } from "./settings.js";
@@ -29,3 +29,8 @@ export {
 export {
   CODE_MODEL_LINE_MAX, chipFile, chipModel, codeModelLines, findSource, hasElement, subcircuits, withExternalSources, type Subcircuit,
 } from "./spice-text.js";
+export {
+  AIR_PARAM, AIR_PINS, FIELD_THERMAL, THERMAL_PIN, THERMAL_SHOWN, THERMAL_SIGNAL, THERMAL_SUFFIX, WIRE_NAME,
+  findWire, overlayOf, thermalFile, thermalModel, thermalPins, thermalRoles, wireProblemText, wiresOf, wiresSaid,
+  type ThermalPin, type ThermalSources, type WireProblem,
+} from "./thermal.js";
