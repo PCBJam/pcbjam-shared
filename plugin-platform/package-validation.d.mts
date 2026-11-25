@@ -16,7 +16,7 @@ export interface PluginManifest {
 /** Manifest-only package whose UI is the provider's own KiCad 10 remote-symbol panel page. */
 export interface RemoteProviderManifest {
   apiVersion: 1; kind: 'remote-provider'; id: string; name: string; version: string; description: string;
-  surfaces: ['editor:eeschema']; permissions: string[]; provider: {origin: string};
+  surfaces: ['editor:eeschema']; permissions: string[]; provider: {origin: string; /** A client the provider registered for PCBJam alone (sign-in only). */ oauthClientId?: string};
 }
 export type Manifest = PluginManifest | RemoteProviderManifest;
 export interface ValidatedPackage {

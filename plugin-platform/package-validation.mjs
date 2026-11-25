@@ -9,7 +9,7 @@ export { default as PERMISSIONS } from './api-permissions.json' with { type: 'js
 import PERMISSIONS from './api-permissions.json' with { type: 'json' };
 import {validateEndpoints,backendPermissions} from './backend-contract.mjs';
 import { validateNetwork, directPermissions } from './network-contract.mjs';
-import { providerOrigin, providerPermissions } from './remote-provider-contract.mjs';
+import { oauthClientId, providerOrigin, providerPermissions } from './remote-provider-contract.mjs';
 const fail = message => { throw new Error(message); };
 export const PACKAGE_KINDS = ['plugin', 'remote-provider'];
 export const PROVIDER_PERMISSIONS = ['provider:embed', 'provider:download', 'editor:place-items'];
@@ -189,9 +189,12 @@ function validateProviderPackage(files, manifest, legacyDigest) {
   for (const file of files) if (!['manifest.json', 'README.md', 'LICENSE.txt'].includes(file.path)) fail(`Remote-provider packages hold no code: unexpected ${file.path}`);
   exact(manifest, ['apiVersion', 'kind', 'id', 'name', 'version', 'description', 'surfaces', 'permissions', 'provider']);
   identity(manifest);
-  exact(manifest.provider ?? fail('Unknown manifest field'), ['origin']);
+  exact(manifest.provider ?? fail('Unknown manifest field'), ['origin', 'oauthClientId']);
   let origin;
   try { origin = providerOrigin(manifest.provider.origin); } catch { fail('provider.origin must be an https origin with a public hostname and no path or port'); }
+  // A client the provider registered for PCBJam alone (sign-in only). It is part of what an operator
+  // approves, not of what a user consents to, so it stays out of the policy digest below.
+  if (manifest.provider.oauthClientId !== undefined) try { oauthClientId(manifest.provider.oauthClientId); } catch { fail('provider.oauthClientId must be 1 to 200 printable characters'); }
   if (!Array.isArray(manifest.surfaces) || manifest.surfaces.length !== 1 || manifest.surfaces[0] !== 'editor:eeschema') fail('Remote providers place symbols: surfaces must be exactly ["editor:eeschema"]');
   const permissions = manifest.permissions;
   if (!Array.isArray(permissions) || new Set(permissions).size !== permissions.length || permissions.length !== PROVIDER_PERMISSIONS.length || permissions.some(p => !PROVIDER_PERMISSIONS.includes(p)))

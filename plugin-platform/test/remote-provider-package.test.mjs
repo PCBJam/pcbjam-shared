@@ -29,6 +29,11 @@ test('the policy digest pins the provider origin and nothing else', () => {
   assert.notEqual(validatePackage(files({ name: 'Renamed' })).digest, base.digest, 'but the release digest changes');
   assert.notEqual(validatePackage(files({ provider: { origin: 'https://kicad.other-parts.example' } })).policyDigest, base.policyDigest, 'a new origin is new consent');
   assert.equal(validatePackage(files({ permissions: [...PROVIDER_PERMISSIONS].reverse() })).policyDigest, base.policyDigest, 'permission order is irrelevant');
+  // A client for PCBJam alone (sign-in): an operator approves it, a user does not consent to it.
+  const own = validatePackage(files({ provider: { origin: ORIGIN, oauthClientId: 'pcbjam' } }));
+  assert.equal(own.manifest.provider.oauthClientId, 'pcbjam');
+  assert.equal(own.policyDigest, base.policyDigest, 'the client id is not part of the consent');
+  assert.notEqual(own.digest, base.digest);
   const plugin = validatePackage([{ path: 'manifest.json', text: JSON.stringify({ apiVersion: 1, id: 'acme-parts', name: 'Acme', version: '1.0.0', description: '',
     main: 'main.js', ui: 'ui.html', surfaces: ['editor:eeschema'], permissions: ['ui:custom', 'ui:project-data', 'editor:place-items'] }) },
     { path: 'main.js', text: '1' }, { path: 'ui.html', text: '<p>UI</p>' }]);
@@ -53,6 +58,10 @@ test('provider packages refuse code, wrong surfaces, wrong permissions and unsaf
     [files({ uiSize: { width: 400, height: 400 } }), /Unknown manifest field/],
     [files({ provider: undefined }), /Unknown manifest field/],
     [files({ provider: { origin: ORIGIN, panel: '/p' } }), /Unknown manifest field/],
+    [files({ provider: { origin: ORIGIN, oauthClientId: '' } }), /oauthClientId must be 1 to 200 printable/],
+    [files({ provider: { origin: ORIGIN, oauthClientId: 'x'.repeat(201) } }), /oauthClientId must be 1 to 200 printable/],
+    [files({ provider: { origin: ORIGIN, oauthClientId: 'two\nlines' } }), /oauthClientId must be 1 to 200 printable/],
+    [files({ provider: { origin: ORIGIN, oauthClientId: 7 } }), /oauthClientId must be 1 to 200 printable/],
     [files({ provider: { origin: 'http://kicad.acme-parts.example' } }), /https origin/],
     [files({ provider: { origin: ORIGIN + '/panel' } }), /https origin/],
     [files({ provider: { origin: 'https://localhost' } }), /https origin/],

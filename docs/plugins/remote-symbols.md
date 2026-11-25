@@ -1,8 +1,8 @@
 ---
 title: Remote Symbols
-description: "Show your KiCad 10 Remote Symbols provider in PCBJam's schematic editor: shim, headers, metadata, package and review."
+description: "Show your KiCad 10 Remote Symbols provider in PCBJam's schematic editor: shim, headers, metadata, sign-in, package and review."
 created: 2026-09-23
-updated: 2026-10-05
+updated: 2026-11-25
 ---
 
 This page is for parts providers. If you already serve a **KiCad 10
@@ -37,11 +37,14 @@ cross-origin `<iframe>` in a browser instead of KiCad's native web view:
 2. Send [the headers](#the-headers) on the panel page and everything it loads.
 3. Check your [metadata](#metadata) and download URLs against the
    [URL rules](#url-rules).
-4. [Test](#test-before-you-ask-for-review) with desktop KiCad and over an
+4. If your users sign in (`auth.type: "oauth2"`), prepare your sign-in server
+   and your panel as [Sign-in](#sign-in) describes. A provider without sign-in
+   skips this step.
+5. [Test](#test-before-you-ask-for-review) with desktop KiCad and over an
    https tunnel.
-5. [Package your provider](#package-your-provider): one `manifest.json` that
+6. [Package your provider](#package-your-provider): one `manifest.json` that
    names your origin.
-6. Ask for the [review](#review) on the
+7. Ask for the [review](#review) on the
    [PCBJam Discord](https://discord.gg/ybhqJxjR3E). PCBJam reviews your origin
    once, for every user.
 
@@ -103,6 +106,9 @@ you in `EMBEDDERS`.
   `window.kicadMessages`; handle them once your client is ready.
 - Inside desktop KiCad `window.kicad` already exists and the shim does nothing,
   so one page serves both.
+- Send every message through `window.kicad.postMessage`. A panel that calls
+  the webview's own channels directly (`webkit.messageHandlers`,
+  `chrome.webview`) works in desktop KiCad and sends nothing in PCBJam.
 - An empty `EMBEDDERS` list accepts any embedder. Use it only for local testing.
 - PCBJam's editor origins: `https://editor.pcbjam.com` (production) and
   `https://pcbjam-editor-staging.pcbjam-staging.workers.dev` (staging, where
@@ -166,25 +172,221 @@ with `fetch` and CORS. Your main site stays untouched.
 PCBJam checks both headers when a package is uploaded and names the missing one,
 so a wrong setup never shows up as a blank frame.
 
+**Framing.** Your page also has to let PCBJam show it inside the editor. A page
+that sends `X-Frame-Options` (`DENY` or `SAMEORIGIN`), or a `frame-ancestors`
+policy that does not name PCBJam's editor, would stay empty there, so PCBJam
+refuses the package at upload and names the header. Do not just drop
+`X-Frame-Options`, which would let any site frame your panel: replace it with a
+`Content-Security-Policy` that names PCBJam's editor origins.
+
+```http
+Content-Security-Policy: frame-ancestors https://editor.pcbjam.com https://pcbjam-editor-staging.pcbjam-staging.workers.dev
+```
+
+Where a page sends `frame-ancestors`, browsers ignore `X-Frame-Options`, and so
+does this check. Production and staging each check their own editor origin, so
+keep both in the list if you test on staging.
+
 ## What PCBJam supports
 
 | | Desktop KiCad 10 | PCBJam |
 |---|---|---|
-| `auth.type` | `none`, `oauth2` | `none` only, for now |
+| `auth.type` | `none`, `oauth2` | `none`, and `oauth2` under the rules in [Sign-in](#sign-in) |
 | `CAPABILITIES.compression` | `NONE`, `ZSTD` | `NONE`; a `ZSTD` payload is refused with `INVALID_PAYLOAD` |
 | `PLACE_COMPONENT` / `DL_COMPONENT` manifests | download URLs on the panel or API origin, with sha256 and size | the same; downloads go through PCBJam's server, 4 MiB per asset and per part |
 | Inline `DL_SYMBOL`, `DL_FOOTPRINT`, `DL_COMPONENT` | yes | yes |
 | Assets kept | symbol, footprint, 3D, SPICE | symbol and the first footprint; 3D and SPICE are accepted but not stored yet |
 | Where parts go | a project library | the user's team library, named after your domain |
-| `REMOTE_LOGIN` | opens the system browser | answered with `LOGIN_FAILED` |
+| `REMOTE_LOGIN` | opens the system browser | opens a sign-in window in the user's browser, see [Sign-in](#sign-in); a provider without sign-in gets the same answer as from KiCad, `OK` with `auth_type: "none"` |
+| Tokens | kept by KiCad, which signs the panel in again each time it opens | not kept; your page keeps its own session |
 | Placement | immediately | after the user confirms in PCBJam's prompt and clicks the canvas; `PLACE_COMPONENT` is answered `OK` once the part is saved |
 
 PCBJam answers `CAPABILITIES`, `GET_KICAD_VERSION`, `LIST_SUPPORTED_VERSIONS`
 and `GET_SOURCE_INFO` like desktop KiCad does. Unknown commands get
 `UNKNOWN_COMMAND`, a stale session id `SESSION_MISMATCH`.
 
-Your page cannot learn who the user is, and `auth.type: "oauth2"` is refused at
-upload, so account-specific pricing or stock is not possible in PCBJam yet.
+PCBJam never tells your page who its user is. For account-specific pricing,
+stock or private parts, sign your users in yourself: see [Sign-in](#sign-in).
+
+## Sign-in
+
+A provider whose users sign in with OAuth 2 in desktop KiCad can sign them in
+inside PCBJam too. The steps are KiCad's; only the first one looks different,
+because a browser has no system browser to hand over to.
+
+1. Your page sends `REMOTE_LOGIN`. PCBJam answers at once and opens your
+   sign-in server's authorization page in a window of its own. It asks for the
+   authorization code flow with PKCE (`S256`), as a public client: PCBJam has
+   no client secret.
+2. Your sign-in server sends that window back to
+   [PCBJam's callback address](#callback-addresses) with `code`, `state` and
+   `iss`.
+3. PCBJam's server sends the code to your token endpoint, then POSTs
+   `{"access_token": "...", "next_url": "<your panel_url>"}` to your
+   `session_bootstrap_url` and expects `{"nonce_url": "..."}`, as desktop
+   KiCad does.
+4. PCBJam loads your panel at `nonce_url`. Your page redeems the nonce, keeps
+   **its own session**, and gets a new `NEW_SESSION`.
+
+**PCBJam keeps nothing.** The access token exists on PCBJam's server only
+while step 3 runs; no token, refresh token or session of your user is stored.
+This is the one difference from desktop KiCad that your panel has to be built
+for: PCBJam does not sign the panel in again the next time it opens. Your page
+decides from its own session whether the user is signed in, and sends
+`REMOTE_LOGIN` when it needs a new one.
+
+### Sign-in in your metadata
+
+```json
+{
+  "panel_url": "https://kicad.example.com/panel",
+  "session_bootstrap_url": "https://kicad.example.com/session/bootstrap",
+  "auth": {
+    "type": "oauth2",
+    "metadata_url": "https://auth.example.com/.well-known/oauth-authorization-server",
+    "client_id": "kicad-remote-symbols",
+    "scopes": ["parts.read"]
+  }
+}
+```
+
+- `auth.metadata_url` is your sign-in server's discovery document (RFC 8414).
+  It follows the [URL rules](#url-rules).
+- `auth.client_id` is the client PCBJam signs in with, unless your package
+  names [a client of its own](#a-separate-client-for-pcbjam): 1 to 200
+  printable ASCII characters. `auth.scopes` is optional: at most 32 distinct
+  scope names.
+- `session_bootstrap_url` is required, on the origin of `panel_url`, and
+  follows the URL rules.
+
+### Your sign-in server
+
+PCBJam reads the discovery document **once, when your package is uploaded**,
+and refuses the upload with the reason when a rule is not met. It must be
+served like your provider metadata (`application/json`, uncompressed, no
+redirect) and say:
+
+| Field | Rule |
+|---|---|
+| `issuer` | A bare https origin without a path, for example `https://auth.example.com`. `auth.metadata_url` must be exactly `<issuer>/.well-known/oauth-authorization-server`. |
+| `authorization_endpoint`, `token_endpoint` | On the issuer's origin, without a query string. |
+| `response_types_supported` | Contains `code`. |
+| `grant_types_supported` | When present, contains `authorization_code`. |
+| `code_challenge_methods_supported` | Contains `S256`. |
+| `token_endpoint_auth_methods_supported` | Contains `none`. |
+| `authorization_response_iss_parameter_supported` | `true`. |
+
+Three more rules:
+
+- **Same registered domain.** The issuer's host and the host of your
+  `provider.origin` must belong to one registered domain:
+  `auth.example.com` for `kicad.example.com`, `api.example.com` for
+  `example.com`. Hosts under a shared suffix of the public suffix list
+  (`a.github.io` and `b.github.io`, two `pages.dev` sites) count as different
+  domains. A hosted sign-in service on another domain is refused for now.
+- **`iss` in every answer** (RFC 9207). Your server adds `iss=<issuer>` to
+  every redirect back to the callback address, with a `code` and with an
+  `error` alike. PCBJam compares it with `issuer` character for character. An
+  answer without it, with two of them, or with another value (a trailing
+  slash or another letter case is another value) ends the sign-in, and its
+  code is never used.
+- **Plain JSON from the token endpoint.** PCBJam's server sends a form POST
+  (`grant_type=authorization_code`, `code`, `client_id`, `redirect_uri`,
+  `code_verifier`) and expects `200` with `application/json`, uncompressed and
+  without a redirect, holding a non-empty `access_token` of at most 8 KiB and
+  `token_type` `Bearer`.
+
+These rules are stricter than desktop KiCad's on purpose: PCBJam shows many
+providers to many users and makes sure no provider can receive another
+provider's sign-in. An issuer with a path (a realm), an OpenID-only document
+(`/.well-known/openid-configuration`) and a server that cannot send `iss` do
+not work.
+
+### Callback addresses
+
+Register both on the client PCBJam uses, matched exactly, next to KiCad's own
+loopback callback:
+
+```text
+https://editor.pcbjam.com/remote-provider-callback/<sign-in server host>
+https://pcbjam-editor-staging.pcbjam-staging.workers.dev/remote-provider-callback/<sign-in server host>
+```
+
+`<sign-in server host>` is the host of your `issuer`, for example
+`https://editor.pcbjam.com/remote-provider-callback/auth.example.com`.
+
+### The session bootstrap and the nonce
+
+`session_bootstrap_url` gets a JSON POST from PCBJam's server:
+`{"access_token": "...", "next_url": "<your panel_url>"}`. Answer `200`,
+`application/json`, with `{"nonce_url": "..."}`:
+
+- `nonce_url` is https, on the origin of `session_bootstrap_url`, at most 2048
+  characters, and does not contain the access token.
+- Make the nonce single use and short lived. PCBJam loads it once.
+- The page behind it removes the nonce from its address at once
+  (`history.replaceState`), sends `Referrer-Policy: no-referrer`, and sends
+  [the headers](#the-headers) like the panel itself.
+- Token exchange and bootstrap together have about 30 seconds. PCBJam tries
+  each once.
+
+### `REMOTE_LOGIN` and `GET_SOURCE_INFO`
+
+| Your page sends | PCBJam answers |
+|---|---|
+| `REMOTE_LOGIN` (`interactive` absent or `true`) | `OK`, `{"authenticated": false, "started": true}`, and the sign-in window opens. Sent again while that window is open, it starts over with a new window. |
+| `REMOTE_LOGIN` with `interactive: false` | `OK`, `{"authenticated": false, "started": false}`. Nothing opens. |
+| `REMOTE_LOGIN` with `sign_out: true` | `OK`, `{"authenticated": false, "signed_out": true}`. For a provider with sign-in PCBJam then loads your panel again at `panel_url`. It holds nothing to delete: end the session in your page before you send it. |
+| `REMOTE_LOGIN` while a part is being saved, or while PCBJam finishes a sign-in | `ERROR`, `LOGIN_FAILED`. |
+| `REMOTE_LOGIN` from a provider without sign-in | `OK`, `{"authenticated": false, "auth_type": "none"}`. |
+| `GET_SOURCE_INFO` | `auth_type` is `oauth2` or `none`. `authenticated` is always `false`: PCBJam cannot see your page's session. |
+
+- `started: true` means the window was asked for, not that the user signed
+  in. Success arrives as a reload of your panel at `nonce_url`. Failure
+  arrives as nothing: the user sees the reason in PCBJam ("Sign-in was
+  cancelled", "The provider refused the sign-in", "Sign-in failed"), your page
+  stays as it is, and its sign-in button must work again.
+- Send `REMOTE_LOGIN` from a click in your page. Browsers open a window only
+  shortly after a click. When the browser blocks the window anyway, PCBJam
+  shows the user a "Sign in to <your name>" button of its own.
+- While a sign-in runs, part commands are answered `IMPORT_FAILED` ("PCBJam is
+  signing you in. Try again when it has finished.").
+- A panel that waits for `authenticated: true` from the host stays signed out
+  in PCBJam.
+
+### Your page's session
+
+Your page runs in a cross-site frame, so its storage follows the browser's
+rules for such frames:
+
+- Keep the session in the frame's own storage (`sessionStorage`,
+  `localStorage`) or in partitioned cookies (`Partitioned`, CHIPS). Ordinary
+  third-party cookies are blocked in the frame by most browsers.
+- Browsers key that storage by PCBJam's site and browser profile, not by
+  PCBJam account. Two PCBJam users of one browser profile share your session
+  until one signs out. Show which account is signed in, and offer sign-out.
+- Safari keeps a frame's `localStorage` only until the browser closes, so a
+  session kept there asks for a new sign-in in every browser session.
+- If your panel refreshes tokens, make sure that works for a session that
+  started in PCBJam, with the client PCBJam used.
+
+### A separate client for PCBJam
+
+By default PCBJam signs in with the client in your metadata, the one desktop
+KiCad uses, with PCBJam's callback addresses added to it. If you want PCBJam
+on a client of its own (its own callbacks, its own line in your logs, switched
+off without touching KiCad), name it in your PCBJam package:
+
+```json
+"provider": { "origin": "https://kicad.example.com", "oauthClientId": "pcbjam" }
+```
+
+- Register the two callback addresses on that client, and accept its tokens
+  at `session_bootstrap_url`.
+- A package that names a client is reviewed as its own configuration, and
+  PCBJam approves it only when you, the provider, confirm that the client is
+  yours.
+- `oauthClientId` is refused for a provider without sign-in.
 
 ## Metadata
 
@@ -221,6 +423,11 @@ within 10 seconds and at most 64 KiB. For example:
   the same. Changing the origin of `panel_url` or `api_base_url` stops the
   panel for everyone (`PROVIDER_CHANGED`): see
   [Change your origin](#change-your-origin).
+- With [sign-in](#sign-in), more is pinned when a package is uploaded:
+  `auth.type`, `auth.metadata_url`, `auth.client_id`, `auth.scopes`,
+  `session_bootstrap_url` and the whole `panel_url`. Changing any of them
+  stops the panel (`PROVIDER_CHANGED`) until you publish a package with a new
+  `version`: see [Change your sign-in](#change-your-sign-in).
 - `panel_url` is resolved like any URL: relative links in your page resolve
   against it, so `https://kicad.example.com/panel` and
   `https://kicad.example.com/panel/` load `assets/app.js` from different
@@ -343,9 +550,9 @@ When something fails your page gets an `ERROR` reply, as from desktop KiCad:
 | `INVALID_PARAMETERS` | `session_id` is missing. |
 | `SESSION_MISMATCH` | `session_id` is not the current session's. |
 | `UNKNOWN_COMMAND` | A command PCBJam does not handle. |
-| `LOGIN_FAILED` | `REMOTE_LOGIN`: sign-in is not supported. |
+| `LOGIN_FAILED` | `REMOTE_LOGIN` arrived while a part is being saved or while PCBJam is finishing a sign-in. Send it again afterwards. |
 | `INVALID_PAYLOAD` | Inline data is not valid base64/JSON, or uses a compression other than `NONE`. |
-| `IMPORT_FAILED` | The part was refused; `error_message` says why. Also `Cancelled in PCBJam.` when the user declines, and "PCBJam is still handling the previous part" when a request arrives while another is pending. |
+| `IMPORT_FAILED` | The part was refused; `error_message` says why. Also `Cancelled in PCBJam.` when the user declines, "PCBJam is still handling the previous part" when a request arrives while another is pending, and "PCBJam is signing you in. Try again when it has finished." during a sign-in. |
 | `ACCESS_DENIED` | The user may not write to their team library, or their access to your provider ended. |
 
 When PCBJam's proxy refused a download, `error_message` ends with the reason in
@@ -391,14 +598,17 @@ A provider is installed as a package with a single file, `manifest.json`
 ```
 
 - `provider.origin` is where PCBJam reads your `/.well-known` document.
+- `provider.oauthClientId` is optional, for a provider with sign-in only: see
+  [A separate client for PCBJam](#a-separate-client-for-pcbjam).
 - `surfaces` and `permissions` must be exactly these values.
 - The ZIP (or folder) may contain only `manifest.json`, `README.md` and
   `LICENSE.txt`.
 - Zip the file, or choose the folder, and install it with **Plugins → Add
   plugin…** in a schematic, like any plugin. The upload fetches your metadata
   and checks your panel's headers from PCBJam's server, so both must already be
-  reachable over https. The review shows the user your name, origins, panel URL
-  and limits.
+  reachable over https. With sign-in it also reads your sign-in server's
+  document. The review shows the user your name, origins, panel URL and
+  limits, and where they will sign in.
 - To publish a change to the package itself, increase `version`. Changes to
   your panel page, catalog and assets need no new package.
 
@@ -412,6 +622,13 @@ Once it is approved, install it (or upload the same ZIP again, which reuses
 the release); from then on every PCBJam user who uploads a package for that origin
 can install and open it straight away. If PCBJam withdraws the approval, open panels
 close and the provider stops working for everyone until it is approved again.
+
+With sign-in, the review covers your origin **and** your sign-in server, and
+each configuration is reviewed on its own: your origin without sign-in, with
+sign-in at a sign-in server, and with a client named by a package. Turning
+sign-in on, or moving it to another server, therefore needs a new review, and
+users who installed an earlier version are asked to agree again before they
+update. Name your sign-in server when you ask.
 
 Users install your provider from the PCBJam marketplace
 (`app.pcbjam.com/plugins`) once PCBJam publishes it there; ask on Discord.
@@ -431,6 +648,23 @@ either origin later changes, open panels fail with `PROVIDER_CHANGED`.
 - **`provider.origin` moved**: that is a new provider. Serve the new origin, ask
   on Discord for it to be reviewed, publish a new `version` with the new
   `provider.origin`, and have users upload it.
+
+### Change your sign-in
+
+Each uploaded version pins one sign-in configuration (see
+[Metadata](#metadata)). PCBJam reads your sign-in server's document at upload
+only, so a change there is not noticed by itself.
+
+- **Another client in your metadata, other scopes, a moved panel or bootstrap
+  address:** publish a package with a new `version`. No new review.
+- **Moved authorization or token endpoint** (same `issuer`): PCBJam keeps
+  using the addresses it read at upload, so sign-in fails until you publish a
+  new `version`. No new review.
+- **Sign-in switched on, or another `issuer`:** a new `version`, a new review,
+  and a new consent from each user.
+- **Sign-in switched off:** a new `version`, and users are asked to agree to
+  the update. No new review when your origin was approved without sign-in
+  before.
 
 ## Test before you ask for review
 
@@ -461,9 +695,11 @@ protocol and your server first:
 
 ## Checklist
 
-- [ ] `https://<origin>/.well-known/kicad-remote-provider` returns the metadata with `"auth": {"type": "none"}`.
+- [ ] `https://<origin>/.well-known/kicad-remote-provider` returns the metadata with `"auth": {"type": "none"}`, or with `"type": "oauth2"` and everything under "With sign-in" below.
 - [ ] `panel_url` answers `200` with both headers and no redirect.
+- [ ] The panel sends no `X-Frame-Options`; a `frame-ancestors` policy names the PCBJam editor origins instead.
 - [ ] The panel includes the shim before its own script and lists the PCBJam origins that may embed it.
+- [ ] The panel sends its messages through `window.kicad.postMessage`.
 - [ ] Everything the panel loads from another origin allows CORS or sends `Cross-Origin-Resource-Policy: cross-origin`.
 - [ ] Every `download_url` is on the panel or API origin, `https`, without redirects, with `Content-Type` equal to the manifest's `content_type`.
 - [ ] `size_bytes` and `sha256` match the served bytes exactly.
@@ -474,6 +710,19 @@ protocol and your server first:
 - [ ] Your page answers `NEW_SESSION` with `response_to` set to PCBJam's `message_id`.
 - [ ] Inline payloads use `compression: "NONE"`.
 - [ ] Every part has one symbol asset.
+
+With sign-in:
+
+- [ ] `auth.metadata_url` is `<issuer>/.well-known/oauth-authorization-server`, and the issuer is a bare https origin on your provider's registered domain.
+- [ ] The sign-in server's document lists `code`, `S256` and the token endpoint auth method `none`, and sets `authorization_response_iss_parameter_supported` to `true`.
+- [ ] Authorization and token endpoint are on the issuer's origin.
+- [ ] Every redirect back to the callback address carries `iss`, also an error.
+- [ ] Both PCBJam callback addresses are registered on the client PCBJam uses.
+- [ ] The token endpoint answers a form POST from a public client with JSON, without a redirect.
+- [ ] `session_bootstrap_url` is on the panel origin and returns a single-use `nonce_url` there.
+- [ ] The page behind `nonce_url` sends both headers and `Referrer-Policy: no-referrer`, and removes the nonce from its address.
+- [ ] The panel keeps its own session without ordinary third-party cookies, shows who is signed in, and offers sign-out.
+- [ ] The panel's sign-in button works again after a sign-in that failed or was cancelled.
 
 ## Limits
 
@@ -487,6 +736,9 @@ protocol and your server first:
 | Parts in progress | one at a time per panel |
 | Downloads through PCBJam | 30 per minute per provider and user, 90 per minute per user |
 | Panel opens | 6 per minute per provider and user, 12 per minute per user |
+| Sign-ins | 6 per minute per provider and user, 12 per minute per user |
+| Sign-in window | open for at most 5 minutes |
+| Token exchange and session bootstrap | about 30 s together |
 | Open panels | 8 plugin panels per user |
 
 Plugins that run code inside PCBJam are a different package kind: see
