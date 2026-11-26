@@ -134,14 +134,14 @@ describe("the circuit of a schematic that draws no source", () => {
       "Rpj_supply_1 pj_supply_1 +5V 10m",
       ".end",
     ]);
-    expect(power).toEqual({ byName: [{ net: "+5V", volts: 5 }], noVolts: ["VCC"], assumed: [], noPower: [], unfed: [] });
+    expect(power).toEqual({ byName: [{ net: "+5V", volts: 5 }], noVolts: ["VCC"], assumed: [], noPower: [], unfed: [], sockets: [] });
   });
 
   it("leaves alone the wire a library part is the source of", () => {
     const { deck, power, placed } = build([BATTERY]);
     expect(placed.map((p) => `${p.ref}=${p.partId}`)).toEqual(["BT1=battery"]);
     expect(deck.slice(-4)).toEqual(["XBT1 +9V GND T_BATTERY VOLTS=9V", "Vpj_supply_1 pj_supply_1 0 DC 5", "Rpj_supply_1 pj_supply_1 +5V 10m", ".end"]);
-    expect(power).toEqual({ byName: [{ net: "+5V", volts: 5 }], noVolts: ["VCC"], assumed: [], noPower: [], unfed: [] });
+    expect(power).toEqual({ byName: [{ net: "+5V", volts: 5 }], noVolts: ["VCC"], assumed: [], noPower: [], unfed: [], sockets: [] });
   });
 
   it("says which battery runs with the part's own voltage, because its value does not say one", () => {
@@ -309,7 +309,7 @@ describe("a regulator and the wire on its output", () => {
     expect(errors).toEqual([]);
     expect(deck).toContain("XU1 /in +5V GND T_REG VOLTS=5");
     expect(deck.join("\n")).not.toContain("pj_supply");
-    expect(power).toEqual({ byName: [], noVolts: [], assumed: [], noPower: [], unfed: [] });
+    expect(power).toEqual({ byName: [], noVolts: [], assumed: [], noPower: [], unfed: [], sockets: [] });
   });
 
   it("leaves the wire to its name when no source reaches its input, and says so", () => {
@@ -318,7 +318,7 @@ describe("a regulator and the wire on its output", () => {
     // the regulator stays in the circuit: without an input it does nothing
     expect(deck).toContain("XU1 VBUS +5V GND T_REG VOLTS=5");
     expect(deck.slice(-3)).toEqual(["Vpj_supply_1 pj_supply_1 0 DC 5", "Rpj_supply_1 pj_supply_1 +5V 10m", ".end"]);
-    expect(power).toEqual({ byName: [{ net: "+5V", volts: 5 }], noVolts: ["VBUS"], assumed: [], noPower: [], unfed: [{ ref: "U1", pins: ["1"] }] });
+    expect(power).toEqual({ byName: [{ net: "+5V", volts: 5 }], noVolts: ["VBUS"], assumed: [], noPower: [], unfed: [{ ref: "U1", pins: ["1"] }], sockets: [] });
   });
 
   it("says so too when its input pin has nothing on it", () => {
@@ -336,5 +336,100 @@ describe("a regulator and the wire on its output", () => {
 
   it("does not say that it runs with an assumed voltage", () => {
     expect(regDeck("VBUS").power.assumed).toEqual([]);
+  });
+});
+
+// A socket J1 that power comes in through: 1 = its power pin, 2 = its ground, 3 = a data pin
+// that is no pin of the part. Behind it the regulator U1 of above, with a load on its output.
+const SOCKET: PartManifest = {
+  schema: 1, id: "socket", version: 1, title: "Test socket",
+  fits: [{ symbol: "Connector:USB_B", pins: { VBUS: "1", VSS: "2" } }, { symbol: "Connector:USB_A", pins: { VBUS: "1", VSS: "2" }, set: { plugged: "no" } }],
+  pins: ["VBUS", "VSS"], supplies: ["VBUS", "VSS"], suppliesWhen: { setting: "plugged", on: "yes", param: "ON" },
+  settings: [{ name: "plugged", default: "yes", options: ["yes", "no"] }, { name: "voltage", label: "Voltage", unit: "V", default: "5", accept: "^[0-9.]+$", fromValue: true }],
+  analog: { file: "model.lib", subckt: "T_SOCKET", params: { VOLTS: "$voltage" } },
+};
+const socketDeck = (socket: SchematicSymbol, regulatorOut = "+5V") => {
+  const symbols = [socket, sym("U1", "Regulator_Linear:L7805", "L7805", { "1": "VBUS", "2": "GND", "3": regulatorOut }), sym("R1", "Device:R", "330", { "1": regulatorOut, "2": "GND" })];
+  const netlist = readEditorNetlist({
+    ok: true, messages: [],
+    items: [{ device: "R", name: "R1", ref: "R1", type: "" }],
+    lines: [{ text: ".title KiCad schematic" }, { kind: "item" as const, ref: "R1", text: `R1 ${regulatorOut} GND 330` }, { text: ".end" }],
+  });
+  const index = { parts: [REG, SOCKET].map((m) => ({ id: m.id, version: 1, title: m.title, description: "", fits: m.fits, pins: m.pins, code: false, files: [] })) };
+  const plan = matchSymbols(index, symbols, { kicadModels: kicadModels(netlist, symbols) });
+  const parts = new Map([
+    [REG.id, { id: REG.id, manifest: REG, analog: ".subckt T_REG IN OUT COM VOLTS=5\nR1 IN OUT 1\n.ends T_REG\n", logic: null }],
+    [SOCKET.id, { id: SOCKET.id, manifest: SOCKET, analog: ".subckt T_SOCKET VBUS VSS VOLTS=5 ON=1\nV1 i VSS dc {VOLTS}\nR1 VBUS i {0.2 + (1 - ON) * 1e12}\n.ends T_SOCKET\n", logic: null }],
+  ]);
+  return buildDeck({ symbols, netlist, plan, parts, live: false });
+};
+const usb = (libId: string, value = "USB", fields: Record<string, string> = {}) => sym("J1", libId, value, { "1": "VBUS", "2": "GND", "3": "/DP" }, fields);
+
+describe("a socket the board takes its power through", () => {
+  it("is a source on its power pin while something is plugged in: the regulator behind it is fed", () => {
+    const { deck, power, errors } = socketDeck(usb("Connector:USB_B"));
+    expect(errors).toEqual([]);
+    expect(deck).toContain("XJ1 VBUS GND T_SOCKET VOLTS=5 ON=1");
+    expect(deck.join("\n")).not.toContain("pj_supply");
+    expect(power).toEqual({
+      byName: [], noVolts: [], assumed: [], noPower: [], unfed: [],
+      sockets: [{ ref: "J1", title: "Test socket", feeds: true, volts: "5", label: "Voltage", assumed: true, setting: "plugged", on: "yes" }],
+    });
+  });
+
+  it("says its voltage in its own entry, not among the batteries, and whether the symbol's value said it", () => {
+    const { deck, power } = socketDeck(usb("Connector:USB_B", "12"));
+    expect(deck).toContain("XJ1 VBUS GND T_SOCKET VOLTS=12 ON=1");
+    expect(power.assumed).toEqual([]);
+    expect(power.sockets[0]).toMatchObject({ volts: "12", assumed: false });
+  });
+
+  it("takes the voltage the names of its wires say, when the symbol's value says none", () => {
+    const on = (plus: string, minus: string, value = "Jack") => socketDeck(sym("J1", "Connector:USB_B", value, { "1": plus, "2": minus }));
+    const fed = on("/Power/12V", "GND");
+    expect(fed.deck).toContain("XJ1 /Power/12V GND T_SOCKET VOLTS=12 ON=1");
+    expect(fed.power.sockets[0]).toEqual({ ref: "J1", title: "Test socket", feeds: true, volts: "12", label: "Voltage", assumed: false, fromWire: true, setting: "plugged", on: "yes" });
+    // the wire is the socket's: it is not powered by its name as well
+    expect(fed.power.byName.map((s) => s.net)).not.toContain("/Power/12V");
+    // the symbol's own value goes before the wire's name
+    expect(on("+12V", "GND", "9").power.sockets[0]).toMatchObject({ volts: "9", assumed: false });
+    expect(on("+12V", "GND", "9").power.sockets[0]).not.toHaveProperty("fromWire");
+    // a wire whose name says no voltage, and two wires of one voltage, say nothing
+    expect(on("VIN", "GND").power.sockets[0]).toMatchObject({ volts: "5", assumed: true });
+    expect(on("GND", "GNDA").power.sockets[0]).toMatchObject({ volts: "5", assumed: true });
+    // a voltage the part does not allow is not taken (this one allows no minus)
+    expect(on("GND", "+12V").power.sockets[0]).toMatchObject({ volts: "5", assumed: true });
+    expect(on("+3V3", "GND").power.sockets[0]).toMatchObject({ volts: "3.3", fromWire: true });
+  });
+
+  it("with nothing plugged in it is as if it were not there: no source, and the wire behind the regulator has the power of its name", () => {
+    const { deck, power, errors } = socketDeck(usb("Connector:USB_B", "USB", { "PCBJam.SimSettings": "plugged=no" }));
+    expect(errors).toEqual([]);
+    // the part stays in the circuit, with its pins open
+    expect(deck).toContain("XJ1 VBUS GND T_SOCKET VOLTS=5 ON=0");
+    expect(power.byName).toEqual([{ net: "+5V", volts: 5 }]);
+    expect(power.noVolts).toEqual(["VBUS"]);
+    expect(power.unfed).toEqual([{ ref: "U1", pins: ["1"] }]);
+    expect(power.sockets).toEqual([{ ref: "J1", title: "Test socket", feeds: false, volts: "5", label: "Voltage", assumed: true, setting: "plugged", on: "yes" }]);
+  });
+
+  it("a symbol whose fit says so is not plugged in, until its own field says it is", () => {
+    expect(socketDeck(usb("Connector:USB_A")).power.sockets[0]?.feeds).toBe(false);
+    const fed = socketDeck(usb("Connector:USB_A", "USB", { "PCBJam.SimSettings": "plugged=yes" }));
+    expect(fed.deck).toContain("XJ1 VBUS GND T_SOCKET VOLTS=5 ON=1");
+    expect([fed.power.sockets[0]?.feeds, fed.power.unfed]).toEqual([true, []]);
+  });
+
+  it("joins nothing to its other pins: a wire on a data pin is fed by nobody", () => {
+    // the regulator's input on the data pin's wire
+    const symbols = [usb("Connector:USB_B"), sym("U1", "Regulator_Linear:L7805", "L7805", { "1": "/DP", "2": "GND", "3": "/OUT" })];
+    const netlist = readEditorNetlist({ ok: true, messages: [], items: [], lines: [{ text: ".title KiCad schematic" }, { text: ".end" }] });
+    const index = { parts: [REG, SOCKET].map((m) => ({ id: m.id, version: 1, title: m.title, description: "", fits: m.fits, pins: m.pins, code: false, files: [] })) };
+    const plan = matchSymbols(index, symbols, { kicadModels: kicadModels(netlist, symbols) });
+    const parts = new Map([
+      [REG.id, { id: REG.id, manifest: REG, analog: ".subckt T_REG IN OUT COM VOLTS=5\nR1 IN OUT 1\n.ends T_REG\n", logic: null }],
+      [SOCKET.id, { id: SOCKET.id, manifest: SOCKET, analog: ".subckt T_SOCKET VBUS VSS VOLTS=5 ON=1\nV1 i VSS dc {VOLTS}\nR1 VBUS i 1\n.ends T_SOCKET\n", logic: null }],
+    ]);
+    expect(buildDeck({ symbols, netlist, plan, parts, live: false }).power.unfed).toEqual([{ ref: "U1", pins: ["1"] }]);
   });
 });

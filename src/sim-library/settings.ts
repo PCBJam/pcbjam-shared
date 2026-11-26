@@ -58,7 +58,7 @@ export function settingFromValue(setting: PartSetting, text: string, whole = tru
 
 export interface ResolvedSettings {
   /** Every setting of the part with its value and where the value came from. */
-  values: Record<string, { value: string; from: "default" | "symbol" | "value" | "field" }>;
+  values: Record<string, { value: string; from: "default" | "symbol" | "value" | "field" | "wire" }>;
   /** What was dropped and why, in plain words, for the user. */
   notes: string[];
 }

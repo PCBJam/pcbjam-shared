@@ -62,11 +62,11 @@ export interface TestSnapshot {
 }
 
 /** A chip emulator with made-up files, as the index lists one and as the CDN holds it. */
-export function makeEmulator(id = "esp-emu", version = "1.0.0-rc2"): { entry: IndexEmulator; files: Map<string, Uint8Array> } {
-  const own: [string, Uint8Array][] = [["esp_emu.js", utf8("export class WasmEmulator {}\n")], ["esp_emu_bg.wasm", new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])]];
+export function makeEmulator(id = "esp32sim", version = "0.4.0-1"): { entry: IndexEmulator; files: Map<string, Uint8Array> } {
+  const own: [string, Uint8Array][] = [["jit.mjs", utf8("export function createJitHost() {}\n")], ["esp32sim.wasm", new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])]];
   return {
     entry: {
-      id, version, title: "A chip emulator", licence: "Apache-2.0", origin: "https://example.test/emulator", program: "esp_emu_bg.wasm", loader: "esp_emu.js",
+      id, version, title: "A chip emulator", licence: "MIT", origin: "https://example.test/emulator", program: "esp32sim.wasm", loader: "jit.mjs",
       files: own.map(([name, bytes]) => ({ name, sha256: sha(bytes), bytes: bytes.length })),
     },
     files: new Map(own.map(([name, bytes]) => [`emulators/${id}/${version}/${name}`, bytes])),

@@ -10,6 +10,11 @@
 // source). Nothing else is looked at: the rule has to be one a user can predict. The run
 // says which wires it powered this way.
 //
+// A socket of the library (a USB socket, a barrel jack) is a source like a battery, on its
+// power pin and its ground pin only, and only while its setting says that something is
+// plugged in. Its other pins (data, shield, a jack's switch contact) are no pins of the part:
+// they join nothing. A socket with nothing plugged in is as if it were not there.
+//
 // A second ground (GNDA, AGND, Earth) is a supply wire too: its name states 0 V. The
 // simulator knows only "GND" and "0" as ground, and what joins the grounds on a real board
 // (a net tie, a ferrite bead) is not simulated.
@@ -82,6 +87,29 @@ export interface AssumedSource {
   unit: string;
 }
 
+/** A socket of the schematic that power can come in through (a USB socket, a barrel jack). */
+export interface Socket {
+  ref: string;
+  /** What it is, by its part: "USB socket", "Barrel jack". */
+  title: string;
+  /** Whether it feeds the board in this run: its setting says that something is plugged in. */
+  feeds: boolean;
+  /** The voltage it feeds with, as the run has it ("5", "9", "-9"). "" when the part has no such setting. */
+  volts: string;
+  /** What that voltage is, by the setting's label: "Voltage", "Voltage on the centre pin". */
+  label: string;
+  /** The voltage is the part's own, because the symbol's Value does not say one. */
+  assumed: boolean;
+  /**
+   * The voltage is the one the names of its wires say (a jack between "5V" and "GND"), because
+   * the symbol's Value does not say one.
+   */
+  fromWire?: boolean;
+  /** The setting that says whether something is plugged in, and the value with which something is. */
+  setting: string;
+  on: string;
+}
+
 /** A placed part with nothing connected to pins it takes its power through. */
 export interface Unpowered {
   ref: string;
@@ -111,6 +139,8 @@ export interface Power {
   noPower: Unpowered[];
   /** Regulators that give nothing, because no source of the schematic reaches their input. `pins`: the input. */
   unfed: Unpowered[];
+  /** The sockets of the schematic that power can come in through, with what each does in this run. */
+  sockets: Socket[];
 }
 
 /**

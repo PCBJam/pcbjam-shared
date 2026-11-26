@@ -116,13 +116,30 @@ export interface DigitalEmulator {
   /** Part pin -> GPIO number. */
   pads: Record<string, number>;
   enable?: string;
-  padRegisters?: { base: number; count: number; pullUpBit: number; pullDownBit: number };
+  /**
+   * For a chip without a board: the pin it takes its supply through. The model's emulator
+   * line then has one more input, after the pads and the enable pin: high while the supply
+   * is enough for the chip to run. Left out: the chip is always fed (a board feeds itself).
+   */
+  supply?: string;
+  /**
+   * For a chip without a board: where its clock comes from (see clock.ts). `pins` are the
+   * two pads a crystal sits on: the Value of a crystal the schematic has on them is the
+   * chip's clock, and the two are then no pads of a port. `setting` names the part's
+   * setting that overrules the schematic. With neither the chip runs at `clock`.
+   */
+  crystal?: { pins: [string, string]; setting: string };
   /**
    * The voltages the chip's program may ask the engine for (an analog input, the supply, a
    * reference pin), by the names the emulator's adapter knows them by, in the order of the
    * inputs of the model's voltage tap (a `pj_vtap` line). Left out: the chip measures nothing.
    */
   taps?: string[];
+  /**
+   * Files of the emulator this chip needs besides the emulator's program (the chip's ROM),
+   * by the name the emulator's adapter asks for them: { "rom.elf": "esp32c3_rev3_rom.elf" }.
+   */
+  files?: Record<string, string>;
   orderParam: string;
 }
 
@@ -209,6 +226,15 @@ export interface PartManifest {
    * powered by their names as if the part were not there, and the run says so.
    */
   suppliesFrom?: string[];
+  /**
+   * A socket that power comes in through (a USB socket, a barrel jack). Only with
+   * `supplies` and without `suppliesFrom`. The part is a source only while its setting
+   * `setting` has the value `on`: something is plugged in. The model's parameter `param` is
+   * then 1, and 0 otherwise; with 0 the model must leave its pins open. A socket that is no
+   * source is treated as if it were not there: the wires on its pins have the power of
+   * their names. The run says of every socket which of the two it is.
+   */
+  suppliesWhen?: { setting: string; on: string; param: string };
   /**
    * The pins a symbol may lack: the pins of a unit that is not placed (one half of a dual
    * op-amp). Such a pin is left open. A pin that is not listed here and has no pin of the

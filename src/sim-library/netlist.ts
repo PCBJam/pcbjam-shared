@@ -7,6 +7,11 @@
 //   - drops KiCad's lines of every symbol that got a library part,
 //   - drops the lines no simulator runs (and says which symbols they were): one symbol
 //     without a model does not stop the rest of the circuit,
+//   - gives a resistor, a capacitor or a coil whose Value says its ratings too ("22uF/25V",
+//     "10k 1%") the value alone, and says which (values.ts),
+//   - takes out the simulator commands a schematic can carry in its texts (a block from
+//     ".control" to ".endc", a line that begins with "*#"), and counts them: the circuit
+//     runs, a script that came with the schematic does not (withoutCommands() below),
 //   - writes one line per placed library part:
 //       X<ref> <one node per pin of the part> <subcircuit> <parameters>
 //   - ties the nets of every symbol without a line (left out, switched off or excluded) to
@@ -22,16 +27,19 @@
 // lines belongs to which symbol comes from the editor too (kicadSimNetlist): nothing here
 // guesses it from the text.
 import type { LoadedPart, SimLibrary } from "./client.js";
-import type { EditorNetlist } from "./editor.js";
+import { chipClock, crystalOn, type ChipClock } from "./clock.js";
+import type { EditorNetlist, NetlistLine } from "./editor.js";
 import type { PartDigital, PartInput } from "./format.js";
+import { leftOutSymbols, type LeftOut } from "./left-out.js";
 import { matchSymbols, type Match, type SchematicSymbol } from "./match.js";
-import { analogParams, resolveSettings, type ResolvedSettings } from "./settings.js";
+import { analogParams, resolveSettings, settingAllows, type ResolvedSettings } from "./settings.js";
 import { CODE_MODEL_LINE_MAX, chipFile, chipModel, codeModelLines, withExternalSources } from "./spice-text.js";
 import {
   AIR_PARAM, THERMAL_SHOWN, THERMAL_SIGNAL, THERMAL_SUFFIX, thermalFile, thermalModel, thermalPins, thermalRoles, wiresOf, wiresSaid,
   type WireProblem,
 } from "./thermal.js";
-import { fedParts, powerByName, supplyLines, type AssumedSource, type Passing, type Power, type Unpowered } from "./supplies.js";
+import { fedParts, namedVolts, powerByName, supplyLines, type AssumedSource, type Passing, type Power, type Socket, type Unpowered } from "./supplies.js";
+import { ratedValue, type PassiveKind, type RatedValue } from "./values.js";
 
 /**
  * What ties a net of a left-out symbol to ground: large enough to carry nothing that matters
@@ -47,16 +55,137 @@ export const LIVE_GEAR = ".options method=gear";
 
 const natural = (a: string, b: string): number => a.localeCompare(b, "en", { numeric: true });
 
+/** What the checks of KiCad's lines want to know of a symbol. Without its Value nothing is said about ratings. */
+type LineSymbol = Pick<SchematicSymbol, "ref" | "fields"> & Partial<Pick<SchematicSymbol, "value">>;
+
+/**
+ * The symbols KiCad took for a resistor, a capacitor or a coil by itself, by reference, with
+ * whether it read their Value as a plain value (true) or hands it to the simulator as it
+ * is, as a formula (false). A model the user chose on the symbol (the field Sim.Device) is
+ * theirs and is not in here.
+ */
+function guessedPassives(netlist: Pick<EditorNetlist, "items">, symbols: readonly LineSymbol[]): Map<string, { kind: PassiveKind; plain: boolean }> {
+  // a symbol that says something about its simulation is not a guess: a model it names
+  // (Sim.Device, Sim.Library, Sim.Name), or a value it gives (Sim.Params: r="220", which
+  // KiCad takes in place of the Value)
+  const silent = new Set(symbols.filter((s) => OWN_MODEL_FIELDS.every((f) => (s.fields[f] ?? "").trim() === "")).map((s) => s.ref));
+  const out = new Map<string, { kind: PassiveKind; plain: boolean }>();
+  for (const item of netlist.items) {
+    const kind = item.device;
+    if (!item.off && (kind === "R" || kind === "C" || kind === "L") && silent.has(item.ref)) out.set(item.ref, { kind, plain: item.type !== "=" });
+  }
+  return out;
+}
+const OWN_MODEL_FIELDS = ["Sim.Device", "Sim.Params", "Sim.Library", "Sim.Name"] as const;
+
+/** A value read without its ratings, on one symbol. */
+export interface ValueRead extends RatedValue {
+  ref: string;
+  /** The symbol's Value, as typed ("22uF/25V"). */
+  typed: string;
+}
+
+/**
+ * The resistors, capacitors and coils whose Value says their ratings too, and reads as a
+ * plain value with ratings that are known (values.ts), by reference. Their line runs with
+ * the plain value alone. Only what KiCad took for one of the three by itself is looked at.
+ */
+export function valuesRead(netlist: Pick<EditorNetlist, "items">, symbols: readonly LineSymbol[]): Map<string, ValueRead> {
+  const guessed = guessedPassives(netlist, symbols);
+  const out = new Map<string, ValueRead>();
+  for (const sym of symbols) {
+    // also where KiCad read the Value as a plain one: it reads digits with a blank between
+    // them as one number, and "100 0603" as 1000603
+    const passive = guessed.get(sym.ref);
+    if (!passive || sym.value === undefined) continue;
+    const read = ratedValue(sym.value, passive.kind);
+    if (read && read !== "unreadable") out.set(sym.ref, { ref: sym.ref, typed: sym.value.trim(), ...read });
+  }
+  return out;
+}
+
+/** KiCad's line of a resistor, a capacitor or a coil with another value: its name and its two nodes stay. */
+function withValue(text: string, value: string): string {
+  const words = statements(text).join(" ").trim().split(/\s+/);
+  // a line that is not a name, two nodes and a value is not rewritten
+  return words.length >= 4 ? `${words.slice(0, 3).join(" ")} ${value}` : text;
+}
+
 /** Why KiCad's line of a symbol cannot run. */
 export type Unusable =
   /** KiCad has no model for the symbol: its line is a placeholder. */
   | "no-model"
   /** KiCad's line names a model that nothing in the netlist defines. */
   | "undefined-model"
-  /** KiCad took the symbol for a resistor, a capacitor or a coil, and its Value is no number. */
-  | "no-value";
+  /**
+   * KiCad took the symbol for a resistor, a capacitor or a coil, and its Value is no number,
+   * or says more than one thing and does not read as a value with its ratings.
+   */
+  | "no-value"
+  /**
+   * KiCad has a model for the symbol and wrote no line for it: a resistor, a capacitor or a
+   * coil whose own model (the fields Sim.Device and Sim.Params) has no value in it.
+   */
+  | "no-line";
 
 const statements = (text: string): string[] => text.replace(/\r?\n\+/g, " ").split(/\r?\n/);
+
+// The simulator takes a line for the start of a command block by how it begins, whatever
+// follows (".controlx" starts one too), and it carries out a line that begins with "*#"
+// as a command wherever it stands. Blanks in front change nothing.
+const COMMANDS_START = /^\s*\.control/i;
+const COMMANDS_END = /^\s*\.endc/i;
+const COMMAND_LINE = /^\s*\*#/;
+const CONTINUES = /^\s*\+/;
+
+/**
+ * KiCad's lines without the simulator commands a schematic can carry.
+ *
+ * KiCad puts a text of the sheet that holds a line with a dot in front into its netlist as
+ * it is, all of it. Most of that defines the circuit (".model", ".param", ".ic") and stays.
+ * Two things in it are something else: a block from ".control" to ".endc", and a line that
+ * begins with "*#". Those are a script the simulator carries out when it loads the circuit
+ * (run, loop, quit, write a file). It comes with the schematic, whoever drew it, and a run
+ * of ours needs none of it, so it is taken out and counted: a block is one, a line is one.
+ *
+ * A block ends at its ".endc". One that has none ends with the texts of the sheet: the
+ * symbols' own lines are never part of it. In a symbol's own line (a field with a line
+ * break in it) a block ends with that line at the latest. An ".endc" with no block before
+ * it is taken out too, and so are the "+" lines that continue a line that is gone.
+ *
+ * What comes out holds no line that begins with ".control" or with "*#".
+ */
+export function withoutCommands(lines: readonly Pick<NetlistLine, "text" | "kind">[]): { texts: string[]; commands: number } {
+  const texts: string[] = [];
+  let commands = 0;
+  let inside = false;
+  let gone = false;
+  for (const line of lines) {
+    const own = line.kind === "item" || line.kind === "model";
+    if (own) inside = gone = false;
+    const stays: string[] = [];
+    for (const one of line.text.split(/\r\n?|\n/)) {
+      if (inside) {
+        if (COMMANDS_END.test(one)) inside = false;
+      } else if (COMMANDS_START.test(one)) {
+        inside = gone = true;
+        commands++;
+      } else if (COMMAND_LINE.test(one)) {
+        gone = true;
+        commands++;
+      } else if (COMMANDS_END.test(one)) {
+        gone = true;
+      } else if (!(gone && CONTINUES.test(one))) {
+        gone = false;
+        stays.push(one);
+      }
+    }
+    if (own) inside = gone = false;
+    // a text that was nothing but commands is gone; any other line stays
+    if (stays.length || !line.text.trim()) texts.push(stays.join("\n"));
+  }
+  return { texts, commands };
+}
 
 /**
  * The symbols whose KiCad line no simulator runs, by reference:
@@ -71,20 +200,36 @@ const statements = (text: string): string[] => text.replace(/\r?\n\+/g, " ").spl
  *     value yet ("R") get a line no simulator reads ("LS1 a b Speaker"), and ngspice
  *     refuses the whole circuit because of it. A model the user chose on the symbol
  *     (the field Sim.Device) is theirs and stays.
+ *     A Value of several pieces that KiCad did not read as a plain value is such a line
+ *     too, unless it reads as a value with its ratings (valuesRead): "10k/22k" stops the
+ *     run, and of "10k DNP" the simulator would take whatever number comes last.
+ *   - no line at all. A symbol that names its own model as a resistor, a capacitor or a
+ *     coil (Sim.Device) and gives it no value (Sim.Params: c="") has a model and no line:
+ *     KiCad writes nothing for it and says nothing, whatever the symbol's Value says.
  * A raw line the user asked for (the symbol's own field Sim.Device says SPICE) is theirs and
  * stays. So does a fallback line when the netlist includes a file: the model can be in
  * there. Without `symbols` only the placeholders are found.
  */
-export function unusableLines(netlist: Pick<EditorNetlist, "items" | "lines">, symbols: Pick<SchematicSymbol, "ref" | "fields">[] = []): Map<string, Unusable> {
+export function unusableLines(netlist: Pick<EditorNetlist, "items" | "lines">, symbols: readonly LineSymbol[] = []): Map<string, Unusable> {
   const out = new Map<string, Unusable>();
   const fallback = new Set<string>();
-  const guessed = new Set<string>();
+  const guessed = guessedPassives(netlist, symbols);
   const asked = new Map(symbols.map((s) => [s.ref, (s.fields["Sim.Device"] ?? "").trim().toUpperCase()]));
   for (const item of netlist.items) {
     if (item.off) continue;
     if (item.device === "") out.set(item.ref, "no-model");
     else if (item.device === "SPICE" && asked.has(item.ref) && asked.get(item.ref) !== "SPICE") fallback.add(item.ref);
-    else if (/^[RCL]$/.test(item.device) && asked.get(item.ref) === "") guessed.add(item.ref);
+  }
+  // a model and no line: the symbol is not in the circuit (a caller that has no lines at
+  // all says nothing about them; a netlist in which no symbol has a line is one in which
+  // all of them are missing)
+  const written = new Set(netlist.lines.flatMap((l) => (l.kind === "item" && l.ref !== undefined && l.text.trim() ? [l.ref] : [])));
+  if (netlist.lines.length) for (const item of netlist.items) if (!item.off && item.device !== "" && !written.has(item.ref)) out.set(item.ref, "no-line");
+  // KiCad's guess, a Value of several pieces that KiCad did not read: it has to read as a
+  // value with its ratings
+  for (const sym of symbols) {
+    const passive = guessed.get(sym.ref);
+    if (passive && !passive.plain && sym.value !== undefined && ratedValue(sym.value, passive.kind) === "unreadable") out.set(sym.ref, "no-value");
   }
   // KiCad's guess: the value, the word after the two nodes, has to start as a number does
   // ("10k", "4.7uF", ".5"), or be a formula
@@ -120,7 +265,7 @@ export function unusableLines(netlist: Pick<EditorNetlist, "items" | "lines">, s
  * the matcher wants as `kicadModels`. With `symbols`, the lines that name a model nothing
  * defines are left out too (see unusableLines).
  */
-export function kicadModels(netlist: Pick<EditorNetlist, "items" | "lines">, symbols: Pick<SchematicSymbol, "ref" | "fields">[] = []): Set<string> {
+export function kicadModels(netlist: Pick<EditorNetlist, "items" | "lines">, symbols: readonly LineSymbol[] = []): Set<string> {
   const unusable = unusableLines(netlist, symbols);
   return new Set(netlist.items.filter((i) => !i.off && !unusable.has(i.ref)).map((i) => i.ref));
 }
@@ -186,6 +331,8 @@ export interface PlacedPart {
   connected: string[];
   /** Every setting of the part with its value and where the value came from. */
   settings: ResolvedSettings["values"];
+  /** Only for a chip without a board: its clock, and where it comes from. */
+  clock?: ChipClock;
   /** Where the part's overlay sits on this symbol, when its "fits" line says so (see PartFit). */
   origin?: [number, number];
   /**
@@ -244,6 +391,29 @@ export interface Deck {
    * out of the circuit, and the rest runs without them.
    */
   notSimulated: string[];
+  /**
+   * Every symbol the run leaves out, with its reason: no value, no part, nothing to
+   * simulate, switched off (left-out.ts). `notSimulated` are the ones of them that neither
+   * the library nor KiCad has a model for.
+   */
+  leftOut: LeftOut[];
+  /**
+   * The resistors, capacitors and coils that run with the value of their Value alone, without
+   * the ratings it says too ("22uF/25V" as 22uF), by reference.
+   */
+  valuesRead: ValueRead[];
+  /**
+   * How many simulator commands the schematic carries: a block from ".control" to ".endc"
+   * is one, a line that begins with "*#" is one. They are not in the circuit: see
+   * withoutCommands.
+   */
+  commandsLeftOut: number;
+  /**
+   * Which symbol each line of the circuit belongs to, by the name of the line's element in
+   * lower case ("r1", "xu1"): KiCad's own lines and the lines written here for the library's
+   * parts. A simulator names lines and elements, never symbols (see symbolsNamed).
+   */
+  marks: Map<string, string>;
   /** The supply wires the circuit powers by their names, and the ones whose names state no voltage. */
   power: Power;
   /** The wires that carry heat, by name. */
@@ -260,7 +430,7 @@ export interface BuildOptions {
   /** The symbols that take part, as the editor reported them. */
   symbols: SchematicSymbol[];
   /** The symbols KiCad excludes from simulation. They have no line; their nets are tied to ground like those of a left-out symbol. */
-  excluded?: Pick<SchematicSymbol, "pins">[];
+  excluded?: (Pick<SchematicSymbol, "pins"> & Partial<SchematicSymbol>)[];
   /** KiCad's netlist of the same schematic. */
   netlist: EditorNetlist;
   /** matchSymbols() of exactly these symbols: `plan[i]` is about `symbols[i]`. */
@@ -318,6 +488,8 @@ export function buildDeck({ symbols, excluded = [], netlist, plan, parts, live =
   const noPower: Unpowered[] = [];
   /** The parts that pass power on (regulators): a source only when one reaches their input. */
   const passing: Passing[] = [];
+  /** The sockets power can come in through, with what each does in this run. */
+  const sockets: Socket[] = [];
   /** The nets each simulated part that is not a chip joins: power on one reaches the others. */
   const links: string[][] = [];
   /** The nets of the schematic: a symbol names the wire of a thermal pin among them. */
@@ -356,7 +528,29 @@ export function buildDeck({ symbols, excluded = [], netlist, plan, parts, live =
     });
     if (open.length) noPower.push({ ref: m.ref, pins: open.sort(natural) });
     if (man.analog.method === "gear") gear = true;
+    // A socket is a source only while its setting says that something is plugged in. One that
+    // is not is as if it were not there: its model leaves its pins open.
+    const socket = man.supplies?.length && !man.suppliesFrom?.length ? man.suppliesWhen : undefined;
+    const feeds = !socket || settings.values[socket.setting]?.value === socket.on;
+    // A socket whose Value says no voltage, between wires whose names say one (a jack between
+    // "+12V" and "GND"): the board says what it is fed with, and that goes before the part's
+    // own voltage. The voltage is that of the first pin of `supplies` against the second.
+    const volts = socket ? man.settings?.find((s) => s.unit === "V") : undefined;
+    if (volts?.fromValue && settings.values[volts.name]?.from === "default" && man.supplies?.length === 2) {
+      const [plus, minus] = man.supplies.map((pin) => namedVolts(nodes[man.pins.indexOf(pin)] ?? ""));
+      const named = plus != null && minus != null ? String(Math.round((plus - minus) * 1000) / 1000) : "";
+      if (named && named !== "0" && settingAllows(volts, named)) settings.values[volts.name] = { value: named, from: "wire" };
+    }
     const params = Object.entries(analogParams(man, settings)).map(([k, v]) => `${k}=${v}`);
+    if (socket) {
+      params.push(`${socket.param}=${feeds ? 1 : 0}`);
+      const got = volts ? settings.values[volts.name] : undefined;
+      sockets.push({
+        ref: m.ref, title: man.title, feeds, volts: got?.value ?? "", label: volts?.label ?? "Voltage",
+        assumed: !!volts?.fromValue && got?.from === "default", ...(got?.from === "wire" ? { fromWire: true } : {}),
+        setting: socket.setting, on: socket.on,
+      });
+    }
     const number = man.digital ? ++order : 0;
     if (man.digital) params.push(`${man.digital.orderParam}=${number}`);
     const name = `X${m.ref}`;
@@ -390,11 +584,12 @@ export function buildDeck({ symbols, excluded = [], netlist, plan, parts, live =
         return i >= 0 ? [m.pinMap[i] ?? pin] : [];
       });
       passing.push({ ref: m.ref, pins: pins.sort(natural), from: netsOf(man.suppliesFrom), to: netsOf(man.supplies) });
-    } else {
+    } else if (feeds) {
       for (const node of netsOf(man.supplies ?? [])) driven.add(node);
       if (!man.powered?.length) links.push(nodes);
     }
-    if (man.supplies?.length) {
+    // a socket says its own voltage in its own sentence
+    if (man.supplies?.length && !socket) {
       for (const s of man.settings ?? []) {
         const got = settings.values[s.name];
         if (s.fromValue && got?.from === "default") assumed.push({ ref: m.ref, label: s.label ?? s.name, value: got.value, unit: s.unit ?? "" });
@@ -458,10 +653,17 @@ export function buildDeck({ symbols, excluded = [], netlist, plan, parts, live =
         signals.push({ ref: m.ref, partId: m.partId, name: THERMAL_SIGNAL, vector: `v.${inst}.${THERMAL_SHOWN.toLowerCase()}#branch` });
       });
     }
+    // a chip without a board: its clock is what the schematic has on its clock pins, or a setting
+    const crystal = man.digital?.kind === "emulator" ? man.digital.crystal : undefined;
+    const clock = man.digital?.kind === "emulator" && crystal
+      ? chipClock(man.digital, settings.values[crystal.setting]?.value, crystalOn([nodes[man.pins.indexOf(crystal.pins[0])], nodes[man.pins.indexOf(crystal.pins[1])]], symbols, m.ref))
+      : undefined;
     placed.push({
       ref: m.ref, uuid: m.uuid, sheet: m.sheet, partId: m.partId, version: man.version, rule: m.rule, name, nodes,
-      connected: man.pins.filter(wired),
+      // the pins of a crystal that clocks the chip are its oscillator: no pads, nothing to drive or read
+      connected: man.pins.filter((pin) => wired(pin) && !(clock?.from === "crystal" && crystal?.pins.includes(pin))),
       settings: settings.values, number,
+      ...(clock ? { clock } : {}),
       ...(m.origin ? { origin: m.origin } : {}),
       ...(onWires ? { thermal: onWires } : {}),
     });
@@ -478,8 +680,23 @@ export function buildDeck({ symbols, excluded = [], netlist, plan, parts, live =
   // 2. KiCad's netlist without the lines we replace and without the lines no simulator runs
   const unusable = unusableLines(netlist, symbols);
   const notSimulated = [...unusable.keys()].filter((ref) => !mine.has(ref)).sort(natural);
+  // a crystal that clocks a chip does its job in the run: it is not left out
+  const clocking = placed.flatMap((p) => (p.clock?.from === "crystal" && p.clock.crystal ? [p.clock.crystal] : []));
+  const leftOut = leftOutSymbols({ symbols, plan, excluded, items: netlist.items, unusable, placed: new Set([...mine, ...clocking]) });
+  // KiCad's lines by the names KiCad gave them, ours by the names given above ("X" and the reference)
+  const marks = new Map<string, string>();
+  for (const item of netlist.items) if (!item.off) marks.set(item.name.toLowerCase(), item.ref);
+  for (const p of placed) marks.set(p.name.toLowerCase(), p.ref);
   const keptLines = netlist.lines.filter((l) => l.ref === undefined || !(mine.has(l.ref) || unusable.has(l.ref)));
-  const kept = keptLines.map((l) => l.text);
+  // a Value that says its ratings too: the line runs with the value alone
+  const read = valuesRead(netlist, symbols);
+  const readOf = (l: NetlistLine): ValueRead | undefined => (l.kind === "item" && l.ref !== undefined ? read.get(l.ref) : undefined);
+  // and without the simulator commands the schematic carries
+  const { texts: kept, commands: carried } = withoutCommands(keptLines.map((l) => {
+    const value = readOf(l);
+    return { text: value ? withValue(l.text, value.value) : l.text, kind: l.kind };
+  }));
+  const valuesUsed = keptLines.flatMap((l) => readOf(l) ?? []).sort((a, b) => natural(a.ref, b.ref));
   if (/^\.end\s*$/i.test(kept[kept.length - 1] ?? "")) kept.pop();
   // The first line of a SPICE circuit is its title, whatever it says.
   const title = kept.shift() ?? ".title KiCad schematic";
@@ -512,12 +729,16 @@ export function buildDeck({ symbols, excluded = [], netlist, plan, parts, live =
   const nets = [...symbols, ...excluded].flatMap((s) => Object.values(s.pins).flatMap((p) => (p.node ? [p.node] : [])));
   const { fed, unfed } = fedParts(nets, driven, links, passing);
   for (const p of passing) if (fed.has(p.ref)) for (const node of p.to) driven.add(node);
-  const power: Power = { ...powerByName(nets, driven), assumed, noPower, unfed };
+  const power: Power = { ...powerByName(nets, driven), assumed, noPower, unfed, sockets: sockets.sort((a, b) => natural(a.ref, b.ref)) };
 
-  const deck = [
+  // Nothing that goes to the simulator is a command, wherever its text came from: the lines
+  // written here are looked through as well, each on its own.
+  const whole = withoutCommands([
     title, ...files.map((f) => `.include "${f.path}"`), ...kept.flatMap((t) => t.split("\n")),
     ...lines, ...tied, ...supplyLines(power.byName),
-  ];
+  ].map((text) => ({ text, kind: "item" as const })));
+  const deck = whole.texts.flatMap((t) => t.split("\n"));
+  const commandsLeftOut = carried + whole.commands;
   if (live) deck.push(...(gear ? [LIVE_GEAR] : []), LIVE_TRAN);
   deck.push(".end");
 
@@ -527,14 +748,14 @@ export function buildDeck({ symbols, excluded = [], netlist, plan, parts, live =
       if (l.pieces > CODE_MODEL_LINE_MAX)
         errors.push(`${where}: the line of ${l.name} is too long for the simulator (${l.pieces} pieces, at most ${CODE_MODEL_LINE_MAX})`);
 
-  return { deck, files, inputs, signals, codeParts, placed, notSimulated, power, wires: wireList, notOnWire, notes, errors };
+  return { deck, files, inputs, signals, codeParts, placed, notSimulated, leftOut, valuesRead: valuesUsed, commandsLeftOut, marks, power, wires: wireList, notOnWire, notes, errors };
 }
 
 export interface PrepareOptions {
   library: Pick<SimLibrary, "index" | "loadPart">;
   symbols: SchematicSymbol[];
   /** The symbols KiCad excludes from simulation (see BuildOptions). */
-  excluded?: Pick<SchematicSymbol, "pins">[];
+  excluded?: BuildOptions["excluded"];
   netlist: EditorNetlist;
   /** Symbol uuid -> part id or "off": a pick that is not written on the symbol (yet). */
   overrides?: Record<string, string>;

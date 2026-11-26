@@ -35,7 +35,19 @@ export interface OpenOptions {
   fetch?: typeof fetch;
   /** Open this snapshot instead of asking which one is current. */
   version?: string;
+  /**
+   * How long one request is waited for, in ms (default LIBRARY_REQUEST_MS). A file gets
+   * that and the time its size takes on a slow line (LIBRARY_SLOW_BYTES_PER_SECOND).
+   */
+  requestMs?: number;
 }
+
+/** How long the library's answer to one request is waited for. */
+export const LIBRARY_REQUEST_MS = 30_000;
+/** The slowest line a file is waited for: 25 kB a second. */
+export const LIBRARY_SLOW_BYTES_PER_SECOND = 25_000;
+
+const span = (ms: number): string => (ms % 1000 === 0 ? `${ms / 1000} seconds` : `${ms} ms`);
 
 export interface SimLibrary {
   base: string;
@@ -55,27 +67,48 @@ export interface SimLibrary {
   requests: { pointer: number; index: number; files: number; bytes: number };
 }
 
-export async function openLibrary(base: string, { fetch: f, version }: OpenOptions = {}): Promise<SimLibrary> {
+export async function openLibrary(base: string, { fetch: f, version, requestMs = LIBRARY_REQUEST_MS }: OpenOptions = {}): Promise<SimLibrary> {
   const doFetch = f ?? globalThis.fetch.bind(globalThis);
   const root = base.endsWith("/") ? base : base + "/";
   const requests = { pointer: 0, index: 0, files: 0, bytes: 0 };
-  const get = async (path: string): Promise<Response> => {
-    const r = await doFetch(root + path);
-    if (!r.ok) throw new Error(`simulation library: ${path}: HTTP ${r.status}`);
-    return r;
+  /**
+   * One request, with its answer read to the end by `read`, within `ms`. A request that
+   * does not end in time is given up and fails with a sentence: a download that hangs must
+   * not keep whoever waits for it waiting for ever, and a failed one is asked for again.
+   */
+  const get = async <T>(path: string, ms: number, read: (r: Response) => Promise<T>): Promise<T> => {
+    const control = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        reject(new Error(`simulation library: ${path}: no answer within ${span(ms)}`));
+        control.abort();
+      }, ms);
+    });
+    const answer = (async () => {
+      const r = await doFetch(root + path, { signal: control.signal });
+      if (!r.ok) throw new Error(`simulation library: ${path}: HTTP ${r.status}`);
+      return read(r);
+    })();
+    try {
+      return await Promise.race([answer, late]);
+    } finally {
+      clearTimeout(timer);
+    }
   };
+  const json = <T>(path: string): Promise<T> => get(path, requestMs, (r) => r.json() as Promise<T>);
 
   let v = version;
   if (!v) {
     requests.pointer++;
-    const cur = (await (await get("current.json")).json()) as LibraryPointer;
+    const cur = await json<LibraryPointer>("current.json");
     if (cur.schema !== POINTER_SCHEMA) throw new Error(`simulation library: pointer of an unknown format (${String(cur.schema)})`);
     v = cur.version;
   }
   if (typeof v !== "string" || !SNAPSHOT_NAME.test(v)) throw new Error(`simulation library: bad snapshot name "${String(v)}"`);
   const snapshot = v;
   requests.index++;
-  const index = (await (await get(`${snapshot}/index.json`)).json()) as LibraryIndex;
+  const index = await json<LibraryIndex>(`${snapshot}/index.json`);
   if (index.schema !== INDEX_SCHEMA) throw new Error(`simulation library: index of an unknown format (${String(index.schema)})`);
   if (index.version !== snapshot) throw new Error(`simulation library: asked for snapshot ${snapshot}, got ${index.version}`);
 
@@ -90,7 +123,8 @@ export async function openLibrary(base: string, { fetch: f, version }: OpenOptio
       got = (async () => {
         if (!meta) throw new Error(`simulation library: ${missing}`);
         requests.files++;
-        const bytes = new Uint8Array(await (await get(path)).arrayBuffer());
+        const ms = requestMs + Math.ceil((meta.bytes / LIBRARY_SLOW_BYTES_PER_SECOND) * 1000);
+        const bytes = await get(path, ms, async (r) => new Uint8Array(await r.arrayBuffer()));
         requests.bytes += bytes.length;
         if (bytes.length !== meta.bytes || (await sha256(bytes)) !== meta.sha256)
           throw new Error(`simulation library: ${label} does not match its checksum`);

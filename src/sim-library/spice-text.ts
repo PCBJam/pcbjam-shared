@@ -143,3 +143,28 @@ export function chipFile(file: string, number: number): string {
   const dot = file.lastIndexOf(".");
   return dot > file.lastIndexOf("/") + 1 ? `${file.slice(0, dot)}.${number}${file.slice(dot)}` : `${file}.${number}`;
 }
+
+/**
+ * The symbols a simulator's own words are about. ngspice says why it does not run a circuit
+ * by a line of the netlist ("Error on line 4 or its substitute: q1 c b 0 npn"), by the name
+ * of an element ("d.xu1.d1") or of a node inside a part ("xu1.n3"): never by a symbol on the
+ * sheet. `marks` says which symbol each line of the circuit belongs to, by the name of its
+ * element in lower case ("q1", "xu1"): KiCad's own lines and the lines the netlist step
+ * writes for the library's parts (see Deck.marks).
+ *
+ * Returns the references in the order the words name them, each once. Empty when the words
+ * name no line: they are then shown as they are.
+ */
+export function symbolsNamed(text: string, marks: ReadonlyMap<string, string>): string[] {
+  const out: string[] = [];
+  for (const raw of text.toLowerCase().split(/[\s/"',;:()=[\]]+/)) {
+    // "v.xu1.vsense#branch" is the current of a source inside U1; "d.xu1.d1-instance" an element of it
+    const word = raw.replace(/#branch$/, "").replace(/-instance$/, "").replace(/\.$/, "");
+    if (!word) continue;
+    for (const name of word.includes(".") ? [word, ...word.split(".")] : [word]) {
+      const ref = marks.get(name);
+      if (ref !== undefined && !out.includes(ref)) out.push(ref);
+    }
+  }
+  return out;
+}

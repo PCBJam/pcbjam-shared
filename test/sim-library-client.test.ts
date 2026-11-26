@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { openLibrary } from "../src/sim-library/index.js";
+import { describe, expect, it, vi } from "vitest";
+import { LIBRARY_REQUEST_MS, openLibrary } from "../src/sim-library/index.js";
 import { makeEmulator, makeSnapshot, serve } from "./sim-library-fixtures.js";
 
 const BASE = "https://library.test/sim";
@@ -35,22 +35,59 @@ describe("reading a published snapshot", () => {
     const snapshot = makeSnapshot(undefined, [emulator]);
     const cdn = serve(snapshot);
     const lib = await openLibrary(BASE, { fetch: cdn.fetch });
-    expect(lib.emulator("esp-emu")).toMatchObject({ version: "1.0.0-rc2", program: "esp_emu_bg.wasm", loader: "esp_emu.js" });
+    expect(lib.emulator("esp32sim")).toMatchObject({ version: "0.4.0-1", program: "esp32sim.wasm", loader: "jit.mjs" });
     expect(lib.emulator("nothing")).toBeUndefined();
 
-    const program = await lib.emulatorFile("esp-emu", "esp_emu_bg.wasm");
+    const program = await lib.emulatorFile("esp32sim", "esp32sim.wasm");
     expect([...program.subarray(0, 4)]).toEqual([0, 97, 115, 109]);
-    await lib.emulatorFile("esp-emu", "esp_emu_bg.wasm");
-    expect(cdn.asked.slice(2)).toEqual(["emulators/esp-emu/1.0.0-rc2/esp_emu_bg.wasm"]);
+    await lib.emulatorFile("esp32sim", "esp32sim.wasm");
+    expect(cdn.asked.slice(2)).toEqual(["emulators/esp32sim/0.4.0-1/esp32sim.wasm"]);
 
-    await expect(lib.emulatorFile("esp-emu", "other.js")).rejects.toThrow('simulation library: emulator "esp-emu" has no file "other.js"');
-    await expect(lib.emulatorFile("nothing", "esp_emu.js")).rejects.toThrow('simulation library: emulator "nothing" has no file "esp_emu.js"');
+    await expect(lib.emulatorFile("esp32sim", "other.js")).rejects.toThrow('simulation library: emulator "esp32sim" has no file "other.js"');
+    await expect(lib.emulatorFile("nothing", "jit.mjs")).rejects.toThrow('simulation library: emulator "nothing" has no file "jit.mjs"');
 
-    const key = "emulators/esp-emu/1.0.0-rc2/esp_emu.js";
+    const key = "emulators/esp32sim/0.4.0-1/jit.mjs";
     const changed = new Uint8Array(cdn.files.get(key) ?? []);
     changed[0] = (changed[0] ?? 0) ^ 1;
     cdn.files.set(key, changed);
-    await expect(lib.emulatorFile("esp-emu", "esp_emu.js")).rejects.toThrow("simulation library: emulator esp-emu/esp_emu.js does not match its checksum");
+    await expect(lib.emulatorFile("esp32sim", "jit.mjs")).rejects.toThrow("simulation library: emulator esp32sim/jit.mjs does not match its checksum");
+  });
+
+  // A download that hangs must not keep whoever waits for it waiting for ever.
+  it("gives a request up when it does not end in time, and asks again the next time", async () => {
+    const snapshot = makeSnapshot();
+    const cdn = serve(snapshot);
+    const signals: (AbortSignal | undefined)[] = [];
+    let hang: string | null = "current.json";
+    const f = ((input: RequestInfo | URL, init?: RequestInit) => {
+      signals.push(init?.signal ?? undefined);
+      // a request that never gets an answer
+      return hang !== null && String(input).endsWith(hang) ? new Promise<Response>(() => {}) : cdn.fetch(input, init);
+    }) as typeof fetch;
+
+    await expect(openLibrary(BASE, { fetch: f, requestMs: 20 })).rejects.toThrow("simulation library: current.json: no answer within 20 ms");
+    expect(signals[0]?.aborted, "the request is given up, not only its wait").toBe(true);
+
+    // a file: it gets the time its size takes on a slow line on top
+    hang = "led/model.lib";
+    const lib = await openLibrary(BASE, { fetch: f, requestMs: 20 });
+    await expect(lib.file("led", "model.lib")).rejects.toThrow(/^simulation library: .*led\/model\.lib: no answer within \d+ ms$/);
+    // the next ask tries again, and gets it
+    hang = null;
+    expect(new TextDecoder().decode(await lib.file("led", "model.lib"))).toContain(".subckt");
+    expect(cdn.asked.filter((p) => p.endsWith("led/model.lib"))).toHaveLength(1);
+  });
+
+  it("says seconds for the deadline it has by itself", async () => {
+    const never = (() => new Promise<Response>(() => {})) as typeof fetch;
+    vi.useFakeTimers();
+    try {
+      const opened = openLibrary(BASE, { fetch: never }).catch((e: Error) => e.message);
+      await vi.advanceTimersByTimeAsync(LIBRARY_REQUEST_MS);
+      expect(await opened).toBe("simulation library: current.json: no answer within 30 seconds");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("refuses a file that is not the one the index describes", async () => {
