@@ -5,7 +5,9 @@ import { effectiveRates } from '../manifest-limits.mjs';
 const runtimeAsset = (name: string) => new URL(name, import.meta.url).href;
 import { METHODS, LIMITS, LEASED_READS, LEASED_EDITS, SAVED_HTML_PREFIX, EXPORT_KINDS, EXPORT_LIMITS, externalUrlAllowed, pngBytes, boundedJSON, type Method, type DocumentAdapter, type PointerStep, type PartSaveRequest } from './package-api';
 import { storageCall } from './package-storage';
-import { platformConfiguration, platformRequest, platformBytes, verifyText, runtimeAssets, publishedMain } from './package-service';
+import { platformConfiguration, platformRequest, platformBytes, platformPostBytes, verifyText, runtimeAssets, publishedMain } from './package-service';
+import { browserExportStore, type BrowserExporter } from './browser-exports';
+export type { BrowserExporter, BrowserExportRun } from './browser-exports';
 export { configurePlatform } from './package-service';
 export { cleanupPluginStorage } from './package-storage';
 export interface PluginDescriptor {
@@ -77,6 +79,9 @@ export interface PackageHostOptions {
     /** KiCad's highlight of items and nets for a while; an empty request clears it. */
     highlight?(request: { ids: string[]; nets: string[]; durationMs: number }): Promise<{ highlighted: string[]; missing: string[]; nets: string[]; missingNets: string[] }>;
     onDisconnected(message: string): void;
+    /** Run `exports.*` in the editor on the open board instead of on the server (plugins 0029, the
+     *  `pluginBrowserExports` toggle). Unset, exports run on the server. */
+    browserExports?: BrowserExporter;
     /**
      * A hosted page on localhost (the dev stack, plugins 0025 §12) reloaded itself after its
      * server restarted: the editor starts the plugin again with a fresh handshake instead of
@@ -215,6 +220,16 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
     const nonce = crypto.randomUUID();
     // A new handle per document: a persistent panel's references to the previous one fail.
     let documentHandle = crypto.randomUUID();
+    // Exports the editor ran in the browser, and their bundles (browser-exports.ts). They belong to
+    // the document they were made from: a move to another document clears them and stops a run
+    // that is waiting (updateContext).
+    const browserStore = browserExportStore();
+    let browserRuns = new AbortController();
+    const inBrowser = (method: string, params: any) => !!options.browserExports && (
+        method === 'exports.run' || method === 'exports.runMany'
+        || (method === 'exports.readJson' && browserStore.isExport(params?.exportId))
+        || (method === 'exports.bundle' && Array.isArray(params?.parts) && params.parts.every((part: any) => browserStore.isExport(part?.exportId)))
+        || (method === 'files.saveBundle' && browserStore.isBundle(params?.bundleId)));
     // A hosted UI (plugins 0025 §5.1) is framed from its own origin; a packaged one is an opaque document.
     const manifestUi = (options.plugin.manifest as unknown as { ui?: unknown }).ui;
     const hostedPage: HostedUi | undefined = isHostedUi(manifestUi) ? manifestUi : undefined;
@@ -373,6 +388,7 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
         if(activation)void platformRequest('activations/'+activation.id,'DELETE').catch(()=>{});
         window.removeEventListener('message', handshake);
         files.clear();
+        browserStore.clear();
         exportSession = undefined;
         worker?.terminate();
         frame?.remove();
@@ -405,7 +421,7 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             throw new Error('Invalid API arguments');
         await authorize(method);
         check();
-        if (needsActivation(method)) { await activated(); check(); }
+        if (needsActivation(method) && !inBrowser(method, params)) { await activated(); check(); }
         const context = options.context();
         switch (method) {
             case 'http.request': {
@@ -420,6 +436,16 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
                 if(!endpoint)throw new Error('Undeclared backend');
                 validateUploadRequest(params,endpoint);
                 for(const permission of Object.keys(backendPermissions({[params.endpointId]:endpoint})))requirePermission(permission);
+                // A bundle zipped in the browser is stored on the server first, then sent like any other.
+                if(browserStore.isBundle(params.bundleId)){
+                    const id=activation!.id,handle=documentHandle;
+                    const bundleId=await browserStore.serverBundle(params.bundleId,id,async bundle=>
+                        String((await platformPostBytes('activations/'+id+'/bundles/browser?name='+encodeURIComponent(bundle.name),bundle.bytes,signal)).bundleId));
+                    check();
+                    // The panel moved to another document meanwhile: that bundle is not this document's.
+                    if(handle!==documentHandle||activation?.id!==id)throw new Error('Bundle not found or expired');
+                    params={...params,bundleId};
+                }
                 // The server sends the stored bundle; only its id crosses the sandbox.
                 return platformRequest('activations/'+activation!.id+'/upload','POST',params,signal,60000);
             }
@@ -537,22 +563,40 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
                 return { status: result.status };
             }
             case 'exports.run':
-            case 'exports.runMany':
-                if ((method === 'exports.run' ? [params.kind] : params.kinds as string[]).some(kind => EXPORT_KINDS[kind as keyof typeof EXPORT_KINDS].surface !== 'editor:' + context.tool))
+            case 'exports.runMany': {
+                const kinds = method === 'exports.run' ? [params.kind as string] : params.kinds as string[];
+                if (kinds.some(kind => EXPORT_KINDS[kind as keyof typeof EXPORT_KINDS].surface !== 'editor:' + context.tool))
                     throw new Error('This export is unavailable in this editor');
+                if (options.browserExports) {
+                    // KiCad's exporters on the board the editor has open, no server round trip.
+                    browserStore.spend(kinds.length);
+                    const handle = documentHandle, run = browserRuns.signal;
+                    const files = await options.browserExports(kinds, AbortSignal.any([signal, run]), params.options);
+                    check();
+                    // The panel moved to another document while KiCad wrote: these are not its files.
+                    if (run.aborted || handle !== documentHandle) throw new Error('The document changed during the export');
+                    const runs = browserStore.add(files);
+                    return method === 'exports.run' ? runs[0] : { exports: runs };
+                }
                 // Exports run KiCad on the server and may take a while. The route tells {kind} from {kinds}.
                 return platformRequest('activations/' + activation!.id + '/exports', 'POST', params, signal, 120000);
+            }
             case 'exports.readJson':
+                if (inBrowser(method, params))
+                    return browserStore.readJson(params.exportId, params.name);
                 return platformRequest('activations/' + activation!.id + '/exports/' + params.exportId + '/json?name=' + encodeURIComponent(params.name), 'GET', undefined, signal);
             case 'exports.bundle':
+                if (inBrowser(method, params))
+                    return browserStore.bundle(params);
                 return platformRequest('activations/' + activation!.id + '/bundles', 'POST', params, signal, 120000);
             case 'files.saveBundle': {
-                const bytes = await platformBytes('activations/' + activation!.id + '/bundles/' + params.bundleId, EXPORT_LIMITS.bundleBytes, signal);
+                const local = inBrowser(method, params) ? browserStore.bundleBytes(params.bundleId) : undefined;
+                const bytes = local ? local.bytes : await platformBytes('activations/' + activation!.id + '/bundles/' + params.bundleId, EXPORT_LIMITS.bundleBytes, signal);
                 check();
                 // Only ever a ZIP: the server built it, the name says so, the bytes must agree.
                 if (bytes.length < 4 || bytes[0] !== 0x50 || bytes[1] !== 0x4b || bytes[2] !== 0x03 || bytes[3] !== 0x04)
                     throw new Error('Bundle is not a ZIP archive');
-                const meta = await platformRequest('activations/' + activation!.id + '/bundles/' + params.bundleId + '/info', 'GET', undefined, signal);
+                const meta = local ?? await platformRequest('activations/' + activation!.id + '/bundles/' + params.bundleId + '/info', 'GET', undefined, signal);
                 const result = await options.saveFile!({ name: String(meta.name), kind: 'archive', bytes, method }, signal);
                 check();
                 if (result.status !== 'download-requested' && result.status !== 'cancelled')
@@ -894,6 +938,9 @@ export async function mountPackagePlugin(container: HTMLElement, options: Packag
             if (next.documents) options.documents = next.documents;
             exportSession = undefined;
             documentHandle = crypto.randomUUID();
+            browserRuns.abort();
+            browserRuns = new AbortController();
+            browserStore.clear();
             if (activation) {
                 const previous = activation;
                 activation = undefined;
